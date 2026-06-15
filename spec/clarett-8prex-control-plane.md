@@ -110,13 +110,25 @@ So: **8 mic pres, 2× ADAT (16 ch), S/PDIF stereo, 10 analogue outs, 28 PCM play
 `bN.k` = byte N, bit k. Gain bytes are stereo-paired with stride 4 (32/33, 36/37, …). Lines 7–10
 are the two headphone pairs (HP1 = out 7-8, HP2 = out 9-10).
 
-**dB↔byte mapping `[TRACE, CONFIRMED]`:** the byte is a 7-bit **attenuation code** equal to |dB|
-exactly, linear at **1 dB/code across the whole range**: `0x00` = 0 dB (unity), `0x14` = −20,
+**dB↔byte mapping `[TRACE, CONFIRMED encoding]`:** the byte is a 7-bit **attenuation code** equal to
+|dB| exactly, linear at **1 dB/code across the whole range**: `0x00` = 0 dB (unity), `0x14` = −20,
 `0x28` = −40, `0x3c` = −60, `0x7f` = −127 dB (floor). (Verified 0…−20 dB → `0x00`…`0x14` linearly; the
 earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
-`DECLARE_TLV_DB_SCALE(tlv, -12700, 100, 0)`, value `v`(0..127) → device code `127 − v`. No range table
-needed. Stereo master volume = same code to both 32 and 33. Set via `SET_DATA{offset,len=1,code}`
-+ `DATA_CMD{activate=1}`.
+`DECLARE_TLV_DB_SCALE(tlv, -12700, 100, 0)`, value `v`(0..127) → device code `127 − v`.
+
+> **Provenance of the curve:** measured by turning the **physical monitor knob** (dB read off
+> Focusrite Control's display), which is the `<hardware-controls>` master gain — **offset 112,
+> command 2** (§9), an **8-bit** mono master. The clean 1 dB/code encoding fits offset 112 perfectly
+> (8-bit field, 0..127 = 0..−127 dB). The per-output gains @ 32/33/… (command 1; a separate software
+> "master volume" capture drove those with `activate=1`) are *assumed* to share the encoding but not
+> independently measured.
+>
+> **Rejected experiment (do not revisit):** `0x8022_captures.txt` sampled bytes at mailbox
+> `0x8022/0x8023` as a *16-bit* value while turning the knob. That offset is the **high half of the
+> `cmd` header word**, not a gain field, and the sampling raced the continuous `GET_METER` polling →
+> random `byte_lo`, a `byte_hi` that wraps repeatedly across the range, and a mid-run crash. It
+> contradicts the clean curve (−20 dB → `0x14` here vs `lo=0x62 hi=0xf0` there) and is **noise, not
+> data**. The master gain is 8-bit per the XML; ignore the 16-bit interpretation.
 
 ## 6. Mixer (30 × 16)
 
