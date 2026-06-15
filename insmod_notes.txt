@@ -1,0 +1,4 @@
+Jun 12 16:40:17 fedora kernel: snd_clarett: loading out-of-tree module taints kernel.
+Jun 12 16:40:17 fedora kernel: snd_clarett: module verification failed: signature and/or required key missing - tainting kernel
+Jun 12 16:40:17 fedora kernel: snd_clarett 0000:09:00.0: Clarett 8PreX: serial 000012345678abcd fw app 0x04061973 fpga 0x18101966
+Jun 12 16:40:17 fedora kernel: snd_clarett 0000:09:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x0038 address=0x2fffff000 flags=0x0020]

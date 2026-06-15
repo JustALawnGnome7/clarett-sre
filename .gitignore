@@ -1,0 +1,20 @@
+# Kernel module build artifacts
+driver/*.o
+driver/*.ko
+driver/*.mod
+driver/*.mod.c
+driver/*.mod.o
+driver/.*.cmd
+driver/*.o.cmd
+driver/modules.order
+driver/Module.symvers
+driver/.module-common.o
+driver/.tmp_versions/
+
+# Editor/OS noise
+*~
+.DS_Store
+
+# Vendor RE source material — keep out of the distributed repo (clean-room).
+# Facts are carried into the authored spec/ instead; see CLAUDE.md.
+FCP Server Resources/

@@ -1,0 +1,908 @@
+# Clause Code Session Notes
+
+Resume the session with the following:
+
+```bash
+claude --resume 2c1ace70-b28a-4e10-b69b-f479f5c70c68
+```
+
+
+
+╭─── Claude Code v2.1.168 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                                                                                               │
+│                 Welcome back Miles!                │ Ask Claude to create a new app or clone a repository                                                                                                                                                   │
+│                                                    │ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                                                                                                             │
+│                      ▝▜█████▛▘                     │ Bug fixes and reliability improvements                                                                                                                                                                 │
+│                        ▘▘ ▝▝                       │ Bug fixes and reliability improvements                                                                                                                                                                 │
+│    Opus 4.8 (1M context) · API Usage Billing ·     │ Added `fallbackModel` setting to configure up to three fallback models tried in order when the primary model is overloaded or unavailable; `--fallback-model` now also applies to interactive sessions │
+│    Miles‘s Individual Org                          │ /release-notes for more                                                                                                                                                                                │
+│            ~/Programming/Clarett/clarett-sre            │                                                                                                                                                                                                        │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ▎ Opus 4.8 is here! Now defaults to high effort · /effort xhigh for your hardest tasks
+
+❯ I want to develop a Linux ALSA driver for a Focusrite Clarett 8Prex Thunderbolt audio interface. I've successfully managed to run a Windows 10 virtual machine inside of a Linux host (the Linux host is my development environment), and I can successfully operate the Clarett 8PreX from the Windows 10 VM using PCIe passthrough. To start, I need help reverse-engineering Focusrite's proprietary Windows kernel driver using clean-room SRE practices. I've already identified a similar reverse-engineering project online (Open Apollo) for a similar Thunderbolt audio interface (Universal Audio Apollo x4). Like the Apollo x4, the Clarett 8PreX's kernel driver is controlled via IOCTLs issued from an intermediate Windows user-space service (i.e., `ControlServer.exe`). All mixer control commands are issued to the Windows service from the 1st party GUI application (i.e., `Focusrite Control.exe`) via TCP packets. Given my current setup and existing knowledge, where is the best place to begin reverse engineering the kernel driver for the Focusrite Clarett 8PreX?
+
+Great project, and your instinct to model it on Open Apollo is sound — that project's core insight applies directly here. Let me give you an opinionated answer, because "where to begin" has a specific best answer that isn't the obvious one.
+
+First, separate the two planes — they are different RE problems
+
+The kernel driver is doing two unrelated jobs, and conflating them is the most common way these projects stall:
+
+1. Control plane — mixer, routing, gain, clock source, pad/phantom, etc. This is the path you described: Focusrite Control.exe →(TCP)→ ControlServer.exe →(IOCTL)→ .sys driver →(PCIe mailbox)→ device firmware. In ALSA terms this becomes your kcontrols.
+2. Data plane — actual PCM streaming: PCIe BAR/DMA setup, sample format, channel layout, clock/IRQ cadence. This becomes your ALSA PCM substreams. This path usually does not go through ControlServer at all — the ASIO/audio engine talks to the driver directly.
+
+The control plane is where you start. It's structured message-passing with a stable, narrow interface, and — critically — most of the work may already be done (see below).
+
+The highest-leverage first move: don't reverse-engineer what's already public
+
+The Clarett 8PreX is a Focusrite device, and Focusrite's control protocol is already substantially reverse-engineered and upstream in the Linux kernel — Geoffrey Bennett's scarlett2 driver (sound/usb/mixer_scarlett2.c, plus his extensive protocol notes). It already supports the Clarett USB and Clarett+ 8Pre, which are protocol siblings of your device. The 8PreX is the odd one only because it's Thunderbolt (PCIe) instead of USB.
+
+That strongly suggests the device-side firmware message format on your 8PreX is the same Focusrite protocol family, just carried over a different transport (a PCIe mailbox/BAR region instead of USB vendor-specific control transfers). If that holds, the kernel .sys driver and ControlServer.exe are mostly a transport shim, and the valuable, device-specific intelligence — the actual command/notification message format — is something you can largely lift from existing open documentation.
+
+So before touching a debugger:
+- Read the scarlett2 source and Bennett's protocol writeups. Understand the command/notification structure (segments, config space, the request/response framing).
+- Frame your RE goal as: "confirm whether the 8PreX speaks the scarlett2 protocol, and discover the PCIe transport that replaces USB." That's a dramatically smaller problem than "reverse a kernel driver from scratch."
+
+The second cheap, high-value move: recon on the Linux host
+
+You already have the device on a Linux host. Before binding it to vfio-pci for passthrough, capture its native PCIe identity — this is the literal foundation of your eventual ALSA driver and costs nothing:
+
+lspci -nnvvv   # vendor:device IDs, subsystem ID, BAR sizes/types, capabilities, MSI/MSI-X
+
+Note the BAR layout especially — the control mailbox and the DMA/streaming registers will live in those BARs, and knowing their sizes/types early shapes everything.
+
+Then — and only then — the dynamic RE: capture the IOCTL boundary
+
+The single most valuable interface to instrument is ControlServer.exe ↔ .sys driver (the IOCTL boundary), not the TCP layer. The TCP layer is just the GUI's transport to the service and is application-private; the IOCTL boundary is the actual driver contract you must replicate. Use the TCP capture only to label what you see at the IOCTL layer.
+
+Concretely:
+- Kernel-debug the Windows guest. A VM makes this easy — attach WinDbg over a virtual serial/named-pipe or network KD connection. Set a breakpoint on the driver's IRP_MJ_DEVICE_CONTROL dispatch routine and log the IOCTL code + input/output buffers. This is the gold-standard clean-room technique because you're observing the interface and behavior, not copying code.
+- A lighter alternative if you don't want full KD: IrpMon (open-source IRP/IOCTL monitor) to passively log IOCTLs to the device stack.
+- Correlate by stimulus. Toggle one control in Focusrite Control.exe (e.g., move fader 3, or flip phantom on input 1). Capture simultaneously: the TCP message (Wireshark on loopback) and the resulting IOCTL buffer. The TCP side gives you the human-meaningful label; the IOCTL side gives you the wire bytes. Build a stimulus→bytes table, one control at a time. Cross-reference each captured buffer against the scarlett2 message format — you'll likely find them matching, which both validates your hypothesis and tells you the transport framing.
+
+On clean-room discipline (since you raised it)
+
+For interoperability this is well-supported, but keep the hygiene tight:
+- Document facts and interfaces — IOCTL codes, byte offsets, message framing, observed behavior. These aren't copyrightable.
+- Do not paste disassembled/decompiled code from the .sys into your driver. If you're doing the strict two-person version, the person reading the binary writes a prose spec; a second person implements from the spec only.
+- Keep a provenance log: for each protocol fact, record whether it came from (a) public scarlett2 docs, (b) your own black-box capture, or (c) the disassembly. Facts from (a) and (b) are the safest to build on; lean on those.
+
+Suggested order of operations
+
+1. lspci -nnvvv on the host → record IDs + BAR map.
+2. Study scarlett2 source + Bennett's protocol notes → form the "it's the same protocol over PCIe" hypothesis.
+3. WinDbg/IrpMon on the guest → capture the ControlServer↔driver IOCTL boundary, one control at a time, correlated with TCP captures.
+4. Confirm the message format against scarlett2; identify the PCIe mailbox transport (which BAR, what doorbell/notification mechanism).
+5. Defer the data plane (DMA/PCM streaming) until the control plane round-trips — it's the harder problem and benefits from everything you learn first.
+
+Want me to dig deeper on any of these? I can research (a) the exact scarlett2 protocol structure and which Clarett models/quirks are already in-tree, (b) Open Apollo's specific methodology and tooling so you can mirror it, or (c) the concrete WinDbg setup for breakpointing a KMDF/WDM driver's IOCTL dispatch in a VM. Just say which.
+
+✻ Sautéed for 1m 27s
+
+❯ /exit
+  ⎿  See ya!
+
+❯ When running sudo `lspci -d 1cb5:0002 -vvv` from Linux while the device isn't passed through, I get the following:
+
+  09:00.0 Multimedia audio controller: Focusrite Audio Engineering Ltd Clarett
+      Subsystem: Focusrite Audio Engineering Ltd Clarett
+      Control: I/O- Mem- BusMaster- SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+      Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+      IOMMU group: 54
+      Region 0: Memory at d8000000 (64-bit, non-prefetchable) [disabled] [size=64K]
+      Capabilities: [40] Power Management version 3
+          Flags: PMEClk- DSI- D1- D2- AuxCurrent=0mA PME(D0-,D1+,D2+,D3hot+,D3cold-)
+          Status: D0 NoSoftRst+ PME-Enable- DSel=0 DScale=0 PME-
+      Capabilities: [48] MSI: Enable- Count=1/4 Maskable- 64bit+
+          Address: 0000000000000000  Data: 0000
+      Capabilities: [58] Express (v1) Endpoint, IntMsgNum 0
+          DevCap:    MaxPayload 512 bytes, PhantFunc 0, Latency L0s <64ns, L1 <1us
+              ExtTag+ AttnBtn- AttnInd- PwrInd- RBE+ FLReset- SlotPowerLimit 0W TEE-IO-
+          DevCtl:    CorrErr- NonFatalErr- FatalErr- UnsupReq-
+              RlxdOrd+ ExtTag+ PhantFunc- AuxPwr- NoSnoop+
+              MaxPayload 128 bytes, MaxReadReq 512 bytes
+          DevSta:    CorrErr- NonFatalErr- FatalErr- UnsupReq- AuxPwr- TransPend+
+          LnkCap:    Port #0, Speed 2.5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s unlimited, L1 unlimited
+              ClockPM- Surprise- LLActRep- BwNot- ASPMOptComp-
+          LnkCtl:    ASPM Disabled; RCB 64 bytes, LnkDisable- CommClk-
+              ExtSynch- ClockPM- AutWidDis- BWInt- AutBWInt- FltModeDis-
+          LnkSta:    Speed 2.5GT/s, Width x1
+              TrErr- Train- SlotClk- DLActive- BWMgmt- ABWMgmt-
+      Capabilities: [100 v1] Device Serial Number 00-00-12-34-56-78-ab-cd
+
+This is a great capture — and it changes your strategy in a way that's strongly in your favor. Let me pull out what it tells us, then point you at the technique it unlocks.
+
+What this output tells you about the driver you'll write
+
+- Vendor/device ID: 1cb5:0002, class "Multimedia audio controller." That's your pci_device_id match entry. Note the name is the generic "Clarett," so 0002 may be shared across Clarett Thunderbolt variants — worth confirming later, but it's your hook.
+- There is exactly ONE BAR. Region 0: Memory at d8000000 (64-bit, non-prefetchable) [size=64K]. This is the single most important architectural fact: the entire register interface — control mailbox and streaming/DMA control — lives in one 64 KB MMIO window. There's no separate control vs. data BAR to untangle. Your whole register map fits in 64 KB.
+- 64 KB is far too small to be an audio sample FIFO (26-in/26-out would need megabytes/sec). So audio samples do not flow through the BAR — they move by bus-master DMA (device reads/writes guest/host RAM directly). The BAR holds doorbells, descriptor-ring base/size registers, enable bits, and status — the control surface for DMA, not the data. BusMaster- is just "no driver attached yet"; it's a PCIe Endpoint fully capable of DMA once your driver sets PCI_COMMAND_MASTER.
+- MSI: Count=1/4, 64-bit. Device requests up to 4 MSI vectors. Expect the driver to allocate multiple — likely separate vectors for control-mailbox completion vs. audio period IRQs. Your ALSA driver will pci_alloc_irq_vectors() accordingly.
+- Link: Gen1 x1 @ 2.5 GT/s. ~200 MB/s usable. 26×26 ch @ 96 kHz/32-bit is ~20 MB/s total — comfortable headroom, so the narrow link isn't a constraint.
+- MaxPayload 512 cap / 128 in use, ExtTag+, NoSnoop+, RlxdOrd+ — standard DMA tuning; note these for when you configure the device, but not blocking.
+- Minor: the Device Serial Number is a dummy (...12-34-56-78-ab-cd). Don't rely on DSN for anything; it's a placeholder Focusrite never burned in.
+- IOMMU group 54, cleanly isolated — good, your passthrough is clean.
+
+The technique this unlocks — and it's the best next move
+
+Because everything is one MMIO BAR and you're already running the device under VFIO passthrough, you can intercept the Windows driver's register accesses from the host, at the hypervisor boundary — no Windows-side instrumentation, no WinDbg, no .sys disassembly required for the control plane.
+
+Normally vfio-pci mmap()s the BAR directly into the guest so accesses run at native speed and are invisible to QEMU. If you disable that mmap fast-path, every guest MMIO read/write to BAR0 traps into QEMU and passes through its vfio_region_read / vfio_region_write paths — which have trace events. That gives you a timestamped log of every (offset, size, value, R/W) the Focusrite driver issues to the device.
+
+Roughly:
+- On the QEMU vfio-pci device, set the option that disables BAR mmap (commonly x-no-mmap=on — exact spelling varies by QEMU version, so verify against yours).
+- Enable the VFIO region trace events (e.g. -trace enable=vfio_region_read,enable=vfio_region_write or the -d trace:vfio_region_* form).
+
+Then stimulate one control at a time in Focusrite Control.exe (flip phantom on input 1, move one fader) and watch the trace. You'll almost certainly see the classic mailbox pattern: write a message blob into one sub-region, write a doorbell register, then a status poll or MSI, then read a response region. Diff the byte payloads against the scarlett2 message format — if they match (very likely), you've simultaneously confirmed the protocol and learned the PCIe transport framing, directly, in bytes.
+
+This is why it's the best place to go next:
+- It's transport-level and black-box — you observe the interface/behavior, not copyrighted code, which is exactly what you want for clean-room hygiene.
+- It likely makes the WinDbg/IOCTL path optional for the control plane. The IOCTL boundary was the right answer before we knew it was a single trap-able MMIO BAR under your own hypervisor; now you can watch the actual hardware transactions one layer below ControlServer entirely.
+- The same trace reveals the data-plane setup sequence — the descriptor-ring base addresses, sizes, and enable/doorbell registers the driver programs — which is exactly what your ALSA PCM prepare/trigger will need to replicate.
+
+Two caveats:
+- With mmap disabled, MMIO is slow, so audio streaming may underrun. That's fine: mixer changes are infrequent (control plane traces perfectly), and for the data plane you only need to capture the setup/teardown register sequence, not glitch-free playback.
+- The DMA payload itself won't appear in MMIO traces (it's device-initiated bus-master traffic to RAM, not BAR access). But the descriptor ring you see programmed into the BAR points at the buffers — that's the part you actually need.
+
+Suggested next steps
+
+1. Re-run with the device bound and active inside the guest if you can get a lspci there too, to see the BAR enabled (Mem+, BusMaster+) and MSI count actually allocated — confirms how many vectors the driver really uses.
+2. Stand up the x-no-mmap + VFIO region trace on your QEMU command line.
+3. Capture one control change at a time, build an offset→meaning map of the 64 KB window, and diff payloads against scarlett2.
+4. Defer data-plane streaming until the control mailbox round-trips.
+
+Want me to nail down the exact QEMU flag spelling and trace-event invocation for your specific QEMU version, and sketch what the mailbox access pattern will probably look like in the trace so you know what you're looking for? I can also map which scarlett2 message fields to expect in the payloads.
+
+✻ Brewed for 1m 25s
+
+❯ Running `sudo lspci -d 1cb5:0002 -vvv` in Linux again with the Windows VM running produces the following:
+
+  ```
+  09:00.0 Multimedia audio controller: Focusrite Audio Engineering Ltd Clarett
+      Subsystem: Focusrite Audio Engineering Ltd Clarett
+      Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx+
+      Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+      Latency: 0
+      Interrupt: pin ? routed to IRQ 222
+      IOMMU group: 54
+      Region 0: Memory at d8000000 (64-bit, non-prefetchable) [size=64K]
+      Capabilities: [40] Power Management version 3
+          Flags: PMEClk- DSI- D1- D2- AuxCurrent=0mA PME(D0-,D1+,D2+,D3hot+,D3cold-)
+          Status: D0 NoSoftRst+ PME-Enable- DSel=0 DScale=0 PME-
+      Capabilities: [48] MSI: Enable+ Count=4/4 Maskable- 64bit+
+          Address: 00000000fee00000  Data: 0000
+      Capabilities: [58] Express (v1) Endpoint, IntMsgNum 0
+          DevCap:    MaxPayload 512 bytes, PhantFunc 0, Latency L0s <64ns, L1 <1us
+              ExtTag+ AttnBtn- AttnInd- PwrInd- RBE+ FLReset- SlotPowerLimit 0W TEE-IO-
+          DevCtl:    CorrErr- NonFatalErr- FatalErr- UnsupReq-
+              RlxdOrd+ ExtTag+ PhantFunc- AuxPwr- NoSnoop+
+              MaxPayload 128 bytes, MaxReadReq 512 bytes
+          DevSta:    CorrErr- NonFatalErr- FatalErr- UnsupReq- AuxPwr- TransPend+
+          LnkCap:    Port #0, Speed 2.5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s unlimited, L1 unlimited
+              ClockPM- Surprise- LLActRep- BwNot- ASPMOptComp-
+          LnkCtl:    ASPM Disabled; RCB 64 bytes, LnkDisable- CommClk-
+              ExtSynch- ClockPM- AutWidDis- BWInt- AutBWInt- FltModeDis-
+          LnkSta:    Speed 2.5GT/s, Width x1
+              TrErr- Train- SlotClk- DLActive- BWMgmt- ABWMgmt-
+      Capabilities: [100 v1] Device Serial Number 00-00-12-34-56-78-ab-cd
+      Kernel driver in use: vfio-pci
+  ```
+
+Now we're seeing the live, driver-programmed state. The headline new fact:
+
+What changed now that the guest driver owns the device
+
+- MSI: Enable+ Count=4/4 — the Focusrite driver requested and got all 4 MSI vectors. This is the important new data point. Your ALSA driver should plan for up to 4 distinct interrupt sources, and "figure out what each vector means" is now an explicit RE goal. A likely split is something like: control-mailbox completion, playback period IRQ, capture period IRQ, and a status/async event vector — but don't assume; the trace will tell you which vector fires when.
+- DisINTx+ — legacy INTx is masked; the device is purely MSI-driven. So your driver uses pci_alloc_irq_vectors() with PCI_IRQ_MSI (request 4), not a legacy shared IRQ path.
+- Mem+ BusMaster+ — memory decode and bus-master DMA are live, confirming the data plane is device-initiated DMA (as expected; the 64 KB BAR is control-only).
+- Kernel driver in use: vfio-pci — confirms the passthrough binding, which is exactly the configuration the MMIO-trace technique needs. Everything else (single 64 KB BAR, Gen1 x1, dummy DSN) is unchanged.
+
+Nothing here contradicts the plan — it sharpens it: one 64 KB control BAR + 4 MSI vectors + bus-master DMA. That's the whole hardware contract your driver must reproduce.
+
+Ready to set up the MMIO trace
+
+The technique: disable the BAR mmap fast-path on the vfio-pci device (x-no-mmap=on) so every guest MMIO access to BAR0 traps into QEMU, then enable QEMU's vfio_region_read / vfio_region_write trace events. You toggle one control in Focusrite Control.exe, and you get the exact (offset, size, value, R/W) sequence the driver issues.
+
+What you'll be looking for, so you recognize it in the noise — the classic mailbox round-trip:
+1. A burst of writes into one offset window (the request message bytes — diff these against the scarlett2 command format).
+2. A single write to a doorbell register (a fixed offset, small value).
+3. Either a status-register poll (repeated reads of one offset until a bit flips) or an MSI followed by a read burst from a response window.
+
+Control changes are infrequent, so even with MMIO trapping slowing things down, the control plane traces cleanly — you'll capture a tidy transaction per fader/toggle.
+
+To give you exact copy-paste config (the device-line edit and the trace-event invocation differ between the two cases), one thing I need:
+
+● User answered Claude's questions:
+· How do you launch the Windows VM? → libvirt / virt-manager
+
+Perfect — libvirt it is. Here's the concrete setup. On Fedora, QEMU is built with the "log" trace backend, which is convenient: enabled trace events go straight to the per-domain log at /var/log/libvirt/qemu/<domain>.log, so you don't need a separate trace file or decoder.
+
+1. Edit the domain XML
+
+Run virsh edit <domain> (get the name from virsh list --all). Make three changes:
+
+(a) Add the QEMU command-line namespace to the root <domain> element:
+
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+
+(b) Give the passed-through device a stable alias so you can reference it by name. Find the <hostdev> for 09:00.0 and add the <alias> line (user aliases must start with ua-):
+
+<hostdev mode='subsystem' type='pci' managed='yes'>
+  <source>
+    <address domain='0x0000' bus='0x09' slot='0x00' function='0x0'/>
+  </source>
+  <alias name='ua-clarett'/>
+</hostdev>
+
+(c) Inject the QEMU overrides just before </domain>:
+
+<qemu:commandline>
+  <qemu:arg value='-set'/>
+  <qemu:arg value='device.ua-clarett.x-no-mmap=on'/>
+  <qemu:arg value='-trace'/>
+  <qemu:arg value='enable=vfio_region_read'/>
+  <qemu:arg value='-trace'/>
+  <qemu:arg value='enable=vfio_region_write'/>
+</qemu:commandline>
+
+- x-no-mmap=on disables the BAR mmap fast-path on that specific vfio-pci device → every guest CPU access to BAR0 now traps into QEMU instead of hitting mapped memory directly.
+- The two -trace enable= lines turn on QEMU's vfio_region_read / vfio_region_write events.
+
+(Optional sanity check before you start: qemu-system-x86_64 -trace help 2>&1 | grep vfio_region to confirm those event names exist on your build.)
+
+2. Capture
+
+sudo tail -f /var/log/libvirt/qemu/<domain>.log | grep vfio_region
+
+Start the VM, then watch. Each line looks roughly like:
+
+vfio_region_read  (0000:09:00.0:region0+0x0040, 4) = 0x00000001
+vfio_region_write (0000:09:00.0:region0+0x1004, 4, 0x0000002a)
+
+i.e. region<index> + offset, access size, and the data. Since your device only has BAR0 as MMIO, essentially everything will be region0. (Config-space accesses use different events — vfio_pci_read_config — so they won't pollute this stream.)
+
+Built-in verification that x-no-mmap took effect: if you see vfio_region_* lines for region0 at all, it worked. If the BAR were still mmap'd, CPU accesses would bypass QEMU and these events would never fire. No lines = the -set didn't apply (usually an alias-name mismatch).
+
+3. Methodology
+
+- The boot/init burst is gold, not noise. The big flurry right after the driver loads is the device bring-up sequence — reset, firmware handshake, mailbox init, DMA-ring setup. That's exactly what your driver's probe() will have to replicate, so save it.
+- Then change one thing at a time. Let the log go quiet, note the wall-clock time, toggle a single control in Focusrite Control.exe (phantom on input 1, one fader step), note the time again. The delta between those timestamps is that control's transaction. Build an offset → meaning map one control at a time.
+- Decode against scarlett2. In each transaction you should see the mailbox pattern: a write burst (the request message — diff these bytes against the scarlett2 command framing), a doorbell write, then a status poll or an MSI followed by a read burst (the response).
+- Correlate the 4 MSI vectors. Note which operations are followed by which interrupt-related activity to start pinning down what each of the 4 vectors signals.
+
+Two caveats
+
+- Audio streaming will likely glitch/underrun with mmap disabled — that's expected and fine. The control plane traces perfectly, and for the data plane you only need to capture the setup/teardown register sequence, not clean playback.
+- Revert when done. Remove the <qemu:commandline> block (or at least x-no-mmap) to restore native performance once you've captured what you need. The trace volume can also get large if the driver polls a status register in a tight loop — grep/tail filtering keeps it manageable.
+
+Once you've got a capture of even one control toggle, paste a snippet and I'll help you decode the offsets and match the payload against the scarlett2 message format.
+
+✻ Worked for 2m 25s
+
+※ recap: Goal: build a Linux ALSA driver for the Clarett 8PreX by reverse-engineering its control protocol. You've set up host-side MMIO tracing via libvirt. Next: start the VM, capture a single control toggle, and paste the trace to decode it. (disable recaps in /config)
+
+❯ I'll get right on that. But before I do, when you say "scarlett2", do you mean "fcp"?
+
+Good catch — and the fact that you reached for "fcp" tells me you've already been reading the current sources. Let me be precise, because I was using "scarlett2" loosely and the two words name different things:
+
+- scarlett2 = the driver — sound/usb/mixer_scarlett2.c, Geoffrey Bennett's in-kernel, device-specific implementation covering Scarlett Gen 2/3/4, Clarett USB, Clarett+ 8Pre, Vocaster, etc. It hardcodes per-model config tables.
+- FCP = Focusrite Control Protocol — Bennett's name for the underlying wire protocol those devices speak. It's also the name of the newer, generic driver (snd-fcp / the FCP kernel module + the userspace fcp-server daemon), which landed around Linux 6.13. The kernel side does minimal protocol transport, and the device-specific configuration logic moves out to userspace fcp-server.
+
+So when I said "diff the payload against the scarlett2 message format," what I really meant was the protocol — which is properly called FCP. You're right to substitute the term.
+
+For your purposes the distinction matters in two practical ways:
+
+1. FCP is the artifact to compare against, not scarlett2's per-device tables. The scarlett2 tables describe which config items a given USB model exposes; the FCP framing describes how commands/notifications are structured on the wire. Your 8PreX captures will match the framing (FCP), while the specific config map will be its own thing you derive from the trace. Don't expect the 8PreX to be byte-identical to any USB model's table — expect the command/response/notification structure to be recognizable.
+2. The FCP architecture is a strong model for your own driver. The newer split — thin kernel transport + userspace fcp-server holding device specifics — is almost exactly analogous to your Windows stack (thin .sys + ControlServer.exe). If you can make the 8PreX's PCIe mailbox look like an FCP transport to the kernel, you might be able to ride a lot of the existing FCP userspace tooling (fcp-server, alsa-scarlett-gui) rather than reimplementing the mixer logic. Worth keeping in view as a target architecture even though step one is just decoding the trace.
+
+Two honest caveats on my end:
+- This reflects my knowledge as of early 2026 — verify the current module/daemon names and the exact FCP/scarlett2 split against the kernel tree and Bennett's repo before you lean on it.
+- Whether the 8PreX's Thunderbolt firmware speaks a protocol generation that lines up cleanly with the USB FCP devices is unknown until you trace it. The Clarett USB models are in scarlett2; the Thunderbolt Claretts never were, and their firmware could predate or diverge from the FCP-era command set. The capture will tell you.
+
+So: read "everything I said about scarlett2's message format" as "FCP." The driver name was the wrong handle; the protocol is what you're matching against.
+
+✻ Cogitated for 43s
+
+❯ Another question: can XML files from an application's install directory be used when clean-room reverse engineering?
+
+Short answer: yes — you can read them and extract the facts they contain, and they're arguably one of your cleaner sources. But they belong on the "dirty" side of the wall, and there's a line between learning from them and copying them. (Standard caveat: I'm not a lawyer; this is clean-room methodology, not legal advice — and if you intend to upstream, the kernel maintainers will care about provenance.)
+
+Why install-dir XML is favorable source material
+
+These files almost certainly describe the hardware interface: channel counts, control inventories, value ranges, control-ID-to-name mappings, maybe routing topology. That's largely factual and functional data — and facts and interface specifications get thin-to-no copyright protection, and extracting interface information for interoperability is the well-supported case (Sega v. Accolade, Sony v. Connectix, Google v. Oracle on the US side; the EU Software Directive Art. 6 decompilation-for-interop right).
+
+In some ways an XML config file is a more defensible source than disassembling the .sys: it isn't executable code, and what you're pulling out — "this device has 26 input channels; control 0x3a is monitor gain with range −127..0" — is hardware fact. For your project it's also a potential Rosetta stone: the MMIO trace gives you the wire format, while the XML may hand you the semantic labels and the complete control inventory the trace alone would take ages to enumerate.
+
+The line to respect
+
+The risk isn't in reading the file — it's in carrying its expression into your work:
+
+- Extract facts, not the file. Document what the XML tells you in your own spec ("input channels = 26", "control IDs → names → ranges" as a table you authored). Do not copy the XML verbatim into your driver, headers, or repo, and don't reproduce its particular structure/arrangement or any descriptive comment text. The data is factual; the selection, arrangement, and prose in the file can carry thin copyright.
+- Distribution is a separate, riskier act. Shipping the vendor's XML (or a lightly-transformed copy) with your driver is a different question from reading it on your own machine. Don't bundle it.
+- Watch what kind of XML it is. Device/capability descriptors = factual, useful, defensible. UI-resource XML (layouts, copy, artwork descriptors) = creative expression — read it if it helps you understand semantics, but treat it as off-limits for reproduction.
+
+Practical workflow (keeps you defensible)
+
+1. Treat the XML exactly like the binary: examining it puts you on the dirty side.
+2. Translate it into a functional spec you author — your own tables/prose describing the interface facts.
+3. Keep a provenance log: note that a given fact came from Device.xml (vs. from your MMIO capture vs. from public FCP docs). Facts that you also independently confirm in the trace are the strongest — cross-confirmation both validates the meaning and gives you a clean, observation-derived basis.
+4. Implement from your spec, not from the file. Keep the original XML out of the source tree.
+
+The strict two-person clean room would have one person read the XML and write the spec, and a different person implement from the spec only. Solo, you enforce the same separation by discipline: the file informs your spec; your spec — not the file — informs your code.
+
+One more pointer: the EULA may contain an anti-reverse-engineering clause. Interop RE rights override such clauses in the EU; in the US they're more enforceable, so it's worth a glance at the terms you agreed to — but merely reading config data describing hardware you own is about as benign as RE source material gets.
+
+If you want, paste the structure of one of these XML files (with any obviously-creative text stripped) and I'll help you figure out which fields are interface facts worth lifting into your spec versus noise.
+
+✻ Cooked for 49s
+
+※ recap: You're building a Linux ALSA driver for the Focusrite Clarett 8PreX by reverse-engineering its protocol clean-room style. Next: add x-no-mmap plus VFIO tracing to the libvirt XML, then capture BAR0 MMIO transactions while toggling one control at a time. (disable recaps in /config)
+
+❯ The "C:\Program Files\Focusrite\Focusrite Control\Server\Resources\Clarett 8PreX.xml" file contains the following:
+
+It looks like the file contents didn't actually come through — your message ends at "contains the following:" with nothing after it. Nothing got pasted (possibly it was too large, got stripped, or the paste didn't take).
+
+Go ahead and paste it again. A few practical notes for when you do:
+
+- If it's large, it might be easier to just point me at it — I can read it directly if you tell me you've copied it somewhere on this Linux host (e.g. into the working directory). I can't read paths inside the Windows VM, but if you drop it on the host filesystem I'll open it there.
+- Trim the obviously-creative bits if any (UI strings, descriptions, artwork refs) — for our purposes the valuable parts are the factual/interface sections: channel definitions, control lists, IDs, ranges, routing/topology.
+- Even a partial paste is fine — the top-level structure and one representative <control>/<channel>-type element is often enough for me to tell you which fields are interface facts worth lifting into your spec versus noise.
+
+Once I can see it, I'll help you map its fields to (a) your clean-room spec and (b) what to expect in the MMIO trace so the two sources corroborate each other.
+
+✻ Crunched for 8s
+
+❯ I copied the file contents into the "FCP Server Resources" sub-directory of this project.
+
+  Read 2 files, listed 1 directory
+
+Excellent — this is the Rosetta stone you were hoping the MMIO trace would slowly reconstruct, except Focusrite wrote it down for you. Let me pull one more file so I can give you the single most useful comparison, then decode it.
+
+  Read 1 file
+
+This file is a goldmine, and pulling the USB sibling alongside it answers the deeper question definitively. Here's what the two files together tell you.
+
+Headline: same protocol model, model-specific encodings
+
+Lay the 8PreX next to the Clarett 8Pre USB and the structure is unmistakably the same FCP control model:
+
+- Identical schema and control primitive: every control is (offset-bytes, bits, command) — write a value of bits width at offset-bytes in the device's config space, commit with opcode command.
+- Byte-identical notification masks: dim-mute = 0x00200000, monitor = 0x00400000 in both files. Same async-event encoding → same protocol family.
+- Same routing/pin model, same pin-h/pin-m sample-rate channel-reduction scheme, same monitoring-preset mapping format, same buffer-size/sample-rate menus, same appspace/flash config-storage concept.
+
+This confirms the hypothesis from a few turns ago: the 8PreX speaks FCP. And critically — the USB Clarett class is already implemented and working in scarlett2. So scarlett2's Clarett code is a verified reference for how to interpret these command/offset/bits fields; the USB XML is effectively documentation of code that already runs in-tree. You decode the meaning there, then apply it to the 8PreX values.
+
+But the encodings are model-specific in every detail — this is the most important practical warning:
+
+┌─────────────────┬───────────────────────────────────────┬──────────────────────────────────┬──────────────────────────────────────┐
+│     Aspect      │      Clarett 8PreX (Thunderbolt)      │         Clarett 8Pre USB         │                Lesson                │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ air opcode      │ command=7                             │ command=8                        │ Command numbers are per-model —      │
+│                 │                                       │                                  │ don't carry them over                │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ mode opcode     │ command=6                             │ command=7                        │ shifted                              │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ flash opcode    │ command=5                             │ command=6                        │ shifted                              │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Output gain     │ bits=8 (1 byte)                       │ bits=16 (2 bytes)                │ Different value encoding             │
+│ width           │                                       │                                  │                                      │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Master gain     │ offset 112, 8-bit                     │ offset 118, 16-bit               │ different                            │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ HW-control      │ split: separate gain/dim/mute, 1 bit  │ packed enable-hardware-control,  │ Different config layout              │
+│ flags           │ each                                  │ 2 bits                           │                                      │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Clock-source    │ Internal=24, S/PDIF=3, ADAT1=0,       │ Internal=41, S/PDIF=42, ADAT=43  │ Totally different enum values        │
+│ enums           │ ADAT2=1, Wordclock=2                  │                                  │                                      │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Input mode      │ Mic/Line/Inst (2 bits)                │ Line/Inst (1 bit)                │ 8PreX has a Mic mode                 │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ ADAT            │ 2 ports (16 ch)                       │ 1 port (8 ch)                    │ bigger device                        │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Mixer           │ 30 in × 16 mix                        │ 18 in × 10 mix                   │ bigger                               │
+├─────────────────┼───────────────────────────────────────┼──────────────────────────────────┼──────────────────────────────────────┤
+│ Firmware        │ App + FPGA segments                   │ App only                         │ 8PreX is FPGA-based                  │
+└─────────────────┴───────────────────────────────────────┴──────────────────────────────────┴──────────────────────────────────────┘
+
+The bottom line: scarlett2 tells you how to read the schema; this XML gives you the 8PreX's actual numbers. Never copy offsets, opcodes, or enum values between models — they're all different.
+
+The decoded 8PreX control plane (your clean-room spec, draft)
+
+Command opcodes (what each command value means on the 8PreX):
+
+┌─────┬────────────────────────────────────────┐
+│ cmd │                meaning                 │
+├─────┼────────────────────────────────────────┤
+│ 1   │ output gain                            │
+├─────┼────────────────────────────────────────┤
+│ 2   │ monitor section (master mute/dim/gain) │
+├─────┼────────────────────────────────────────┤
+│ 3   │ output hardware-control enable flags   │
+├─────┼────────────────────────────────────────┤
+│ 4   │ S/PDIF source (in/out)                 │
+├─────┼────────────────────────────────────────┤
+│ 5   │ flash / persist app config             │
+├─────┼────────────────────────────────────────┤
+│ 6   │ input mode (Mic/Line/Inst)             │
+├─────┼────────────────────────────────────────┤
+│ 7   │ input "Air"                            │
+├─────┼────────────────────────────────────────┤
+│ 8   │ meter source                           │
+└─────┴────────────────────────────────────────┘
+
+Config-space field map (all offsets are into the device config/app space):
+
+- Per analogue input 1–8: Air → cmd 7, 1 bit @ 174 + (n−1). Mode → cmd 6, 2 bits @ 166 + (n−1), enums Mic=0/Line=1/Inst=2 (Inst only on inputs 1–2).
+- Per analogue output (Monitor 1–2, Line 3–10): Gain → cmd 1, 8 bits @ {32,33,36,37,40,41,44,45,48,49} (stride-4 stereo pairs). Per-output HW enable flags (gain/dim/mute) → cmd 3, 1 bit each at the byte/bit pairs in lines 116–172.
+- Master monitor: mute → cmd 2, 1 bit @ 24; dim → cmd 2, 1 bit @ 28; gain → cmd 2, 8 bits @ 112.
+- S/PDIF: input src → cmd 4, 2 bits @ 132; output src → cmd 4, 2 bits @ 124 (RCA=2, Optical=1).
+- Meter source → cmd 8, 8 bits @ 184 (Analogue=1, S/PDIF=2, ADAT1=4, ADAT2=8).
+- Standalone → 1 bit @ 188.
+- Clock source & sample rate have no offset/command — they're handled by separate dedicated FCP commands, not config-space writes. Flag that as a thing the trace must reveal.
+- Notifications from device: dim-mute=0x00200000, monitor=0x00400000.
+- appspace: app region at offset 200, 8192-byte persistent store, flashed via cmd 5.
+
+The one conceptual thing to keep straight
+
+These offset-bytes are offsets into the device's logical config/app space — not offsets into your 64 KB MMIO BAR. The two address spaces are different:
+
+- The XML = the config-space semantics: which offset/opcode/value a control maps to.
+- The MMIO trace = the transport: how an FCP message (carrying that offset/opcode/value) gets framed into the mailbox, the doorbell write, the response/notification path.
+
+That's exactly why they're complementary, and it makes the trace dramatically easier now: you can predict the payload before you capture it. Toggle "Air on input 1" → you expect an FCP write of value 1, 1 bit, at config offset 174, opcode 7. Find the mailbox transaction in the trace that carries 174 / 7 / 1 and you've simultaneously (a) confirmed the XML is accurate for the Thunderbolt transport and (b) decoded the mailbox framing — what part of the 64 KB BAR holds the opcode, the offset, the length, the data, the doorbell. From there the whole control plane unzips quickly.
+
+Clean-room note
+
+These are interface facts (offsets, opcodes, enum values, channel maps) — the favorable, functional category, and Focusrite's own description of the hardware interface, not disassembled code. Best practice for defensibility: treat this as input to your authored spec (the tables above are a start), keep the original XML out of your driver source tree, and cross-confirm the key fields against your MMIO trace — independent observation of the same facts is the strongest provenance you can have, and it doubles as validation that the Thunderbolt transport didn't change the semantics.
+
+Suggested next steps
+
+1. Finish translating the 8PreX XML into your spec (control map above + the mixer/routing pin tables I didn't expand).
+2. Cross-read scarlett2's Clarett handling to confirm what command/offset/bits mean operationally (using the USB 8Pre XML as the bridge, since that model is in-tree).
+3. Run the x-no-mmap trace and toggle Air-on-input-1 (or the master mute — opcode 2 @ offset 24 is a nice big obvious target) and find that tuple in the mailbox transaction. That single capture decodes your transport framing.
+
+Want me to expand the mixer/routing-matrix portion (the 30×16 mix and the 91-entry routing table with the pin numbering) into the spec too, or focus next on sketching the expected FCP mailbox framing so you know precisely what to look for in the trace?
+
+I'll also jot down the key project facts so they persist across sessions:
+
+  Read 1 file, wrote 4 memories
+
+I've also saved the key project facts to memory so they persist across sessions (the hardware IDs/BAR/MSI, the FCP-vs-scarlett2 distinction, and the MMIO-trace recipe).
+
+To recap where you are: the XML confirmed the 8PreX speaks FCP, gave you the 8PreX-specific control map (opcodes 1–8, the config-space offsets, enum values, notification masks), and the USB-8Pre comparison proved the encodings are per-model — so scarlett2 is your interpretation reference, not a copy source. The big unlock is that you can now predict FCP payloads from the XML and just confirm the mailbox framing in the trace.
+
+Two good directions from here, your pick:
+- Expand the spec — the mixer (30×16) and the 91-entry routing matrix with the pin numbering, which the control map above didn't cover.
+- Sketch the expected FCP mailbox framing — so when you run the x-no-mmap trace you know exactly what byte pattern to hunt for (opcode/offset/length/data/doorbell) around a known control like master mute (opcode 2 @ offset 24).
+
+Say which and I'll dig in.
+
+✻ Crunched for 3m 41s
+
+❯ Expand the spec, please.
+
+On it. I'll consolidate everything from the XML into a single authored spec document in the project (your clean-room functional description), expanding the parts the earlier control map didn't cover — the pin address space, the mixer, and the routing matrix. Let me write it to the repo.
+
+  Ran 1 shell command
+
+● Write(/home/user/Programming/Clarett/clarett-sre/spec/clarett-8prex-control-plane.md)
+
+Wrote 210 lines to /home/user/Programming/Clarett/clarett-sre/spec/clarett-8prex-control-plane.md
+# Clarett 8PreX — Control-Plane Spec (clean-room, derived)
+
+**Status:** working spec, authored from interface facts. Sources are tagged per section:
+`[XML]` = stated in Focusrite's `Clarett 8PreX.xml` device descriptor (interface fact);
+`[INF]` = inferred/derived by us (needs confirmation);
+`[TRACE]` = to be confirmed against the live MMIO/FCP capture.
+
+This document describes the **control plane** (mixer/routing/preamp/clock/monitor). The data
+plane (PCIe DMA streaming) is separate and not covered here except for channel counts.
+
+> **Address-space caution.** All `offset` values below are byte offsets into the device's
+> **logical config/app space** — the payload addressed by FCP messages — **not** offsets into the
+> 64 KB MMIO BAR. The BAR is the mailbox transport that *carries* FCP messages referencing these
+> config offsets. Keep the two spaces distinct.
+
+---
+
+## 1. Device identity
+
+- PCI `1cb5:0002`, Multimedia audio controller. Class **"Clarett"** (Thunderbolt) — distinct from
+  the **"Clarett USB"** class (Clarett USB / Clarett+), which is the class `scarlett2` supports. `[XML: Classes.xml]`
+- Protocol: **FCP** (Focusrite Control Protocol), same family as `scarlett2`. The Thunderbolt
+  Clarett is *not* in `scarlett2`; the USB Clarett *is*, so the USB 8Pre descriptor + `scarlett2`
+  are the verified reference for interpreting this schema. Encodings are **per-model** — never
+  carry opcodes/offsets/enums across models. `[INF]`
+- `nickname`: 32-byte user string @ config offset **80**. `[XML]`
+
+## 2. Command opcodes
+
+Each control commits with a `command` opcode. On the **8PreX** these are: `[XML]`
+
+| opcode | meaning |
+|---|---|
+| 1 | output gain |
+| 2 | monitor section (master mute / dim / gain) |
+| 3 | output hardware-control enable flags (gain/dim/mute enables) |
+| 4 | S/PDIF source (in / out) |
+| 5 | flash / persist app config |
+| 6 | input mode (Mic/Line/Inst) |
+| 7 | input "Air" |
+| 8 | meter source |
+
+> Note: opcode numbers differ from the USB 8Pre (there air=8, mode=7, flash=6). Use these. `[XML]`
+> Clock source and sample rate carry **no** offset/opcode → handled by **dedicated FCP commands**,
+> not config-space writes (see §7). `[INF/TRACE]`
+
+## 3. Channel inventory & pin address space
+
+Pins identify endpoints in the routing matrix. **Pin numbers are direction-scoped**: the same
+numeric pin means different things as a *source* vs a *destination* (e.g. `0x408` = S/PDIF-in as a
+source, Monitor-Out-1 as a destination). `[INF, from overlapping pins in XML]`
+
+### Sources (routable *from*) `[XML]`
+| Pin range | Type | Channels |
+|---|---|---|
+| `0x200`–`0x20f` | ADAT input | ADAT 1.1–1.8 (`0x200`–`0x207`), ADAT 2.1–2.8 (`0x208`–`0x20f`) — 16 |
+| `0x300`–`0x30f` | Mix-bus outputs | Mix 1–16 (the 16 mixer outputs) |
+| `0x400`–`0x407` | Analogue input | Mic pre 1–8 |
+| `0x408`–`0x409` | S/PDIF input | S/PDIF 1–2 |
+| `0x600`–`0x61b` | PCM playback (from host) | Playback 1–28 |
+
+### Destinations (routable *to*) `[XML]`
+| Pin range | Type | Channels |
+|---|---|---|
+| `0x186`–`0x187` | S/PDIF output | S/PDIF Out 1–2 |
+| `0x200`–`0x20f` | ADAT output | ADAT Out 1.1–2.8 — 16 |
+| `0x300`–`0x31d` | Mixer input slots | Mixer input 1–30 |
+| `0x400`–`0x407` | Analogue output | Line Out 3–10 |
+| `0x408`–`0x409` | Analogue output | Monitor Out 1–2 |
+| `0x600`–`0x61b` | PCM capture (to host) | Record 1–28 (incl. Loopback 1–2 @ `0x60a`–`0x60b`) |
+
+So: **8 mic pres, 2× ADAT (16 ch), S/PDIF stereo, 10 analogue outs, 28 PCM play / 28 PCM capture,
+30×16 mixer.** `[XML]`
+
+## 4. Input controls (analogue 1–8) `[XML]`
+
+`air`: 1 bit, opcode 7, @ `174 + (n−1)`. `mode`: 2 bits, opcode 6, @ `166 + (n−1)`.
+
+| Input | pin | air @ | mode @ | modes |
+|---|---|---|---|---|
+| Analogue 1 | `0x400` | 174 | 166 | Mic=0, Line=1, Inst=2 |
+| Analogue 2 | `0x401` | 175 | 167 | Mic=0, Line=1, Inst=2 |
+| Analogue 3 | `0x402` | 176 | 168 | Mic=0, Line=1 |
+| Analogue 4 | `0x403` | 177 | 169 | Mic=0, Line=1 |
+| Analogue 5 | `0x404` | 178 | 170 | Mic=0, Line=1 |
+| Analogue 6 | `0x405` | 179 | 171 | Mic=0, Line=1 |
+| Analogue 7 | `0x406` | 180 | 172 | Mic=0, Line=1 |
+| Analogue 8 | `0x407` | 181 | 173 | Mic=0, Line=1 |
+
+(Only inputs 1–2 have the Inst mode.)
+
+## 5. Output controls (10 analogue outs) `[XML]`
+
+`gain`: 8-bit, opcode 1. HW enables: 1-bit, opcode 3, packed into the byte/bit shown.
+(Note 8-bit gain — the USB model uses 16-bit; the 8PreX is 8-bit throughout.)
+
+| Output | pin | gain @ | hw-gain-en | hw-mute-en | hw-dim-en |
+|---|---|---|---|---|---|
+| Monitor 1 | `0x408` | 32 | b52.0 | b72.0 | b73.2 |
+| Monitor 2 | `0x409` | 33 | b52.1 | b72.1 | b73.3 |
+| Line 3 | `0x400` | 36 | b56.0 | b72.2 | b73.4 |
+| Line 4 | `0x401` | 37 | b56.1 | b72.3 | b73.5 |
+| Line 5 | `0x402` | 40 | b60.0 | b72.4 | b73.6 |
+| Line 6 | `0x403` | 41 | b60.1 | b72.5 | b73.7 |
+| Line 7 (HP1) | `0x404` | 44 | b64.0 | b72.6 | b74.0 |
+| Line 8 (HP1) | `0x405` | 45 | b64.1 | b72.7 | b74.1 |
+| Line 9 (HP2) | `0x406` | 48 | b68.0 | b73.0 | b74.2 |
+| Line 10 (HP2) | `0x407` | 49 | b68.1 | b73.1 | b74.3 |
+
+`bN.k` = byte N, bit k. Gain bytes are stereo-paired with stride 4 (32/33, 36/37, …). Lines 7–10
+are the two headphone pairs (HP1 = out 7-8, HP2 = out 9-10). dB↔byte mapping of the 8-bit gain
+value: **`[TRACE]`**.
+
+## 6. Mixer (30 × 16)
+
+- 30 input slots → 16 mix buses; each mix bus output is a source pin (`0x300`+). `[XML]`
+- Each mixer input slot's *source* is chosen via the routing matrix (§8). `[INF]`
+- 30 × 16 = **480 gain coefficients**. The `<mixer>` element carries **no** offset/opcode →
+  mix-gain coefficients are set by a **dedicated mixer command**, not the linear config space.
+  Encoding (likely 8-bit dB-coded, matching §5) and command: **`[TRACE]`** / cross-check `scarlett2`. `[INF]`
+
+## 7. Clocking `[XML]`
+
+- `clock-source`: Internal=24, S/PDIF=3, ADAT 1=0, ADAT 2=1, Wordclock=2.
+- `sample-rate`: 44100, 48000, 88200, 96000, 176400, 192000.
+- Neither has a config offset/opcode → set via dedicated FCP command(s). **`[TRACE]`**
+
+## 8. Routing matrix `[XML]`
+
+A table of *destination ← source* assignments. Size depends on the sample-rate band:
+
+| Band | Rates | Entries |
+|---|---|---|
+| Low | 44.1 / 48 kHz | `num` = **91** |
+| Medium | 88.2 / 96 kHz | `num-m` = **75** |
+| High | 176.4 / 192 kHz | `num-h` = **67** |
+
+- Channels with `pin-m="0x0"` drop at the medium band; `pin-h="0x0"` drop at the high band —
+  dominated by **ADAT S/MUX** (8 → 4 → 2 ch per port) plus reduced high-rate PCM channels. `[XML/INF]`
+- Enumerated destinations total ≈ **86** (28 hw outputs + 28 PCM capture + 30 mixer inputs); header
+  says 91 → ~5 additional/reserved entries. Exact entry order & the ~5 delta: **`[TRACE]`**.
+
+### PCM-capture default source map (`record-outputs`) `[XML]`
+Record pin → default hardware-input index, with per-band remap (`input-m`/`input-h`):
+
+| pin | input | input-m | input-h | note |
+|---|---|---|---|---|
+| `0x600`–`0x609` | 0–9 | — | — | |
+| `0x60a`,`0x60b` | — | — | — | **Loopback 1, 2** |
+| `0x60c`,`0x60d` | 10,11 | — | — | |
+| `0x60e`,`0x60f` | 12,13 | — | 18,19 | |
+| `0x610`–`0x613` | 14–17 | 18–21 | (dropped) | `pin-h=0x0` |
+| `0x614`–`0x61b` | 18–25 | (dropped) | (dropped) | `pin-m=0x0` |
+
+## 9. Monitor / monitoring section `[XML]`
+
+- Monitoring config region: offset **24**, length **92** bytes.
+- Master `mute`: 1 bit @ 24, opcode 2. `dim`: 1 bit @ 28, opcode 2. `gain`: 8-bit @ 112, opcode 2.
+  These three are an `exclusive` group.
+- Monitor presets (which outputs the master section controls): `1-2`(opt 2), `1-4`(4), `1-6`(6),
+  `1-8`(8), `All`(1), `None`(0), each with a 10-slot output mapping mask.
+
+## 10. Settings `[XML]`
+
+- **S/PDIF source**: input 2-bit @ 132, output 2-bit @ 124, opcode 4 (RCA=2, Optical=1).
+- **Meter source**: 8-bit @ 184, opcode 8 (Analogue=1, S/PDIF=2, ADAT 1=4, ADAT 2=8).
+- **Hardware meters**: tables `meters-l`@136 / `meters-m`@146 / `meters-h`@156 (10 bytes each),
+  per-source channel-index tables (255 = unused) for the low/med/high bands.
+- **Standalone**: 1 bit @ 188 (no opcode listed → persisted setting). `[INF]`
+- **Buffer size** (host ASIO, not a device config write): 32–2048.
+
+## 11. Notifications (device → host async events) `[XML]`
+
+Bitmask values the device raises when state changes (e.g. front-panel button):
+
+| name | value |
+|---|---|
+| dim-mute | `0x00200000` |
+| monitor | `0x00400000` |
+
+(Identical to the USB 8Pre — strong evidence of shared FCP framing.) Delivery mechanism (which of
+the 4 MSI vectors + which BAR register): **`[TRACE]`**.
+
+## 12. App storage & firmware `[XML]`
+
+- `appspace`: app region @ offset **200**, total **8392** bytes, persistent store **8192** bytes,
+  flashed via opcode **5**.
+- Firmware segments:
+  - `App_Upgrade` ("App") — `ClarettThunderbolt.tca`, version 1016, version field 32-bit @ offset 8.
+  - `FPGA_Upgrade` ("FPGA") — `fp001005_tb_top.bit`, version 1021, version field 32-bit @ offset 12.
+- The FPGA segment confirms the Thunderbolt interface is **FPGA-based** (PCIe/TB bridge + routing). `[INF]`
+
+## 13. Open questions → resolve via MMIO/FCP trace
+
+- **Transport framing**: where in the 64 KB BAR the FCP request/response/doorbell live; how
+  (opcode, config-offset, length, data) are laid out in a mailbox message.
+- **Mixer-gain command** and its coefficient encoding (§6).
+- **Clock-source / sample-rate command(s)** (§7).
+- **8-bit gain → dB** mapping (§5).
+- **MSI vector semantics**: which of the 4 vectors signals mailbox completion vs notifications vs
+  audio period IRQs.
+- **Routing table**: exact entry ordering and the ~5-entry delta vs the enumerated 86 (§8).
+
+## Provenance
+
+Control semantics, offsets, opcodes, enum values, and channel maps are interface facts taken from
+Focusrite's `Clarett 8PreX.xml` descriptor (`FCP Server Resources/`), cross-referenced for meaning
+against the in-tree `scarlett2` driver via the USB Clarett descriptor. No driver code was copied.
+`[TRACE]`-tagged items are to be independently confirmed by observing the live device, which also
+serves as independent corroboration of the XML-derived facts.
+
+
+Done — written to spec/clarett-8prex-control-plane.md as your authored clean-room functional spec. It consolidates the full 8PreX control plane, with every line tagged [XML] (interface fact), [INF] (our inference), or [TRACE] (confirm against the capture).
+
+The parts I expanded beyond the earlier control map:
+
+Pin address space (§3). The key realization decoding the pins: pin numbers are direction-scoped, not global. The same number means different things as a source vs. a destination — e.g. 0x408 is S/PDIF-in as a source but Monitor-Out-1 as a destination, and 0x200–0x20f is ADAT-in or ADAT-out depending on direction. I tabulated both the source and destination pin maps. High-nibble convention: 0x2xx=ADAT, 0x3xx=mixer, 0x4xx=analogue, 0x6xx=PCM, 0x18x=S/PDIF-out.
+
+Mixer (§6). 30 input slots → 16 mix buses (480 coefficients). Important: the <mixer> element carries no offset/opcode, so mix-gain coefficients are not in the linear config space — they're set by a dedicated mixer command. That encoding is a [TRACE]/scarlett2 item, with a working hypothesis that it's 8-bit (the 8PreX uses 8-bit gains everywhere, unlike the USB model's 16-bit).
+
+Routing matrix (§8). 91 / 75 / 67 entries at the low / medium / high sample-rate bands. The reduction is driven by pin-m="0x0" / pin-h="0x0" markers — dominated by ADAT S/MUX (8→4→2 ch per port). I enumerated ~86 destinations (28 hw out + 28 PCM capture + 30 mixer inputs) and flagged honestly that the header says 91, so there are ~5 reserved/extra entries to pin down in the trace. Also included the PCM-capture default-source map from record-outputs, including the loopback pair at 0x60a/0x60b and the per-band index remaps.
+
+A couple of notable findings that fell out while building it:
+- Clock source and sample rate have no config offset/opcode → they're set by dedicated FCP commands, not config-space writes. Worth knowing before you go hunting for them as offset writes.
+- FPGA firmware segment confirms the Thunderbolt front-end is FPGA-based.
+
+Everything still unknown is collected in §13 (Open questions → resolve via trace) — transport framing, the mixer-gain command, the clock/rate command, the 8-bit-gain→dB mapping, the 4 MSI vectors' meanings, and the routing-table ordering. That section is essentially your trace shopping list.
+
+Natural next step is the other half of the pair: sketch the expected FCP mailbox framing so the trace has known targets (e.g. master mute = opcode 2 @ offset 24 is the cleanest first probe). Want me to do that now?
+
+❯ Yes, please sketch the expected FCP mailbox framing.
+
+Yes — this is the other half of the pair. The control-plane spec told you what a message carries (opcode/offset/value); this sketch predicts how it's framed in the mailbox, so the trace has concrete targets. I'll write it as a companion doc in the repo.
+
+The core bet: the PCIe mailbox carries the same FCP packet that scarlett2 sends over USB control transfers — only the transport (BAR mailbox + doorbell + MSI) is new. And the missing link from the last doc falls out of this: the XML's per-control command value is almost certainly the activate/commit opcode sent in a follow-up DATA_CMD message after the SET_DATA write.
+
+● Write(/home/user/Programming/Clarett/clarett-sre/spec/clarett-8prex-fcp-transport.md)
+
+Wrote 140 lines to /home/user/Programming/Clarett/clarett-sre/spec/clarett-8prex-fcp-transport.md
+# Clarett 8PreX — Expected FCP Mailbox Framing (trace targets)
+
+**Purpose:** predict the transport-layer framing of FCP messages in the 64 KB MMIO BAR, so the
+`x-no-mmap` trace (see memory `clarett-mmio-trace-setup`) has concrete byte patterns to hunt for.
+
+**Confidence tags:** `[S2]` = taken from the `scarlett2` USB driver (verified reference, but *USB*
+transport — expect the 8PreX to reuse the packet/opcodes, confirm the values);
+`[HYP]` = our hypothesis about the PCIe transport; `[TRACE]` = resolved only by capture.
+
+> **The central bet:** the device speaks the *same FCP packet* `scarlett2` sends over USB control
+> transfers; only the carrier changes — USB control msg → **BAR mailbox + doorbell + MSI**. The
+> packet structure and command opcodes should port over; the mailbox plumbing is what we RE.
+
+---
+
+## 1. The FCP packet (request/response envelope) `[S2]`
+
+`scarlett2` wraps every command in a 16-byte header + payload (little-endian; x86 PCIe is LE too):
+
+| off | field | bytes | meaning |
+|---|---|---|---|
+| 0x00 | `cmd`   | 4 | "big" command opcode (see §2) |
+| 0x04 | `size`  | 2 | length of `data[]` payload |
+| 0x06 | `seq`   | 2 | sequence #, incremented per request, **echoed in the response** |
+| 0x08 | `error` | 4 | 0 = success (meaningful in the response) |
+| 0x0c | `pad`   | 4 | unused / zero |
+| 0x10 | `data`  | n | payload (command-specific) |
+
+`seq` incrementing across transactions and `error`/`seq` echoed back are strong fingerprints for
+locating and validating the header in the trace.
+
+## 2. "Big" command opcodes (`cmd` field) `[S2 — confirm for 8PreX]`
+
+These are the `scarlett2` USB values. Expect the 8PreX to match or be close; **verify**.
+
+| opcode | name | use |
+|---|---|---|
+| `0x00000000` | INIT_1 | startup handshake (step 1) |
+| `0x00000002` | INIT_2 | startup handshake (step 2) |
+| `0x00000003` | REBOOT | reboot device |
+| `0x00800000` | GET_DATA | read config space: payload `{u32 offset, u32 size}` → response returns bytes |
+| `0x00800001` | SET_DATA | write config space: payload `{u32 offset, u32 size, u8 data[size]}` |
+| `0x00800002` | DATA_CMD | **commit/activate** a config write: payload `{u32 activate}` |
+| `0x00001001` | GET_METER | read level meters (GUI polls this continuously) |
+| `0x00002001` / `0x00002002` | GET_MIX / SET_MIX | mixer-gain coefficients (§6 of control-plane spec) |
+| `0x00003001` / `0x00003002` | GET_MUX / SET_MUX | routing matrix (§8 of control-plane spec) |
+| `0x00006004` | GET_SYNC | clock-sync / lock status |
+
+**This resolves the open questions in the control-plane spec:**
+- mixer-gain command = **SET_MIX**; routing command = **SET_MUX**; meters = **GET_METER**;
+  clock status = **GET_SYNC**. `[HYP]`
+- The XML per-control `command` (1–8) = the **`activate` argument to DATA_CMD**, sent *after* the
+  SET_DATA that writes the value. `[HYP — the linchpin to confirm first]`
+
+## 3. A config write decomposes into TWO round-trips `[S2/HYP]`
+
+Setting a config control = `SET_DATA` (write the bytes) then `DATA_CMD` (tell firmware to apply).
+
+### Worked example — **master mute ON** (control-plane spec §9: offset 24, 1 bit, command 2)
+
+**Round-trip A — SET_DATA**, request buffer contents:
+```
++0x00  01 00 80 00      cmd   = 0x00800001 (SET_DATA)
++0x04  09 00  NN NN      size  = 0x0009, seq = N
++0x08  00 00 00 00      error = 0
++0x0c  00 00 00 00      pad
++0x10  18 00 00 00      offset = 24
++0x14  01 00 00 00      size   = 1
++0x18  01               data   = 0x01  (mute on)
+```
+**Round-trip B — DATA_CMD (commit)**, request buffer contents:
+```
++0x00  02 00 80 00      cmd   = 0x00800002 (DATA_CMD)
++0x04  04 00  MM MM      size  = 0x0004, seq = N+1
++0x08  00 00 00 00      error = 0
++0x0c  00 00 00 00      pad
++0x10  02 00 00 00      activate = 2   ← the XML <mute ... command="2">
+```
+
+So in the trace, one mute toggle ≈ **two** mailbox transactions, the second carrying the literal
+`02` from the XML. Air-on-input-1 would instead be `SET_DATA{offset=174,size=1,data=1}` +
+`DATA_CMD{activate=7}`.
+
+## 4. Expected mailbox transaction shape (per round-trip) `[HYP/TRACE]`
+
+A typical BAR mailbox cycle — what one transaction should look like in `vfio_region_*` events:
+
+1. **Fill request window** — a run of ascending `vfio_region_write`s into one offset window
+   (the header then payload, as in §3). Ascending contiguous offsets = "filling a buffer."
+2. **Doorbell write** — a single write to a fixed, separate small register (e.g. value 1) that
+   kicks the device to process. Watch for a lone write to a low/fixed offset right after the burst.
+3. **Completion** — one of:
+   - **poll**: repeated `vfio_region_read`s of a status register until a bit flips, or
+   - **MSI**: a gap, then the host reads the response (MSI itself won't show in `vfio_region_*`;
+     it arrives via a different path — see §6).
+4. **Read response window** — a read burst (`error`/`seq` echo, plus data for GET_* commands).
+
+The **unknowns to map** (`[TRACE]`): request vs response window offsets (may be the same buffer),
+the doorbell register offset, the status register offset/bit, and whether completion is poll or MSI.
+
+## 5. Trace fingerprints — how to find the mailbox fast
+
+- **Best anchor — boot init.** The first mailbox traffic at driver load should be `INIT_1`
+  (`cmd=0x00000000`) then `INIT_2` (`cmd=0x00000002`). Two early transactions where the request
+  window's `+0x00` gets `0x0` then `0x2`, each followed by the same lone doorbell write, pins down
+  the **request window + doorbell offset** immediately. `[S2/HYP]`
+- **Distinctive constants.** The 32-bit `cmd` values (esp. `0x00800001`/`0x00800002`/`0x00800000`)
+  are rare bit patterns — grep the trace for them to spot headers.
+- **Incrementing `seq`.** Find a 16-bit field at header `+0x06` that climbs by 1 each request.
+- **Meter metronome.** The GUI polls `GET_METER` (`0x00001001`) continuously (~tens of Hz). This is
+  the bulk of the "noise" but also a free, repeating transaction that reveals the **response/readback
+  region** and meter data layout. Identify it early so you can filter it out.
+
+## 6. MSI vectors (separate trace concern) `[TRACE]`
+
+The 4 MSI vectors won't appear in `vfio_region_*` events (MSI is delivered via KVM irqfd, not BAR
+MMIO). To map them, trace QEMU's `vfio` MSI events / the guest ISR separately. Expected roles to
+distinguish: **mailbox completion**, **async notification** (the `0x00200000`/`0x00400000` masks
+from control-plane spec §11 — likely written to a notification register the ISR then reads),
+**playback period IRQ**, **capture period IRQ**.
+
+## 7. Probe plan (escalating)
+
+1. **Boot init** — capture driver load; locate request window + doorbell via INIT_1/INIT_2 (§5).
+2. **Master mute** — single-bit, two-round-trip; confirm the `SET_DATA`+`DATA_CMD{activate=2}` model
+   and the full header layout (§3).
+3. **Output gain** — multi-byte payload; confirm the 8-bit gain encoding and dB mapping
+   (control-plane spec §5).
+4. **A routing change** — reveals `SET_MUX` payload format (the 91-entry table).
+5. **A mixer fader** — reveals `SET_MIX` payload + coefficient encoding.
+6. **Idle capture** — isolate `GET_METER`/`GET_SYNC` polling and the notification path.
+
+## 8. Caveats
+
+- Opcode *values* (§2) are `scarlett2` USB constants — the 8PreX may renumber them; the *structure*
+  is the durable bet. Confirm against the boot capture before trusting any specific hex.
+- The two-round-trip model (§3) and the mailbox plumbing (§4) are hypotheses; PCIe framing could add
+  a length-prefix, use a descriptor ring, or split request/response windows — the trace decides.
+- `[S2]` items should also be cross-checked against the *current* `scarlett2`/`fcp` source, since
+  field names/values evolve (see memory `focusrite-fcp-vs-scarlett2`).
+
+
+Written to spec/clarett-8prex-fcp-transport.md. Here's the shape of it.
+
+The packet (§1). FCP wraps every command in a 16-byte little-endian header + payload:
+
+┌──────┬───────────┬─────────────────────────────────────┐
+│ off  │   field   │               meaning               │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x00 │ cmd (4)   │ "big" opcode                        │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x04 │ size (2)  │ payload length                      │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x06 │ seq (2)   │ request counter, echoed in response │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x08 │ error (4) │ 0 = success                         │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x0c │ pad (4)   │ —                                   │
+├──────┼───────────┼─────────────────────────────────────┤
+│ 0x10 │ data[]    │ command-specific                    │
+└──────┴───────────┴─────────────────────────────────────┘
+
+The opcodes (§2) — and this is where it pays off: the "big" cmd values (SET_DATA=0x00800001, DATA_CMD=0x00800002, SET_MIX, SET_MUX, GET_METER, GET_SYNC…) resolve the open questions from the control-plane spec. Mixer gains = SET_MIX; routing = SET_MUX; meters = GET_METER; clock = GET_SYNC. And the linchpin: the XML's per-control command (1–8) is the activate argument to DATA_CMD — sent right after the SET_DATA that writes the value.
+
+The decomposition (§3). A config write is two round-trips. I worked master-mute all the way to bytes:
+- SET_DATA{offset=24, size=1, data=1}
+- DATA_CMD{activate=2} ← the literal 2 from <mute command="2">
+
+So when you toggle master mute in the trace, you should see two mailbox transactions, the second carrying 02 00 00 00 in its payload. That's your verification that the whole XML→FCP model holds.
+
+The mailbox cycle (§4) and how to find it fast (§5). The single best anchor is the boot init sequence: INIT_1 (cmd 0x00000000) then INIT_2 (cmd 0x00000002) are the first mailbox writes at driver load — finding those two, each followed by the same lone doorbell write, pins down the request-window offset and the doorbell register immediately. The continuous GET_METER polling is the "noise," but it's also a useful metronome that exposes the response/readback region.
+
+Honest caveats (§8). The opcode values are scarlett2's USB constants — the 8PreX may renumber them, so confirm against the boot capture before trusting any hex; the packet structure and the two-round-trip model are the durable bets. The mailbox plumbing itself (doorbell/status/response-window offsets, poll vs MSI completion) is genuinely unknown — that's the part the trace exists to resolve. MSI vector identification (§6) is a separate trace concern since MSI doesn't show in vfio_region_* events.
+
+§7 lays out the escalating probe plan: boot init → master mute → output gain → routing → mixer → idle.
+
+You now have both halves: the control-plane spec says what each message means, and this says what each message should look like on the wire. The next real-world step is running the trace and matching the boot init + master-mute against these predictions. Want me to prep anything else before you capture — e.g. a small decoder script that parses vfio_region_* log lines into FCP packets so you're not reading raw hex by hand?

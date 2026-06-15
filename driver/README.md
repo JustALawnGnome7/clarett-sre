@@ -1,0 +1,60 @@
+# snd-clarett — Focusrite Clarett 8PreX (Thunderbolt) ALSA driver
+
+Status: **control plane only** (mixer-only sound card). PCM/streaming is not yet
+implemented. Built from the clean-room notes in `../spec/`.
+
+## What works
+
+- PCI bring-up for `1cb5:0002` (BAR0 map, bus master, 32-bit DMA response buffer).
+- FCP mailbox transport: `SET_DATA` / `DATA_CMD` / poll-for-completion.
+- ALSA mixer controls (all confirmed single-byte fields):
+  - `Master Playback Switch` (mute), `Monitor Dim Playback Switch`,
+    `Master Playback Volume` (monitor section gain)
+  - 10 analogue output volumes (Monitor 1–2, Line 3–10), 1 dB/step, −127..0 dB TLV
+  - per analogue input 1–8: `Air` switch + `Mode` enum (Mic/Line[/Inst])
+
+## Build
+
+```sh
+make                       # against the running kernel
+sudo insmod snd-clarett.ko
+```
+
+`make KDIR=/path/to/kernel` to build against another tree.
+
+## ⚠️ The device must NOT be bound to vfio-pci
+
+During RE the Clarett is passed through to the Windows VM via `vfio-pci`. To test
+this driver on the **host**, the device must be free for `snd-clarett` to claim:
+
+1. Shut down the Windows VM.
+2. Unbind from vfio-pci and let snd-clarett bind, e.g.:
+   ```sh
+   echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind
+   sudo insmod snd-clarett.ko
+   echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/snd-clarett/bind   # if not auto-bound
+   ```
+   (Also remove any `vfio-pci.ids=`/driver_override or modprobe binding that
+   re-grabs the device at boot.)
+3. Verify: `aplay -l` / `amixer -c <n> contents`, and test a control:
+   ```sh
+   amixer -c <n> sset 'Master Playback' mute     # then unmute, move volumes, etc.
+   ```
+
+Never load this while the VM is using the device.
+
+## Known limitations / TODO
+
+- **No PCM** — data-plane DMA streaming is not reverse-engineered yet.
+- **Mixer "get" returns a write-through shadow**, not live device state (GET
+  responses arrive via DMA and that format isn't decoded). Values default to
+  0 dB / unmuted / Mic / Air-off at probe, which may not match the hardware.
+- **Completion is polled**, not MSI-driven (fine for control; data plane will
+  need real MSI handling for the 4 vectors).
+- **DMA-response register `0x414`** is programmed with the observed `0x2`; its
+  exact meaning (addr-high vs. flag) is unconfirmed.
+- **Firmware init handshake** (boot `INIT_2` + `0x5000/0x6000/0x7000` sequence)
+  is not replayed; not understood yet.
+- **Packed bitfield controls** (per-output hardware gain/dim/mute enables) are
+  not implemented (need read-modify-write of shared bytes).
+- Single-card only; no module params for index/id.
