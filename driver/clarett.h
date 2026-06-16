@@ -25,7 +25,7 @@ struct snd_kcontrol;
 #define REG_SERIAL_HI            0x014
 #define REG_IRQ0_CAUSE           0x100   /* read-to-clear; bit DONE = mailbox complete */
 #define REG_IRQ0_ENABLE          0x104   /* observed init value 0xf000003f            */
-#define REG_IRQ_CAUSE(v)         (0x100 + (v) * 0x100)  /* one cause reg per MSI vector */
+#define REG_NOTIFY_CAUSE         0x400   /* read-to-clear; carries the §11 notify mask */
 #define REG_DOORBELL             0x408   /* write 1 = submit, 2 = ack/clear prior      */
 #define REG_DMA_ADDR_LO          0x410   /* GET-response DMA buffer bus address (low 32)  */
 #define REG_DMA_ADDR_HI          0x414   /* DMA buffer bus address (high 32) — confirmed  */
@@ -44,9 +44,15 @@ struct snd_kcontrol;
 #define DOORBELL_SUBMIT          1
 #define DOORBELL_ACK             2
 
-/* MSI vectors (confirmed: vec0 = mailbox-done, vec3 = async notifications). */
+/*
+ * MSI: bare-metal /proc/interrupts shows the device delivers ALL control-plane
+ * interrupts on vector 0 — both mailbox-done and front-panel notifications. The
+ * cause registers (not the MSI vector index) distinguish them: 0x100 = mailbox
+ * done (polled), 0x400 = notification mask. vec1/vec2/vec3 never fire here; they
+ * are the data-plane (period IRQ) suspects.
+ */
 #define CLARETT_NUM_VECTORS      4
-#define CLARETT_VEC_NOTIFY       3       /* cause reg 0x400 carries the §11 notification mask */
+#define CLARETT_VEC_EVENT        0       /* the device signals control events on vec0 */
 #define NOTIFY_DIM_MUTE          0x00200000u
 #define NOTIFY_MONITOR           0x00400000u
 

@@ -36,9 +36,11 @@ like this FPGA PCIe DMA engine. Expect this to be empirical and slower.
 
 ## 3. Anchors we already have `[ANCHOR]`
 
-- **4 MSI vectors**; cause regs `0x100/0x200/0x300/0x400` (read-to-clear). vec0 = mailbox-done,
-  vec3 = notifications → **vec1/vec2 (`0x200`/`0x300`) are the prime suspects for the playback /
-  capture period IRQs.**
+- **4 MSI vectors**, but bare metal fires **only vec0** for all control-plane events (mailbox-done +
+  notifications); the cause regs `0x100`/`0x400` distinguish events, *not* the vector. **vec1/vec2/vec3
+  are completely unused so far** — so they are the prime suspects for the playback/capture period IRQs.
+  A streaming capture should reveal whether the data plane wakes them (watch their `/proc/interrupts`
+  counts), or whether it too multiplexes onto vec0 with new cause registers.
 - **DMA-address precedent:** GET responses DMA into a host buffer whose bus address is programmed at
   BAR `0x410` (low32) / `0x414` (high32). The audio **ring base(s) will be the same low32/high32
   pattern at *new* offsets** — exactly what `bar_profile.py` flags.

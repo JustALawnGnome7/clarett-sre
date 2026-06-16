@@ -59,18 +59,19 @@ static void clarett_hw_init(struct clarett *c)
 
 /*
  * MSI handler. One Linux IRQ per MSI vector, dispatched by vector index (dev_id).
- * Only vec3 (async notifications) is acted on; vec0 stays polled by clarett_fcp(),
- * so we deliberately do NOT read its cause register here (that would race the poll's
- * read-to-clear). vec1/vec2 are the data-plane period IRQs (not used yet). Every
- * vector returns IRQ_HANDLED so the core doesn't disable the MSI as spurious.
+ * The device signals control-plane events on vec0; we check the notification cause
+ * (0x400) there. We must NOT read the mailbox cause (0x100) — that is read-to-clear
+ * and racing clarett_fcp()'s poll would make mailbox commands time out (mailbox
+ * completion stays polled). vec1/vec2/vec3 don't fire yet (data-plane suspects).
+ * Every vector returns IRQ_HANDLED so the core doesn't disable the MSI as spurious.
  */
 static irqreturn_t clarett_irq(int irq, void *dev_id)
 {
 	struct clarett_irqctx *ic = dev_id;
 	struct clarett *c = ic->c;
 
-	if (ic->idx == CLARETT_VEC_NOTIFY) {
-		u32 cause = readl(c->bar0 + REG_IRQ_CAUSE(CLARETT_VEC_NOTIFY)); /* read-to-clear */
+	if (ic->idx == CLARETT_VEC_EVENT) {
+		u32 cause = readl(c->bar0 + REG_NOTIFY_CAUSE);	/* 0x400, read-to-clear */
 		u32 ev = cause & (NOTIFY_DIM_MUTE | NOTIFY_MONITOR);
 
 		if (ev) {

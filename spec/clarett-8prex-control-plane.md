@@ -239,14 +239,17 @@ Bitmask values the device raises when state changes (e.g. front-panel button):
 
 (Identical to the USB 8Pre — strong evidence of shared FCP framing.)
 
-**Delivery mechanism — CONFIRMED `[TRACE]`:** a front-panel event raises **MSI vector 3**, and its
-cause register **`0x400`** returns the bitmask above (read-to-clear). Pressing the physical **Mute**
-button produced `0x400 = 0x00200000` (`dim-mute`) exactly. (`0x400`'s low nibble also carries a
-general mailbox-status value — e.g. `0x3` on completions — so notifications are the *high* bits.)
-The host then **re-syncs state**: `GET_DATA{offset=24, len=92}` to re-read this monitor region (§9),
-followed by `GET_MUX` per sample-rate band. Driver implication: on a vector-3 IRQ, read `0x400`; if a
-notification bit is set, re-read the monitor config (offset 24). **The control plane is event-driven —
-no polling occurs when idle** (the continuous `GET_METER` traffic is only the GUI's meter view).
+**Delivery mechanism — CONFIRMED `[TRACE/HW]`:** a front-panel event sets the bitmask above in cause
+register **`0x400`** (read-to-clear); pressing the physical **Mute** button produced
+`0x400 = 0x00200000` (`dim-mute`) exactly. (`0x400`'s low nibble also carries a general mailbox-status
+value — e.g. `0x3` on completions — so notifications are the *high* bits.) **The MSI is delivered on
+vector 0** — bare-metal `/proc/interrupts` shows only vec0 ever fires (mailbox-done *and*
+notifications); the cause-register index is independent of the MSI vector index. The host then
+**re-syncs state**: `GET_DATA{offset=24, len=92}` to re-read this monitor region (§9), followed by
+`GET_MUX` per sample-rate band. Driver implication: hook **vec0**, read `0x400` there (not `0x100` —
+that is the mailbox poll's), and if a notification bit is set re-read the monitor config (offset 24).
+**The control plane is event-driven — no polling occurs when idle** (the continuous `GET_METER`
+traffic is only the GUI's meter view).
 
 ## 12. App storage & firmware `[XML]`
 
@@ -267,9 +270,10 @@ no polling occurs when idle** (the continuous `GET_METER` traffic is only the GU
   `{u16 mix_num, u16 coeff[30]}`; coeff = `floor(8192·10^(dB/20))`, `0x0000`…`0x2000`(0 dB)…`0x3fd9`(+6)** (§6).
 - **Clock-source / sample-rate command(s)** (§7).
 - **8-bit gain → dB** mapping (§5).
-- **MSI vector semantics** (partial): **vec0** (cause `0x100`) = mailbox completion, **vec3** (cause
-  `0x400`) = async notifications — both confirmed. **vec1/vec2** (cause `0x200`/`0x300`) unidentified —
-  likely the playback/capture period IRQs (data plane).
+- **MSI vector semantics** (partial, corrected on HW): the device fires **only vec0** for all
+  control-plane events — bare-metal `/proc/interrupts` shows vec1–3 never increment. The cause
+  registers distinguish events (`0x100` = mailbox-done, `0x400` = notifications), independent of the
+  MSI vector. **vec1/vec2/vec3** are unused so far — likely the data-plane period IRQs once streaming.
 - ~~**Routing table** wire format~~ — **resolved: `SET_MUX` (`0x003002`), three per-band commands,
   entry = `(src_pin<<12)|dst_pin`** (§8). Remaining detail: the exact entry ordering / the ~5-entry
   delta vs the enumerated 86 is now directly readable from a full-matrix capture if needed.
