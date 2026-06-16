@@ -158,6 +158,7 @@ int clarett_create_controls(struct clarett *c)
 	}
 
 	for (i = 0; i < n; i++) {
+		struct snd_kcontrol *kctl;
 		struct snd_kcontrol_new kn = {
 			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 			.name = c->ctls[i].name,
@@ -173,10 +174,13 @@ int clarett_create_controls(struct clarett *c)
 			kn.tlv.p = clarett_gain_tlv;
 		}
 
-		err = snd_ctl_add(c->card, snd_ctl_new1(&kn, c));
+		kctl = snd_ctl_new1(&kn, c);
+		err = snd_ctl_add(c->card, kctl);	/* frees kctl on error */
 		if (err < 0)
 			return err;
+		c->ctls[i].kctl = kctl;			/* for snd_ctl_notify() */
 	}
+	c->n_ctls = n;
 
 	return 0;
 }

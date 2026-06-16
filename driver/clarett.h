@@ -12,7 +12,11 @@
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/atomic.h>
+#include <linux/workqueue.h>
 #include <sound/core.h>
+
+struct snd_kcontrol;
 
 /* --- BAR0 register map (confirmed) -------------------------------------- */
 #define CLARETT_BAR              0
@@ -21,6 +25,7 @@
 #define REG_SERIAL_HI            0x014
 #define REG_IRQ0_CAUSE           0x100   /* read-to-clear; bit DONE = mailbox complete */
 #define REG_IRQ0_ENABLE          0x104   /* observed init value 0xf000003f            */
+#define REG_IRQ_CAUSE(v)         (0x100 + (v) * 0x100)  /* one cause reg per MSI vector */
 #define REG_DOORBELL             0x408   /* write 1 = submit, 2 = ack/clear prior      */
 #define REG_DMA_ADDR_LO          0x410   /* GET-response DMA buffer bus address (low 32)  */
 #define REG_DMA_ADDR_HI          0x414   /* DMA buffer bus address (high 32) — confirmed  */
@@ -38,6 +43,17 @@
 #define IRQ_DONE_BIT             0x20000000u   /* mailbox-complete cause bit @ REG_IRQ0_CAUSE */
 #define DOORBELL_SUBMIT          1
 #define DOORBELL_ACK             2
+
+/* MSI vectors (confirmed: vec0 = mailbox-done, vec3 = async notifications). */
+#define CLARETT_NUM_VECTORS      4
+#define CLARETT_VEC_NOTIFY       3       /* cause reg 0x400 carries the §11 notification mask */
+#define NOTIFY_DIM_MUTE          0x00200000u
+#define NOTIFY_MONITOR           0x00400000u
+
+/* Monitoring config region re-read on a notification (control-plane §9). */
+#define MONITOR_CFG_OFFSET       24
+#define MONITOR_CFG_LEN          92
+#define MONITOR_ACTIVATE         2       /* DATA_CMD code shared by the monitor controls */
 
 /* FCP "big" opcodes (low bits of cmd) — confirmed; == scarlett2 USB values */
 #define FCP_GET_DATA             0x800000
@@ -63,6 +79,15 @@ struct clarett_ctl {
 	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
 	const char * const *texts;	/* CT_ENUM                                    */
 	int n_texts;
+	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
+};
+
+struct clarett;
+
+/* request_irq dev_id: identifies the card and which MSI vector fired */
+struct clarett_irqctx {
+	struct clarett *c;
+	unsigned int idx;
 };
 
 /* --- per-card state ----------------------------------------------------- */
@@ -80,7 +105,15 @@ struct clarett {
 
 	u32 serial_lo, serial_hi, fw_app, fw_fpga;
 
+	/* MSI / async notifications (vec3). The mailbox stays polled — the ISR
+	 * deliberately does not touch the vec0 cause register (see clarett_main.c). */
+	bool irq_ready;
+	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
+	struct work_struct notify_work;
+	atomic_t notify_bits;
+
 	struct clarett_ctl *ctls;	/* descriptor array, lifetime = card */
+	int n_ctls;
 
 	/*
 	 * Write-through shadow of the config space. We cannot yet decode the
@@ -99,6 +132,7 @@ static inline void clarett_put_le32(u8 *p, u32 v)
 
 /* mailbox.c */
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len);
+int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate);

@@ -49,10 +49,15 @@ Never load this while the VM is using the device.
 - **Mixer "get" returns a write-through shadow**, not live device state (GET
   responses arrive via DMA and that format isn't decoded). Values default to
   0 dB / unmuted / Mic / Air-off at probe, which may not match the hardware.
-- **Completion is polled**, not MSI-driven (fine for control; data plane will
-  need real MSI handling for the 4 vectors).
-- **DMA-response register `0x414`** is programmed with the observed `0x2`; its
-  exact meaning (addr-high vs. flag) is unconfirmed.
+- **Mailbox completion is polled**, not MSI-driven. MSI *is* enabled, but only
+  for **async notifications** (vec3 / cause `0x400`): a front-panel button raises
+  the §11 dim-mute/monitor mask, and the ISR → workqueue re-reads the monitor
+  region and `snd_ctl_notify()`s the monitor controls. The notification GET also
+  hexdumps `resp_buf` — the hook to finally decode the GET-response layout, after
+  which the shadow can reflect physical button changes.
+- The GET-response DMA buffer address is programmed at `0x410` (low32) / `0x414`
+  (high32) — `0x414` = address-high confirmed (hardcoding the trace's `0x2` faulted
+  the IOMMU; the driver uses `upper_32_bits(resp_dma)`).
 - **Firmware init handshake** (boot `INIT_2` + `0x5000/0x6000/0x7000` sequence)
   is not replayed; not understood yet.
 - **Packed bitfield controls** (per-output hardware gain/dim/mute enables) are

@@ -73,6 +73,18 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	return ret;
 }
 
+/* GET_DATA: request `len` bytes from config `offset`. The response is DMAed into
+ * the buffer programmed at REG_DMA_ADDR_LO/HI (c->resp_buf), not returned via MMIO;
+ * its byte layout is not yet decoded, so callers currently only dump it. */
+int clarett_get_data(struct clarett *c, u32 offset, u32 len)
+{
+	u8 buf[8];
+
+	clarett_put_le32(buf, offset);
+	clarett_put_le32(buf + 4, len);
+	return clarett_fcp(c, FCP_GET_DATA, buf, 8);
+}
+
 /* SET_DATA: write `len` bytes into the config space at `offset`. */
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val)
 {

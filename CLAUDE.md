@@ -124,10 +124,16 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 ## Driver limitations / TODO
 
 - **No PCM / data plane** — the big next effort (trace audio streaming: DMA ring,
-  descriptors, period IRQ cadence, sample format; identify the 4 MSI vectors).
-- Mixer **"get" returns a write-through shadow**, not live device state (DMA
-  readback format undecoded) → values default at probe, may not match hardware.
-- Completion is **polled**, not MSI-driven.
+  descriptors, period IRQ cadence, sample format; vec1/vec2 are the likely
+  playback/capture period IRQs). Capture plan: `spec/clarett-8prex-data-plane.md`.
+- Mixer **"get" returns a write-through shadow**, not live device state. The
+  **GET-response DMA layout is still undecoded** — the notification handler issues
+  the monitor GET and hexdumps `resp_buf` (the RE hook to resolve it); once the
+  layout is known, update `shadow[24/28/112]` there so "get" reflects HW changes.
+- **Async notifications implemented** (MSI vec3 / cause `0x400`): the ISR detects
+  the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
+  `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
+  (the ISR deliberately leaves vec0/`0x100` to the poll to avoid a race).
 - **Firmware init handshake** not replayed (unknown if it's required — verify on HW).
 - Packed bitfield controls (per-output hw gain/dim/mute enables) not implemented.
 
