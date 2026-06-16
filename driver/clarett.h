@@ -66,6 +66,17 @@ struct snd_kcontrol;
 #define FCP_SET_DATA             0x800001
 #define FCP_DATA_CMD             0x800002
 
+/*
+ * GET-response DMA layout (confirmed on hardware). The device DMAs the response
+ * into resp_buf as a 16-byte FCP header followed by the requested bytes:
+ *   resp[0..3]  = echoed cmd (CMD_EXEC_FLAG | opcode) — guard on this
+ *   resp[16+i]  = config[offset + i]  for a GET_DATA{offset, len}
+ * A failed/absent DMA leaves the echo word 0, so checking it avoids consuming a
+ * stale buffer (seen on the first GET at load, which DMAs all zeroes).
+ */
+#define FCP_RESP_ECHO_OFF        0
+#define FCP_RESP_DATA_OFF        16
+
 #define CLARETT_MBOX_TIMEOUT_MS  100
 #define CLARETT_MAX_PAYLOAD      64
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */
@@ -111,8 +122,8 @@ struct clarett {
 
 	u32 serial_lo, serial_hi, fw_app, fw_fpga;
 
-	/* MSI / async notifications (vec3). The mailbox stays polled — the ISR
-	 * deliberately does not touch the vec0 cause register (see clarett_main.c). */
+	/* MSI / async notifications (vec0). The mailbox stays polled — the ISR
+	 * deliberately does not touch the 0x100 mailbox cause (see clarett_main.c). */
 	bool irq_ready;
 	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
 	struct work_struct notify_work;
@@ -122,8 +133,10 @@ struct clarett {
 	int n_ctls;
 
 	/*
-	 * Write-through shadow of the config space. We cannot yet decode the
-	 * DMA-delivered GET responses, so mixer "get" returns cached values.
+	 * Shadow of the config space backing mixer "get". Updated write-through on
+	 * every put; the monitor bytes (24/28/112) are additionally refreshed from
+	 * the DMAed GET response on a front-panel notification (clarett_notify_work),
+	 * so those reflect live hardware state. Other bytes remain write-through.
 	 */
 	u8 shadow[CLARETT_CONFIG_SIZE];
 };

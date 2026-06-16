@@ -42,7 +42,7 @@ static void clarett_hw_init(struct clarett *c)
 
 	/* Latch interrupt causes (observed init value). Mailbox completion is still
 	 * polled (clarett_mailbox.c); MSI is used only for async notifications on
-	 * vec3 (clarett_setup_irq). Enabling causes here only latches status — the
+	 * vec0 (clarett_setup_irq). Enabling causes here only latches status — the
 	 * device cannot raise MSI until pci_alloc_irq_vectors() configures it.
 	 */
 	writel(0xf000003f, bar + REG_IRQ0_ENABLE);
@@ -100,16 +100,25 @@ static void clarett_notify_work(struct work_struct *work)
 		dev_warn(&c->pci->dev, "notify 0x%x: monitor re-read failed (%d)\n",
 			 ev, err);
 	} else {
+		const u8 *r = c->resp_buf;
+		u32 echo;
+
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
-		/*
-		 * TODO(get-decode): the GET-response byte layout in resp_buf is not yet
-		 * confirmed (raw config bytes at offset 0, vs an FCP header + data at
-		 * offset 16). Once this hexdump resolves it on hardware, update
-		 * c->shadow[24]/[28]/[112] from resp_buf here so "get" reflects the new
-		 * physical state; until then it still returns the write-through shadow.
-		 */
-		print_hex_dump(KERN_INFO, "clarett monitor GET: ",
-			       DUMP_PREFIX_OFFSET, 16, 1, c->resp_buf, 32, false);
+		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
+		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
+
+		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA)) {
+			const u8 *data = r + FCP_RESP_DATA_OFF;
+
+			/* data[i] == config[MONITOR_CFG_OFFSET + i] */
+			c->shadow[24]  = data[24  - MONITOR_CFG_OFFSET];
+			c->shadow[28]  = data[28  - MONITOR_CFG_OFFSET];
+			c->shadow[112] = data[112 - MONITOR_CFG_OFFSET];
+		} else {
+			/* No response DMAed (e.g. the first GET at load) — keep the shadow. */
+			dev_dbg(&c->pci->dev,
+				"notify 0x%x: no GET response (echo=0x%08x)\n", ev, echo);
+		}
 	}
 
 	for (i = 0; i < c->n_ctls; i++)

@@ -197,6 +197,25 @@ cannot see GET payloads; to capture them, dump that DMA buffer in guest RAM. Opc
 sample-rate band; the routing data comes back via DMA. (This is the `{u16, 0x02, index}` triple first
 seen at init after the monitor `GET_DATA`.)
 
+#### GET-response buffer layout — CONFIRMED `[HW]`
+Decoded by dumping the driver's own coherent response buffer after a `GET_DATA`. The response is the
+**same 16-byte FCP header as a request, then the requested bytes**:
+
+| resp offset | field | notes |
+|---|---|---|
+| `+0` | echoed `cmd` (`CMD_EXEC_FLAG | opcode`) | e.g. `0x80800000` for a `GET_DATA` — guard on this |
+| `+4` | `size | seq` | echoed |
+| `+8` | status/error | observed `0x3` on success (low-nibble status, mirrors `0x400`) |
+| `+12` | pad | |
+| `+16 + i` | **`config[offset + i]`** | the requested config bytes, 1:1 |
+
+So for `GET_DATA{offset, len}`, `resp[16 + i] == config[offset + i]`. Confirmed against a monitor
+`GET_DATA{24, 92}` taken on a Mute notification: `resp[16]=config[24]=0x01` (master mute on),
+`resp[24..27]=0x7f` (Monitor 1/2 gains = full attenuation), `resp[28..29]=0x28` (=−40 dB). A
+failed/absent DMA leaves the echo word `0` (seen on the very first GET at load, which read all
+zeroes), so a reader **must check `resp[+0]` before consuming the buffer**. The driver's notification
+handler uses exactly this to refresh its monitor-control shadow (`clarett_notify_work`).
+
 ### Async notification path — CONFIRMED (physical Mute button)
 The notification **bitmask** lives in **cause register `0x400`** (read-to-clear); observed
 `0x400 = 0x00200000` (`dim-mute`) on Mute. The MSI itself is invisible to `vfio_region_*` (KVM

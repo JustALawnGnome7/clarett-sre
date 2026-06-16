@@ -126,14 +126,15 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 - **No PCM / data plane** — the big next effort (trace audio streaming: DMA ring,
   descriptors, period IRQ cadence, sample format; vec1/vec2 are the likely
   playback/capture period IRQs). Capture plan: `spec/clarett-8prex-data-plane.md`.
-- Mixer **"get" returns a write-through shadow**, not live device state. The
-  **GET-response DMA layout is still undecoded** — the notification handler issues
-  the monitor GET and hexdumps `resp_buf` (the RE hook to resolve it); once the
-  layout is known, update `shadow[24/28/112]` there so "get" reflects HW changes.
-- **Async notifications implemented** (MSI vec3 / cause `0x400`): the ISR detects
+- Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
+  (24/28/112) are refreshed from the DMAed GET response on a notification**, so
+  those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP
+  header + data at +16; `resp[16+i] == config[off+i]`; guard on the echoed cmd at
+  +0). Other bytes stay write-through. See transport spec §8.
+- **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
-  (the ISR deliberately leaves vec0/`0x100` to the poll to avoid a race).
+  (the ISR deliberately leaves the `0x100` cause to the poll to avoid a race).
 - **Firmware init handshake** not replayed (unknown if it's required — verify on HW).
 - Packed bitfield controls (per-output hw gain/dim/mute enables) not implemented.
 

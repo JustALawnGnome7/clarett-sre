@@ -8,9 +8,10 @@
  *   - the 10 analogue output gains
  *   - per analogue input: Air switch and Mic/Line[/Inst] mode
  *
- * "get" returns the write-through shadow (device readback via DMA isn't decoded
- * yet). Packed bitfields (the per-output hardware gain/dim/mute enables) are not
- * implemented here — they need read-modify-write of shared bytes; see TODO.
+ * "get" returns the shadow: write-through on put, plus the monitor bytes are
+ * refreshed from the DMAed GET response on a front-panel notification. Packed
+ * bitfields (the per-output hardware gain/dim/mute enables) are not implemented
+ * here — they need read-modify-write of shared bytes; see TODO.
  */
 #include <sound/control.h>
 #include <sound/tlv.h>
