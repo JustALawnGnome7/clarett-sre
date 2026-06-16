@@ -42,6 +42,8 @@ INFO_BASE   = 0x8000           # read-only firmware-info header (0x8000..0x801f)
 EXEC_FLAG   = 0x80000000
 DONE_BIT    = 0x20000000       # mailbox-done cause bit (seen in cause regs)
 APPSPACE_BASE = 0xc8           # config offset 200: persistent-store write-back region (spec §12)
+IRQ_BLOCK   = (0x100, 0x5ff)   # interrupt cause/summary register block (inclusive)
+NOTIFY_BITS = ((0x00200000, "dim-mute"), (0x00400000, "monitor"))  # control-plane §11 async events
 
 # Opcodes (low bits of cmd). CONFIRMED entries verified against stimulus; "?" still guesses.
 OPCODE_NAMES = {
@@ -173,9 +175,9 @@ class Txn:
         return mix, coeffs
 
     def mux_entries(self):
-        """For SET_MUX/GET_MUX, return (band, [(dst_pin, src_pin), ...]) or None.
+        """For SET_MUX (0x3002), return (band, [(dst_pin, src_pin), ...]) or None.
         Payload = {u32 band<<16, u32 entry[]}; each entry = (src_pin<<12) | dst_pin (12-bit pins)."""
-        if self.opcode not in MUX_OPCODES or self.size < 4 \
+        if self.opcode != 0x003002 or self.size < 4 \
                 or any(b is None for b in self.data[:4]):
             return None
         band = self.data[2] | self.data[3] << 8
@@ -188,6 +190,13 @@ class Txn:
             entries.append((v & 0xfff, (v >> 12) & 0xfff))
         return band, entries
 
+    def get_mux_query(self):
+        """For GET_MUX (0x3001), return (count, elem, band) or None. Request payload is
+        {u16 count, u8 elem(=0x02), u8 band}; the response (routing data) arrives via DMA."""
+        if self.opcode != 0x003001 or self.size < 4 or any(b is None for b in self.data[:4]):
+            return None
+        return (self.data[0] | self.data[1] << 8, self.data[2], self.data[3])
+
     def render_brief(self):
         """One compact line per transaction — handy for tabulating fader sweeps."""
         name = OPCODE_NAMES.get(self.opcode, "")
@@ -197,10 +206,13 @@ class Txn:
                 and all(b is not None for b in self.data[:min(self.size, 2)]):
             mix = self.data[0] | self.data[1] << 8   # {u16 mix_num, u16 coeff[]}
             s += f"  mix={mix} coeffs={fmt_u16s(self.data[2:min(self.size, 2 + 32)])}"
-        elif self.opcode in MUX_OPCODES and self.mux_entries() is not None:
+        elif self.mux_entries() is not None:                 # SET_MUX
             band, entries = self.mux_entries()
             routed = sum(1 for d, sp in entries if sp)
             s += f"  band={band} entries={len(entries)} ({routed} routed)"
+        elif self.get_mux_query() is not None:               # GET_MUX request
+            count, elem, band = self.get_mux_query()
+            s += f"  get band={band} count={count} elem=0x{elem:02x}"
         elif self.size and all(b is not None for b in self.data[:min(8, self.size)]):
             if self.size >= 8:                       # data-class {offset, len, ...}
                 a0 = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
@@ -223,7 +235,8 @@ class Txn:
         lines = [head]
         if self.size:
             lines.append(f"      data bytes : {fmt_bytes(self.data)}")
-            mux = self.mux_entries() if self.opcode in MUX_OPCODES else None
+            mux = self.mux_entries()
+            gmq = self.get_mux_query()
             if self.opcode in MIX_OPCODES and self.size >= 2 \
                     and all(b is not None for b in self.data[:2]):
                 mix = self.data[0] | self.data[1] << 8
@@ -235,6 +248,10 @@ class Txn:
                 routed = [f"0x{d:03x}<-0x{s:03x}" for d, s in entries if s]
                 for i in range(0, len(routed), 8):
                     lines.append("      " + "  ".join(routed[i:i + 8]))
+            elif gmq is not None:
+                count, elem, band = gmq
+                lines.append(f"      get mux    : band={band} count={count} elem=0x{elem:02x}"
+                             f"  (response via DMA)")
             else:
                 lines.append(f"      data words : {fmt_words(self.data)}")
             if self.opcode not in MIX_OPCODES and mux is None and self.size >= 8 \
@@ -273,6 +290,9 @@ def main():
     ap.add_argument("--mix-diff", action="store_true",
                     help="for SET_MIX, print only the coefficient slots that changed since the "
                          "previous write to that mix bus (ideal for fader sweeps)")
+    ap.add_argument("--async", dest="async_", action="store_true",
+                    help="surface async device->host signalling: interrupt-register reads outside any "
+                         "mailbox transaction, and any read carrying a §11 notification mask")
     args = ap.parse_args()
 
     try:
@@ -337,6 +357,16 @@ def main():
         op, region, off, size, val = p
         if region != 0:
             continue
+
+        # async device->host signalling: notification-masked reads (any time), or interrupt-block
+        # reads that occur with no mailbox transaction in flight (i.e. not the steady meter poll)
+        if args.async_ and op == "r" and off < INFO_BASE:
+            # notification bits are only meaningful in the cause registers (0x100-0x400);
+            # 0x500 is the summary/mask reg (constant 0xff0000) and must not be flagged
+            bits = [nm for m, nm in NOTIFY_BITS if val & m] if off in CAUSE_REGS else []
+            if bits or (cur is None and IRQ_BLOCK[0] <= off <= IRQ_BLOCK[1] and val):
+                note = "  <-- NOTIFICATION: " + "+".join(bits) if bits else ""
+                print(f"      [async R +0x{off:x} = 0x{val:x}{note}]")
 
         # request-mailbox writes accumulate into the byte map
         if op == "w" and MBOX_BASE <= off < MBOX_END:

@@ -131,7 +131,9 @@ from control-plane spec §11 — likely written to a notification register the I
    mixer-input slots) via `SET_MUX` (`{u32 band<<16, u32 (src<<12|dst)[]}`, one cmd per band). See §8.
 5. ~~**A mixer fader**~~ **DONE.** `SET_MIX` coeff = `floor(8192·10^(dB/20))`, `0x0000`…`0x2000`(0 dB)
    …`0x3fd9`(+6 dB) (control-plane §6).
-6. **Idle capture** — isolate `GET_METER`/`GET_SYNC` polling and the notification path. **← next.**
+6. ~~**Idle capture**~~ **DONE.** Idle is **silent** (no polling; `GET_METER` is GUI-meter-only).
+   Notifications arrive on **MSI vector 3 / cause reg `0x400`** carrying the §11 mask; host re-syncs
+   with `GET_DATA{0x18,0x5c}` + per-band `GET_MUX`. See §8.
 
 ## 8. CONFIRMED from boot-init trace (`clarett_init_short.txt`, ControlServer NOT running)
 
@@ -143,7 +145,7 @@ The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRME
 | `0x00` | caps/version = `0x032003fd` | read at init |
 | `0x04`,`0x08` | `0x80`, `0x2000` | read at init |
 | `0x10`,`0x14` | **device serial** = `0x5678abcd`, `0x1234` | matches lspci DSN `…12-34-56-78-ab-cd` |
-| `0x100`/`0x200`/`0x300`/`0x400` | **4 interrupt cause registers** (stride `0x100`, one per MSI vector), read-to-clear | `0x100`=`0x20000000` (mailbox-done) then `0x0`; `0x400` cycles `0x3`/`0x1`/`0x2`/`0x0` |
+| `0x100`/`0x200`/`0x300`/`0x400` | **4 interrupt cause registers** (stride `0x100`, one per MSI vector), read-to-clear. `0x100` (vec0) = **mailbox-done** (`0x20000000`). **`0x400` (vec3) = async notifications** — high bits carry the §11 mask (`0x200000` dim-mute confirmed), low nibble a status value | `0x100`=`0x20000000` then `0x0`; `0x400`=`0x200000` on front-panel Mute |
 | `0x104` | IRQ enable mask = `0xf000003f` (written once) | |
 | `0x410`/`0x414` | GET-response DMA buffer bus address: low32 / **high32** | init wrote `0x521ff000`/`0x2`; `0x414`=addr-high confirmed (hardcoding `0x2` → IOMMU fault at `0x2_xxxxxxxx`) |
 | `0x408` | **doorbell**: write `0x1` = submit, `0x2` = ack/clear prior completion | 58×`0x1`, 57×`0x2`, strictly alternating |
@@ -190,8 +192,24 @@ val=0x22}` + `DATA_CMD{activate=1}`, confirming Monitor Out 1/2 gain @ offsets 3
 **GET responses arrive via DMA, not the BAR.** Neither `GET_DATA` nor the continuous `GET_METER`
 polls ever produce response reads in the MMIO trace — the device DMAs results into the host buffer
 whose bus address was programmed at BAR `0x410` (=`0x521ff000`) during init. The BAR trace therefore
-cannot see GET payloads; to capture them, dump that DMA buffer in guest RAM. (Open: opcode `0x003001`
-— a `{u16, 0x02, index}` query triple seen right after the monitor `GET_DATA`.)
+cannot see GET payloads; to capture them, dump that DMA buffer in guest RAM. Opcode `0x003001`
+(`GET_MUX`) is the routing read-back: request `{u16 count, u8 elem=0x02, u8 band}`, one per
+sample-rate band; the routing data comes back via DMA. (This is the `{u16, 0x02, index}` triple first
+seen at init after the monitor `GET_DATA`.)
+
+### Async notification path — CONFIRMED (physical Mute button)
+Pressing a front-panel button delivers an **MSI on vector 3**; the guest ISR reads **cause register
+`0x400`**, which returns the control-plane §11 bitmask (read-to-clear). Observed: `0x400 = 0x00200000`
+(`dim-mute`) on Mute. The MSI itself is invisible to `vfio_region_*` (KVM irqfd), but the ISR's
+register read is not — that's how we mapped it. Notes:
+- `0x400` low nibble doubles as a general mailbox-status value (`0x3` appears on completions); the
+  **notification is the high bits** (`0x200000`/`0x400000`). `0x500` is the IRQ summary/mask reg
+  (constant `0xff0000`) — *not* a notification source.
+- After the notification the host **re-syncs**: `GET_DATA{0x18,0x5c}` (monitor region) then `GET_MUX`
+  per band. A driver should mirror this: vector-3 IRQ → read `0x400` → if notify bits set, re-read
+  the affected config.
+- **Idle is silent** — no periodic polling; the earlier `GET_METER` stream was purely the GUI meter
+  view. `fcp_decode.py --async` surfaces these cause-register reads (filtering the meter noise).
 
 ### Appspace persist write-back — CONFIRMED (the "1 KB bulk SET_DATA")
 After a control change, Focusrite Control writes the **entire 8192-byte persistent config store**
