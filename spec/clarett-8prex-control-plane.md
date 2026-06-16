@@ -135,7 +135,10 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 ## 6. Mixer (30 × 16)
 
 - 30 input slots → 16 mix buses; each mix bus output is a source pin (`0x300`+). `[XML]`
-- Each mixer input slot's *source* is chosen via the routing matrix (§8). `[INF]`
+- Each mixer input slot's *source* is chosen via the routing matrix (§8) — **confirmed**: assigning a
+  source to a mixer-input slot emits `SET_MUX` with an entry `dst=0x300+slot ← src`, e.g. adding
+  Analogue 2 to slot 2 → entry `Mixer input 0x301 ← Analogue in 0x401`. The slot's *level* into each
+  bus is the separate `SET_MIX` coefficient. `[TRACE-CONFIRMED]`
 - 30 × 16 = **480 gain coefficients**. The `<mixer>` element carries **no** offset/opcode →
   mix-gain coefficients are set by the dedicated **`SET_MIX` (`0x002002`)** FCP command, not the
   linear config space. `[TRACE-CONFIRMED]`
@@ -183,6 +186,18 @@ A table of *destination ← source* assignments. Size depends on the sample-rate
   dominated by **ADAT S/MUX** (8 → 4 → 2 ch per port) plus reduced high-rate PCM channels. `[XML/INF]`
 - Enumerated destinations total ≈ **86** (28 hw outputs + 28 PCM capture + 30 mixer inputs); header
   says 91 → ~5 additional/reserved entries. Exact entry order & the ~5 delta: **`[TRACE]`**.
+
+**Wire format — `SET_MUX` (`0x003002`) `[TRACE-CONFIRMED]`:** the matrix is written as **three commands,
+one per sample-rate band**, payload `{u32 header, u32 entry[]}`:
+- `header = band << 16` (band 0 = low, 1 = medium, 2 = high). Each band sends its own (shrinking)
+  entry list — the live counts confirm the per-band drop, consistent with the 91/75/67 structure.
+- each `entry` packs two **12-bit pins**: `entry = (src_pin << 12) | dst_pin`, top 8 bits 0.
+  `src = 0x000` means the destination is **unrouted / silent**. Pins are the §3 direction-scoped values
+  (e.g. `0x300+n` mixer-input slot, `0x408/0x409` monitor out, `0x600+n` PCM capture, `0x400+n` analogue).
+- Worked entries: `0x400600` = Record 1 ← Mic 1; `0x300408` = Monitor 1 ← Mix 1; `0x60a186` =
+  S/PDIF Out 1 ← Playback; `0x401301` = Mixer input slot 2 ← Analogue in 2 (the captured stimulus).
+- A control change that touches routing rewrites the **whole** matrix (all three bands), and is also
+  preceded by a full `SET_MIX` rewrite of all 16 buses.
 
 ### PCM-capture default source map (`record-outputs`) `[XML]`
 Record pin → default hardware-input index, with per-band remap (`input-m`/`input-h`):
@@ -246,7 +261,9 @@ the 4 MSI vectors + which BAR register): **`[TRACE]`**.
 - **8-bit gain → dB** mapping (§5).
 - **MSI vector semantics**: which of the 4 vectors signals mailbox completion vs notifications vs
   audio period IRQs.
-- **Routing table**: exact entry ordering and the ~5-entry delta vs the enumerated 86 (§8).
+- ~~**Routing table** wire format~~ — **resolved: `SET_MUX` (`0x003002`), three per-band commands,
+  entry = `(src_pin<<12)|dst_pin`** (§8). Remaining detail: the exact entry ordering / the ~5-entry
+  delta vs the enumerated 86 is now directly readable from a full-matrix capture if needed.
 
 ## Provenance
 

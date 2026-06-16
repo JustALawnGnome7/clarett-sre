@@ -43,7 +43,7 @@ These are the `scarlett2` USB values. Expect the 8PreX to match or be close; **v
 | `0x00800002` | DATA_CMD | **commit/activate** a config write: payload `{u32 activate}` |
 | `0x00001001` | GET_METER | read level meters (GUI polls this continuously) |
 | `0x00002001` / `0x00002002` | GET_MIX / **SET_MIX** | mixer-gain coefficients (§6 of control-plane spec). **SET_MIX confirmed** — see §8 |
-| `0x00003001` / `0x00003002` | GET_MUX / SET_MUX | routing matrix (§8 of control-plane spec) |
+| `0x00003001` / `0x00003002` | GET_MUX / **SET_MUX** | routing matrix (§8 of control-plane spec). **SET_MUX confirmed** — see §8 |
 | `0x00006004` | GET_SYNC | clock-sync / lock status |
 
 **This resolves the open questions in the control-plane spec:**
@@ -126,12 +126,12 @@ from control-plane spec §11 — likely written to a notification register the I
    and the full header layout (§3).
 3. **Output gain** — multi-byte payload; confirm the 8-bit gain encoding and dB mapping
    (control-plane spec §5).
-4. ~~**A routing change** — reveals `SET_MUX` payload format (the 91-entry table).~~ **DONE
-   (surprise):** routing input→output is done via **`SET_MIX`** (`{u16 mix_num, u16 coeff[]}`), not
-   `SET_MUX`. See §8. `SET_MUX`/`0x3002` remains unseen — retry with a *record-source* change.
-5. **A mixer fader** — sweep one coefficient to pin down the `SET_MIX` dB→`u16` curve (only on/off,
-   `0x2000`/`0x0000`, seen so far). **← next.**
-6. **Idle capture** — isolate `GET_METER`/`GET_SYNC` polling and the notification path.
+4. ~~**A routing change** — reveals `SET_MUX` payload format (the 91-entry table).~~ **DONE.** Two ops:
+   mixer *coefficients* via `SET_MIX` (`{u16 mix_num, u16 coeff[]}`); *source assignment* (incl.
+   mixer-input slots) via `SET_MUX` (`{u32 band<<16, u32 (src<<12|dst)[]}`, one cmd per band). See §8.
+5. ~~**A mixer fader**~~ **DONE.** `SET_MIX` coeff = `floor(8192·10^(dB/20))`, `0x0000`…`0x2000`(0 dB)
+   …`0x3fd9`(+6 dB) (control-plane §6).
+6. **Idle capture** — isolate `GET_METER`/`GET_SYNC` polling and the notification path. **← next.**
 
 ## 8. CONFIRMED from boot-init trace (`clarett_init_short.txt`, ControlServer NOT running)
 
@@ -218,12 +218,26 @@ with the `{offset,len,data}` template (the tell-tale `off=0x20000000 len=0x20000
 `00 20` unity bytes smeared across field boundaries); `fcp_decode.py` now parses the mix payload
 natively (`mix=N coeffs=…`).
 
-> **`SET_MUX` (`0x3002`) is still unseen.** It may only fire for a different action (e.g. choosing a
-> *record* source), or the 8PreX may route entirely through the mixer. Open until a capture shows it.
->
-> **Coefficient encoding `[INF/S2]`:** `0x2000` (8192) as unity matches scarlett2's mixer-gain table;
-> the full dB curve (non-unity coefficients) needs a fader-sweep capture to pin down — that's the next
-> mixer probe. The current routing capture only exercised on/off (`0x2000`/`0x0000`).
+> **Two distinct operations:** changing a mixer *coefficient* (gain of an already-routed input) =
+> `SET_MIX`. Assigning a *source to a destination* (incl. a mixer-input slot) = `SET_MUX` (below).
+> The first routing capture only moved coefficients, so it showed `SET_MIX` only.
+
+### `SET_MUX` (`0x003002`) — CONFIRMED (assigning a source to a mixer-input slot)
+Adding Analogue 2 as a second source to a mixer input produced a full 16-bus `SET_MIX` rewrite **then
+three `SET_MUX` commands** — one per **sample-rate band**. Payload = `{u32 header, u32 entry[]}`:
+
+- **header** = `band << 16`: band **0** (low, 44.1/48), **1** (med, 88.2/96), **2** (high, 176.4/192).
+  Entry counts shrink with band (high rates drop ADAT S/MUX channels) — matches control-plane §8's
+  91/75/67 structure.
+- **each entry** = u32 packing two **12-bit pins**: `entry = (src_pin << 12) | dst_pin`. `src=0x000`
+  = unrouted/silent. Decoded against §3 pins, e.g. `0x400600` = Record 1 (`0x600`) ← Mic 1 (`0x400`);
+  `0x300408` = Monitor 1 (`0x408`) ← Mix 1 (`0x300`); the stimulus entry `0x401301` = **Mixer input
+  slot 2 (`0x301`) ← Analogue in 2 (`0x401`)**. `[TRACE-CONFIRMED]`
+
+So the 8PreX **does** have a routing matrix; outputs/captures/mixer-input-slots all get their source
+via `SET_MUX`, while per-input mix *levels* come from `SET_MIX`. `fcp_decode.py` decodes mux entries
+(`dst<-src`) natively. NOTE: `SET_MUX`/appspace payloads run to ~1 KB; the decoder's mailbox capture
+window was widened to `MBOX_BASE+0x410` to see them in full (earlier it truncated at 256 B → `??`).
 
 ## 9. Caveats
 

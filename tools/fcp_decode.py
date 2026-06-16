@@ -34,7 +34,7 @@ OFF_SIZESEQ = 0x04             #   +4  : size (lo16) | seq (hi16)
 OFF_ERROR   = 0x08             #   +8  : error/status
 OFF_PAD     = 0x0c             #   +12 : pad
 OFF_DATA    = 0x10             #   +16 : data[]
-MBOX_END    = MBOX_BASE + 0x100
+MBOX_END    = MBOX_BASE + 0x410   # data region holds up to ~1 KB payloads (SET_MUX, appspace)
 
 DOORBELL    = 0x408            # write 1 = submit, 2 = ack/clear prior completion
 CAUSE_REGS  = {0x100: "vec0", 0x200: "vec1", 0x300: "vec2", 0x400: "vec3"}
@@ -49,7 +49,8 @@ OPCODE_NAMES = {
     0x002001: "GET_MIX",        # scarlett2 GET_MIX {u16 mix_num} -> coeffs
     0x002002: "SET_MIX",        # CONFIRMED: {u16 mix_num, u16 coeff[]}; routing via mixer matrix
     0x800000: "GET_DATA",       # CONFIRMED: {u32 offset, u32 len}; response via DMA, not MMIO
-    0x003001: "QUERY_3001?",    # seen after monitor GET_DATA; {u16, u8=2, u8 index}
+    0x003001: "GET_MUX?",       # scarlett2 GET_MUX value; seen after monitor GET_DATA at init
+    0x003002: "SET_MUX",        # CONFIRMED: {u32 band<<16, u32 (src<<12|dst)[]}; routing matrix
     0x800001: "SET_DATA",       # CONFIRMED: {u32 offset, u32 len, data[len]}; == scarlett2
     0x800002: "DATA_CMD",       # CONFIRMED: {u32 activate} = XML control "command"; == scarlett2
     0x800005: "READ_SEG?",      # 0x008000xx class, low byte 5 (XML flash-command=5)
@@ -119,6 +120,8 @@ def fmt_u16s(bs):
 # Mixer opcodes carry {u16 mix_num, u16 coeff[]} rather than the {offset,len,data}
 # of the data class — render their payload accordingly.
 MIX_OPCODES = (0x002001, 0x002002)
+# Routing-matrix opcodes: payload structure not yet confirmed — show raw u32 words.
+MUX_OPCODES = (0x003001, 0x003002)
 
 
 class Txn:
@@ -169,6 +172,22 @@ class Txn:
             coeffs.append(None if a is None or b is None else a | b << 8)
         return mix, coeffs
 
+    def mux_entries(self):
+        """For SET_MUX/GET_MUX, return (band, [(dst_pin, src_pin), ...]) or None.
+        Payload = {u32 band<<16, u32 entry[]}; each entry = (src_pin<<12) | dst_pin (12-bit pins)."""
+        if self.opcode not in MUX_OPCODES or self.size < 4 \
+                or any(b is None for b in self.data[:4]):
+            return None
+        band = self.data[2] | self.data[3] << 8
+        entries = []
+        for i in range(4, self.size - 3, 4):
+            b = self.data[i:i + 4]
+            if any(x is None for x in b):
+                break
+            v = b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24
+            entries.append((v & 0xfff, (v >> 12) & 0xfff))
+        return band, entries
+
     def render_brief(self):
         """One compact line per transaction — handy for tabulating fader sweeps."""
         name = OPCODE_NAMES.get(self.opcode, "")
@@ -178,6 +197,10 @@ class Txn:
                 and all(b is not None for b in self.data[:min(self.size, 2)]):
             mix = self.data[0] | self.data[1] << 8   # {u16 mix_num, u16 coeff[]}
             s += f"  mix={mix} coeffs={fmt_u16s(self.data[2:min(self.size, 2 + 32)])}"
+        elif self.opcode in MUX_OPCODES and self.mux_entries() is not None:
+            band, entries = self.mux_entries()
+            routed = sum(1 for d, sp in entries if sp)
+            s += f"  band={band} entries={len(entries)} ({routed} routed)"
         elif self.size and all(b is not None for b in self.data[:min(8, self.size)]):
             if self.size >= 8:                       # data-class {offset, len, ...}
                 a0 = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
@@ -200,14 +223,21 @@ class Txn:
         lines = [head]
         if self.size:
             lines.append(f"      data bytes : {fmt_bytes(self.data)}")
+            mux = self.mux_entries() if self.opcode in MUX_OPCODES else None
             if self.opcode in MIX_OPCODES and self.size >= 2 \
                     and all(b is not None for b in self.data[:2]):
                 mix = self.data[0] | self.data[1] << 8
                 lines.append(f"      mix bus    : {mix}")
                 lines.append(f"      coeffs(u16): {fmt_u16s(self.data[2:])}")
+            elif mux is not None:
+                band, entries = mux
+                lines.append(f"      mux band   : {band}  ({len(entries)} entries, dst<-src pins)")
+                routed = [f"0x{d:03x}<-0x{s:03x}" for d, s in entries if s]
+                for i in range(0, len(routed), 8):
+                    lines.append("      " + "  ".join(routed[i:i + 8]))
             else:
                 lines.append(f"      data words : {fmt_words(self.data)}")
-            if self.opcode not in MIX_OPCODES and self.size >= 8 \
+            if self.opcode not in MIX_OPCODES and mux is None and self.size >= 8 \
                     and all(b is not None for b in self.data[:8]):
                 a0 = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
                 a1 = self.data[4] | self.data[5] << 8 | self.data[6] << 16 | self.data[7] << 24
