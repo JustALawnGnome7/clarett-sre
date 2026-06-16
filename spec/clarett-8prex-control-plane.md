@@ -119,9 +119,11 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 > **Provenance of the curve:** measured by turning the **physical monitor knob** (dB read off
 > Focusrite Control's display), which is the `<hardware-controls>` master gain — **offset 112,
 > command 2** (§9), an **8-bit** mono master. The clean 1 dB/code encoding fits offset 112 perfectly
-> (8-bit field, 0..127 = 0..−127 dB). The per-output gains @ 32/33/… (command 1; a separate software
-> "master volume" capture drove those with `activate=1`) are *assumed* to share the encoding but not
-> independently measured.
+> (8-bit field, 0..127 = 0..−127 dB). The per-output gains @ 32/33/… (command 1) are now
+> **independently confirmed** to share this encoding: a Line 3-4 software-fader capture set −124 dB →
+> `0x7c` (124) at offsets 36/37 with `activate=1` (matching −127 → `0x7f` from the knob, i.e. code =
+> |dB| at 1 dB/step). So both the command-2 master gain and the command-1 per-output gains use the
+> same 7-bit attenuation code. `[TRACE-CONFIRMED]`
 >
 > **Rejected experiment (do not revisit):** `0x8022_captures.txt` sampled bytes at mailbox
 > `0x8022/0x8023` as a *16-bit* value while turning the knob. That offset is the **high half of the
@@ -135,8 +137,31 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 - 30 input slots → 16 mix buses; each mix bus output is a source pin (`0x300`+). `[XML]`
 - Each mixer input slot's *source* is chosen via the routing matrix (§8). `[INF]`
 - 30 × 16 = **480 gain coefficients**. The `<mixer>` element carries **no** offset/opcode →
-  mix-gain coefficients are set by a **dedicated mixer command**, not the linear config space.
-  Encoding (likely 8-bit dB-coded, matching §5) and command: **`[TRACE]`** / cross-check `scarlett2`. `[INF]`
+  mix-gain coefficients are set by the dedicated **`SET_MIX` (`0x002002`)** FCP command, not the
+  linear config space. `[TRACE-CONFIRMED]`
+- **Command CONFIRMED** by an Analogue 1-2 → Monitor 1-2 routing capture (transport spec §8): one
+  `SET_MIX` per mix bus, payload `{u16 mix_num, u16 coeff[30]}` — i.e. a whole row (all 30 input
+  slots) per command, mix_num = 0…15. Coefficient is a **16-bit** value (not 8-bit like the output
+  gains): `0x2000` = unity/0 dB, `0x0000` = off (matches scarlett2's mixer-gain table). `[TRACE/S2]`
+- **Routing input→output happens *through this matrix*, not a separate `SET_MUX`.** Patching an input
+  to an output sets that input slot's coefficient to `0x2000` in the bus feeding that output.
+- **Coefficient = linear amplitude (not a dB code like §5 output gains).** `0x2000` (8192) = unity/0 dB
+  and the device **truncates**: `coeff = floor(8192 · 10^(dB/20))`. `[TRACE-CONFIRMED]` Verified at five
+  points across a 46 dB span (Analogue 1 → Monitor 1-2 fader sweep):
+
+  | dB | coeff | | dB | coeff |
+  |---|---|---|---|---|
+  | +6 (max) | `0x3fd9` (16345) | | −20 | `0x0333` (819) |
+  | 0 | `0x2000` (8192) | | −40 | `0x0051` (81) |
+  | −6 | `0x1009` (4105) | | | |
+
+  Truncation (not rounding) is proven by −6 → `0x1009` (4105, not 4106) and −40 → `0x0051` (81, not 82).
+  Fader fully down → **`0x0000`** (no nonzero clamp / special mute value). So the full range is
+  **`0x0000` (−∞) … `0x2000` (0 dB) … `0x3fd9` (+6 dB max)**. This is the **opposite convention** to the
+  §5 output gains (a nearest-|dB| attenuation code); the mixer is linear-amplitude, matching scarlett2.
+  `[TRACE-CONFIRMED, full curve]`
+- A stereo route (e.g. into Monitor Out 1-2) writes the *two* corresponding mix buses (0 and 1), each
+  with the input's coefficient in its slot; unrouted cells default to unity (`0x2000`), not zero.
 
 ## 7. Clocking `[XML]`
 
@@ -203,7 +228,9 @@ the 4 MSI vectors + which BAR register): **`[TRACE]`**.
 ## 12. App storage & firmware `[XML]`
 
 - `appspace`: app region @ offset **200**, total **8392** bytes, persistent store **8192** bytes,
-  flashed via opcode **5**.
+  flashed via opcode **5**. **Layout confirmed by trace:** any control change triggers a write-back of
+  the full 8192-byte store via `SET_DATA` in 1016-byte (1 KB-payload) chunks from offset 200 to 8392
+  (transport spec §8). The observed write-back is RAM-only (no opcode-5 flash follows). `[TRACE]`
 - Firmware segments:
   - `App_Upgrade` ("App") — `ClarettThunderbolt.tca`, version 1016, version field 32-bit @ offset 8.
   - `FPGA_Upgrade` ("FPGA") — `fp001005_tb_top.bit`, version 1021, version field 32-bit @ offset 12.
@@ -213,7 +240,8 @@ the 4 MSI vectors + which BAR register): **`[TRACE]`**.
 
 - **Transport framing**: where in the 64 KB BAR the FCP request/response/doorbell live; how
   (opcode, config-offset, length, data) are laid out in a mailbox message.
-- **Mixer-gain command** and its coefficient encoding (§6).
+- ~~**Mixer-gain command** and its coefficient encoding~~ — **fully resolved: `SET_MIX` (`0x002002`),
+  `{u16 mix_num, u16 coeff[30]}`; coeff = `floor(8192·10^(dB/20))`, `0x0000`…`0x2000`(0 dB)…`0x3fd9`(+6)** (§6).
 - **Clock-source / sample-rate command(s)** (§7).
 - **8-bit gain → dB** mapping (§5).
 - **MSI vector semantics**: which of the 4 vectors signals mailbox completion vs notifications vs

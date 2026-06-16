@@ -42,7 +42,7 @@ These are the `scarlett2` USB values. Expect the 8PreX to match or be close; **v
 | `0x00800001` | SET_DATA | write config space: payload `{u32 offset, u32 size, u8 data[size]}` |
 | `0x00800002` | DATA_CMD | **commit/activate** a config write: payload `{u32 activate}` |
 | `0x00001001` | GET_METER | read level meters (GUI polls this continuously) |
-| `0x00002001` / `0x00002002` | GET_MIX / SET_MIX | mixer-gain coefficients (§6 of control-plane spec) |
+| `0x00002001` / `0x00002002` | GET_MIX / **SET_MIX** | mixer-gain coefficients (§6 of control-plane spec). **SET_MIX confirmed** — see §8 |
 | `0x00003001` / `0x00003002` | GET_MUX / SET_MUX | routing matrix (§8 of control-plane spec) |
 | `0x00006004` | GET_SYNC | clock-sync / lock status |
 
@@ -126,8 +126,11 @@ from control-plane spec §11 — likely written to a notification register the I
    and the full header layout (§3).
 3. **Output gain** — multi-byte payload; confirm the 8-bit gain encoding and dB mapping
    (control-plane spec §5).
-4. **A routing change** — reveals `SET_MUX` payload format (the 91-entry table).
-5. **A mixer fader** — reveals `SET_MIX` payload + coefficient encoding.
+4. ~~**A routing change** — reveals `SET_MUX` payload format (the 91-entry table).~~ **DONE
+   (surprise):** routing input→output is done via **`SET_MIX`** (`{u16 mix_num, u16 coeff[]}`), not
+   `SET_MUX`. See §8. `SET_MUX`/`0x3002` remains unseen — retry with a *record-source* change.
+5. **A mixer fader** — sweep one coefficient to pin down the `SET_MIX` dB→`u16` curve (only on/off,
+   `0x2000`/`0x0000`, seen so far). **← next.**
 6. **Idle capture** — isolate `GET_METER`/`GET_SYNC` polling and the notification path.
 
 ## 8. CONFIRMED from boot-init trace (`clarett_init_short.txt`, ControlServer NOT running)
@@ -188,8 +191,39 @@ val=0x22}` + `DATA_CMD{activate=1}`, confirming Monitor Out 1/2 gain @ offsets 3
 polls ever produce response reads in the MMIO trace — the device DMAs results into the host buffer
 whose bus address was programmed at BAR `0x410` (=`0x521ff000`) during init. The BAR trace therefore
 cannot see GET payloads; to capture them, dump that DMA buffer in guest RAM. (Open: opcode `0x003001`
-— a `{u16, 0x02, index}` query triple seen right after the monitor `GET_DATA`; and a 1 KB `SET_DATA`
-bulk write — both still to be identified.)
+— a `{u16, 0x02, index}` query triple seen right after the monitor `GET_DATA`.)
+
+### Appspace persist write-back — CONFIRMED (the "1 KB bulk SET_DATA")
+After a control change, Focusrite Control writes the **entire 8192-byte persistent config store**
+back to the device as a run of `SET_DATA` (`0x800001`) commands: chunks of **`len=0x3f8` (1016 bytes)**
+— so each FCP payload is `8 ({offset,len}) + 1016 = 1024` bytes (1 KB) — at offsets striding by 1016
+from **`0xc8` (200)** through `0x2088`, a final 64-byte chunk closing the region at offset 8392.
+`200 + 8192 = 8392` = exactly control-plane §12's `appspace` (app region @ 200, persistent store 8192).
+No opcode-5 flash follows, so this is a **RAM write-back, not a flash-to-nonvolatile**. This resolves
+the previously-unidentified "1 KB bulk `SET_DATA`" and is **trace-side noise to filter** when hunting
+a single control (it fires on every change): drop `SET_DATA` with `len=0x3f8` and `off>=0xc8`.
+
+### Routing/mixer — CONFIRMED by stimulus (Focusrite Control: Analogue 1-2 → Monitor 1-2)
+Routing an input pair to the monitor outputs produced a run of **`SET_MIX` (`0x002002`)** commands,
+seq 296–304, mix-bus index incrementing 0,1,2,…,8 — and **no `SET_MUX`/`0x3002` traffic at all.**
+
+| opcode | name | payload | proof |
+|---|---|---|---|
+| `0x002002` | SET_MIX | `{u16 mix_num, u16 coeff[]}` | mix_num runs 0,1,2,…; coefficient `0x2000` = unity (== scarlett2 mixer 0 dB), `0x0000` = off |
+
+So on the 8PreX, **feeding a hardware input to an output goes through the 30×16 mixer matrix**
+(control-plane §6), *not* a separate routing-matrix write. One row = one `SET_MIX{mix_num, coeffs}`;
+each `u16` coefficient is an input slot's gain into that bus. The decoder originally mis-split this
+with the `{offset,len,data}` template (the tell-tale `off=0x20000000 len=0x20000000` garbage = the
+`00 20` unity bytes smeared across field boundaries); `fcp_decode.py` now parses the mix payload
+natively (`mix=N coeffs=…`).
+
+> **`SET_MUX` (`0x3002`) is still unseen.** It may only fire for a different action (e.g. choosing a
+> *record* source), or the 8PreX may route entirely through the mixer. Open until a capture shows it.
+>
+> **Coefficient encoding `[INF/S2]`:** `0x2000` (8192) as unity matches scarlett2's mixer-gain table;
+> the full dB curve (non-unity coefficients) needs a fader-sweep capture to pin down — that's the next
+> mixer probe. The current routing capture only exercised on/off (`0x2000`/`0x0000`).
 
 ## 9. Caveats
 

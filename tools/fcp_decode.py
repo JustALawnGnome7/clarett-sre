@@ -18,6 +18,10 @@ Usage:
   ./tools/fcp_decode.py clarett_init_short.txt
   sudo tail -f /var/log/libvirt/qemu/Windows10-custom.log | ./tools/fcp_decode.py -
   ./tools/fcp_decode.py capture.txt --raw     # also echo non-mailbox accesses
+
+The 8192-byte appspace persist write-back (a run of SET_DATA into config offset >=200) fires on
+every control change and is collapsed to a single summary line by default; pass --show-appspace to
+see the individual chunks.
 """
 import argparse
 import re
@@ -37,10 +41,13 @@ CAUSE_REGS  = {0x100: "vec0", 0x200: "vec1", 0x300: "vec2", 0x400: "vec3"}
 INFO_BASE   = 0x8000           # read-only firmware-info header (0x8000..0x801f)
 EXEC_FLAG   = 0x80000000
 DONE_BIT    = 0x20000000       # mailbox-done cause bit (seen in cause regs)
+APPSPACE_BASE = 0xc8           # config offset 200: persistent-store write-back region (spec §12)
 
 # Opcodes (low bits of cmd). CONFIRMED entries verified against stimulus; "?" still guesses.
 OPCODE_NAMES = {
     0x001001: "GET_METER",      # CONFIRMED: GUI meter poll {offset,len}; == scarlett2 GET_METER
+    0x002001: "GET_MIX",        # scarlett2 GET_MIX {u16 mix_num} -> coeffs
+    0x002002: "SET_MIX",        # CONFIRMED: {u16 mix_num, u16 coeff[]}; routing via mixer matrix
     0x800000: "GET_DATA",       # CONFIRMED: {u32 offset, u32 len}; response via DMA, not MMIO
     0x003001: "QUERY_3001?",    # seen after monitor GET_DATA; {u16, u8=2, u8 index}
     0x800001: "SET_DATA",       # CONFIRMED: {u32 offset, u32 len, data[len]}; == scarlett2
@@ -97,6 +104,23 @@ def fmt_words(bs):
     return " ".join(words)
 
 
+def fmt_u16s(bs):
+    """Group bytes into little-endian u16 values (mixer coefficients)."""
+    vals = []
+    for i in range(0, len(bs), 2):
+        chunk = bs[i:i + 2]
+        if any(b is None for b in chunk) or len(chunk) < 2:
+            vals.append("????")
+        else:
+            vals.append(f"{chunk[0] | chunk[1] << 8:04x}")
+    return " ".join(vals)
+
+
+# Mixer opcodes carry {u16 mix_num, u16 coeff[]} rather than the {offset,len,data}
+# of the data class — render their payload accordingly.
+MIX_OPCODES = (0x002001, 0x002002)
+
+
 class Txn:
     __slots__ = ("n", "cmd", "opcode", "execd", "seq", "size", "error",
                  "data", "resp", "completions")
@@ -116,12 +140,45 @@ class Txn:
         self.resp = {}          # offset -> value (guest reads after submit)
         self.completions = []   # (vecname, value)
 
+    def data_offset_len(self):
+        """For data-class commands, the {u32 offset, u32 len} prefix (or None)."""
+        if self.size < 8 or any(b is None for b in self.data[:8]):
+            return None
+        off = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
+        ln = self.data[4] | self.data[5] << 8 | self.data[6] << 16 | self.data[7] << 24
+        return off, ln
+
+    def is_appspace(self):
+        """One chunk of the full-config persist write-back (transport spec §8): a SET_DATA
+        into the persistent-store region (offset >= 200). Fires on every control change."""
+        if self.opcode != 0x800001:
+            return False
+        ol = self.data_offset_len()
+        return ol is not None and ol[0] >= APPSPACE_BASE
+
+    def mix_coeffs(self):
+        """For SET_MIX/GET_MIX, return (mix_num, [u16 coeff, ...]) or None."""
+        if self.opcode not in MIX_OPCODES or self.size < 2 \
+                or any(b is None for b in self.data[:2]):
+            return None
+        mix = self.data[0] | self.data[1] << 8
+        body = self.data[2:]
+        coeffs = []
+        for i in range(0, len(body) - 1, 2):
+            a, b = body[i], body[i + 1]
+            coeffs.append(None if a is None or b is None else a | b << 8)
+        return mix, coeffs
+
     def render_brief(self):
         """One compact line per transaction — handy for tabulating fader sweeps."""
         name = OPCODE_NAMES.get(self.opcode, "")
         op = "????" if self.opcode is None else f"0x{self.opcode:06x}"
         s = f"#{self.n:<4} {op} {name:<12} seq={self.seq}"
-        if self.size and all(b is not None for b in self.data[:min(8, self.size)]):
+        if self.opcode in MIX_OPCODES and self.size >= 2 \
+                and all(b is not None for b in self.data[:min(self.size, 2)]):
+            mix = self.data[0] | self.data[1] << 8   # {u16 mix_num, u16 coeff[]}
+            s += f"  mix={mix} coeffs={fmt_u16s(self.data[2:min(self.size, 2 + 32)])}"
+        elif self.size and all(b is not None for b in self.data[:min(8, self.size)]):
             if self.size >= 8:                       # data-class {offset, len, ...}
                 a0 = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
                 a1 = self.data[4] | self.data[5] << 8 | self.data[6] << 16 | self.data[7] << 24
@@ -143,8 +200,15 @@ class Txn:
         lines = [head]
         if self.size:
             lines.append(f"      data bytes : {fmt_bytes(self.data)}")
-            lines.append(f"      data words : {fmt_words(self.data)}")
-            if self.size >= 8 and all(b is not None for b in self.data[:8]):
+            if self.opcode in MIX_OPCODES and self.size >= 2 \
+                    and all(b is not None for b in self.data[:2]):
+                mix = self.data[0] | self.data[1] << 8
+                lines.append(f"      mix bus    : {mix}")
+                lines.append(f"      coeffs(u16): {fmt_u16s(self.data[2:])}")
+            else:
+                lines.append(f"      data words : {fmt_words(self.data)}")
+            if self.opcode not in MIX_OPCODES and self.size >= 8 \
+                    and all(b is not None for b in self.data[:8]):
                 a0 = self.data[0] | self.data[1] << 8 | self.data[2] << 16 | self.data[3] << 24
                 a1 = self.data[4] | self.data[5] << 8 | self.data[6] << 16 | self.data[7] << 24
                 lines.append(f"      if SET    : arg0/offset=0x{a0:x}  arg1/len=0x{a1:x}")
@@ -174,6 +238,11 @@ def main():
     ap.add_argument("file", help="trace file, or - for stdin")
     ap.add_argument("--raw", action="store_true", help="also echo non-mailbox register accesses")
     ap.add_argument("--brief", action="store_true", help="one compact line per transaction")
+    ap.add_argument("--show-appspace", action="store_true",
+                    help="expand the appspace persist write-back (collapsed to one summary by default)")
+    ap.add_argument("--mix-diff", action="store_true",
+                    help="for SET_MIX, print only the coefficient slots that changed since the "
+                         "previous write to that mix bus (ideal for fader sweeps)")
     args = ap.parse_args()
 
     try:
@@ -185,13 +254,51 @@ def main():
     cur = None         # open Txn awaiting completion/close
     n = 0
     hist = {}
+    appspace = []      # consecutive appspace write-back chunks awaiting a collapsed summary
+    prev_mix = {}      # mix_num -> last-seen coeff list, for --mix-diff
+
+    def mix_diff_line(t):
+        """One line showing which coefficient slots changed vs the previous write to this bus."""
+        mc = t.mix_coeffs()
+        if mc is None:
+            return None
+        mix, coeffs = mc
+        old = prev_mix.get(mix)
+        prev_mix[mix] = coeffs
+        if old is None:                       # first sight of this bus: list the non-zero slots
+            nz = ", ".join(f"slot {i}=0x{c:04x}" for i, c in enumerate(coeffs) if c)
+            return f"#{t.n:<4} mix={mix} initial: {nz or 'all zero'}"
+        diffs = [f"slot {i}: 0x{old[i]:04x}->0x{coeffs[i]:04x}"
+                 for i in range(min(len(old), len(coeffs))) if old[i] != coeffs[i]]
+        return f"#{t.n:<4} mix={mix} change: {'; '.join(diffs)}" if diffs else None
+
+    def emit_appspace_summary():
+        if not appspace:
+            return
+        spans = [t.data_offset_len() for t in appspace]
+        total = sum(ln for _, ln in spans)
+        lo, hi = min(o for o, _ in spans), max(o for o, _ in spans)
+        print(f"#...  [appspace persist write-back: {len(appspace)}x SET_DATA, {total} bytes "
+              f"@ off 0x{lo:x}..0x{hi:x}, seq {appspace[0].seq}-{appspace[-1].seq}]"
+              f"  (--show-appspace to expand)")
+        appspace.clear()
 
     def flush():
         nonlocal cur
-        if cur is not None:
+        if cur is None:
+            return
+        hist[cur.opcode] = hist.get(cur.opcode, 0) + 1
+        if args.mix_diff and cur.opcode in MIX_OPCODES:
+            line = mix_diff_line(cur)   # sweep mode: just the changed coefficient slot(s)
+            if line is not None:
+                emit_appspace_summary()
+                print(line)
+        elif not args.show_appspace and cur.is_appspace():
+            appspace.append(cur)        # defer: collapse the run into one summary line
+        else:
+            emit_appspace_summary()     # a non-appspace txn ends any pending run
             print(cur.render_brief() if args.brief else cur.render())
-            hist[cur.opcode] = hist.get(cur.opcode, 0) + 1
-            cur = None
+        cur = None
 
     for line in iter(fh.readline, ''):   # readline avoids the read-ahead buffering of `for line in fh`
         p = parse_line(line)
@@ -231,6 +338,7 @@ def main():
             print(f"      [{tag} +0x{off:x} = 0x{val:x}]")
 
     flush()
+    emit_appspace_summary()      # close any write-back run at EOF
 
     print("\n--- opcode histogram ---")
     for opc, c in sorted(hist.items(), key=lambda kv: -kv[1]):
