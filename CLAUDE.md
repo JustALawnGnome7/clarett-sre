@@ -8,11 +8,14 @@ session (or contributor) can continue without the original chat history.
 ## Goal & status
 
 Build an in-kernel ALSA driver for the Clarett 8PreX. Two planes:
-- **Control plane** (mixer/routing/preamp/clock) — **reverse-engineered and a
-  working mixer-only driver exists** (`driver/`). Loads and probes on real
-  hardware.
-- **Data plane** (PCM DMA streaming) — **not started / not yet traced.** This is
-  the main remaining work.
+- **Control plane** (mixer/routing/preamp/clock/notifications) — **fully
+  reverse-engineered** (every encoding confirmed against live traffic); a working
+  mixer-only driver exists (`driver/`). Loads and probes on real hardware.
+- **Data plane** (PCM DMA streaming) — **not yet traced; capture plan written**
+  (`spec/clarett-8prex-data-plane.md`). This is the main remaining work. Key point:
+  the `x-no-mmap` BAR trace is **blind to sample DMA** — the data plane is RE'd by
+  triangulating BAR setup registers (`tools/bar_profile.py`) + guest-RAM dumps +
+  period-IRQ correlation (`fcp_decode.py --async`).
 
 ## Method (how the RE is done)
 
@@ -90,10 +93,14 @@ A config write = `SET_DATA{offset, len, value}` then `DATA_CMD{activate}`, where
 spec/clarett-8prex-control-plane.md   Authored control-plane spec (offsets, opcodes,
                                       enums, pins, mixer, routing). Provenance-tagged.
 spec/clarett-8prex-fcp-transport.md   Mailbox/transport framing; confirmed reg map.
+spec/clarett-8prex-data-plane.md      PCM-DMA capture PLAN (not yet traced): method, phases, risks.
 driver/                               Out-of-tree module `snd-clarett` (control plane only).
   clarett.h, clarett_main.c (PCI probe), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), Makefile, README.md
 tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction decoder.
+                                      (--brief, --mix-diff, --async, --show-appspace).
+tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
+                                      outside the control-plane map (data-plane reg discovery).
 FCP Server Resources/*.xml            Focusrite's device descriptors (RE source material).
 *.txt / *.log                         Trace captures and working notes.
 ```
