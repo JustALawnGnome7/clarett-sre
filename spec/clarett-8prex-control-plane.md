@@ -89,6 +89,12 @@ So: **8 mic pres, 2× ADAT (16 ch), S/PDIF stereo, 10 analogue outs, 28 PCM play
 
 (Only inputs 1–2 have the Inst mode.)
 
+**Per-input phantom (48 V), phase invert, and high-pass filter are hardware-switched `[HW]`** — each
+has a dedicated front-panel push button per XLR input. Their *live state* is not in the config space
+and has no FCP opcode (absent from both the XML and the live trace); a driver cannot read or toggle
+them. The one software-visible aspect is **phantom-power persistence** (see §10): whether 48 V state
+is retained across a power cycle is a configurable setting, even though the on/off itself is physical.
+
 ## 5. Output controls (10 analogue outs) `[XML]`
 
 `gain`: 8-bit, opcode 1. HW enables: 1-bit, opcode 3, packed into the byte/bit shown.
@@ -226,6 +232,9 @@ Record pin → default hardware-input index, with per-band remap (`input-m`/`inp
 - **Hardware meters**: tables `meters-l`@136 / `meters-m`@146 / `meters-h`@156 (10 bytes each),
   per-source channel-index tables (255 = unused) for the low/med/high bands.
 - **Standalone**: 1 bit @ 188 (no opcode listed → persisted setting). `[INF]`
+- **Phantom-power persistence** `[HW]`: the device exposes a software toggle for whether per-input
+  48 V state is retained across a power cycle (the 48 V on/off itself is a front-panel hardware button,
+  §4 — only its persistence policy is configurable). Config offset/opcode **not yet identified `[TRACE]`**.
 - **Buffer size** (host ASIO, not a device config write): 32–2048.
 
 ## 11. Notifications (device → host async events) `[XML]`
