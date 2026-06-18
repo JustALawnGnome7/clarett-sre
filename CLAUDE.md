@@ -135,7 +135,9 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
   (the ISR deliberately leaves the `0x100` cause to the poll to avoid a race).
-- **Firmware init handshake** not replayed (unknown if it's required — verify on HW).
+- **Firmware init handshake** not replayed — and it isn't required for operation: the device
+  self-boots from onboard flash and the handshake (`0x6000`/`0x7000`/`INIT_2`/`READ_SEG`) is a
+  version/identity check, not a code load. The control plane works without it (transport spec §8).
 - Packed bitfield controls (per-output hw gain/dim/mute enables) not implemented.
 
 ## Clean-room discipline

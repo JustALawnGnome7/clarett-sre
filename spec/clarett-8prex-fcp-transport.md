@@ -175,6 +175,37 @@ The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRME
 note XML flash-command=5). The init-only opcodes (`0x5000`/`0x6000`/`0x7000`) are device-specific,
 but the **data/meter-class opcodes match scarlett2 exactly** — see confirmed map.
 
+### Firmware — the device self-boots from onboard flash `[HW/TRACE]`
+The 8PreX carries its own firmware — the **App** segment plus the **Thunderbolt front-end FPGA
+bitstream** — in onboard non-volatile flash. **The host uploads nothing at boot**; init is a
+version/identity *check*, not code loading. Two independent proofs:
+
+- **Structural.** For the device to enumerate as PCIe `1cb5:0002` at all, its Thunderbolt controller
+  and front-end FPGA must *already be configured* — that link is the precondition for the PCIe tunnel
+  the host driver rides on. The host cannot upload the bitstream over a link that needs that same
+  bitstream to exist. So the FPGA loads from local flash at power-on, before any host involvement.
+- **Empirical (`clarett_init_short.txt`).** The boot histogram is **zero `SET_DATA` and zero bulk
+  transfer** — only `0x5000` CONFIG_PUSH (2-byte payloads ×46), small `0x6000`/`0x7000` queries, and
+  `0x800005` **READ_SEG ×2** (the host *reading* flash segments). A bitstream upload would be hundreds
+  of KB–MB of mailbox writes; nothing of that size exists. And the driver reads back valid
+  `fw app`/`fpga` version words on probe **before issuing any write**, which is only possible if the
+  firmware is already resident.
+
+This resolves the open "is the init handshake required?" question: the `0x6000`/`0x7000`/`INIT_2`/
+`READ_SEG` sequence is a **check-then-maybe-update** identity read, not a mandatory load — the control
+plane works without replaying it.
+
+**Vendor firmware files** (in the VM at `…/Focusrite Control/Server/Resources/Firmware/`) are the
+update/recovery payloads, flashed **only on a version mismatch** — never read or pushed at boot:
+- `ClarettThunderbolt.tca` — Focusrite firmware container (App package + metadata).
+- `fp001005_tb_top.bit`, `fp001054_tb_top.bit` — Xilinx FPGA bitstreams for the Thunderbolt front-end
+  (`tb_top`), one per board revision; an updater selects the matching one. Update writes go through
+  the `0x008000xx` flash-command class (`0x800005` = XML flash-command 5), same family as `READ_SEG`.
+
+Firmware update is therefore an **optional, user-initiated** capability, never part of bring-up.
+**Clean-room:** these are vendor binary blobs — keep them out of the driver tree (like the XML
+descriptors); any future update support should flash only user-supplied images, not bundled ones.
+
 ### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.txt`)
 | opcode | name | payload | proof |
 |---|---|---|---|
