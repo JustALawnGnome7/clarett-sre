@@ -17,7 +17,8 @@ constants below — tweak if later captures refine them.
 Usage:
   ./tools/fcp_decode.py clarett_init_short.txt
   sudo tail -f /var/log/libvirt/qemu/Windows10-custom.log | ./tools/fcp_decode.py -
-  ./tools/fcp_decode.py capture.txt --raw     # also echo non-mailbox accesses
+  ./tools/fcp_decode.py capture.txt --raw       # also echo non-mailbox accesses
+  ./tools/fcp_decode.py capture.txt --classify  # is this capture a fader move or a routing change?
 
 The 8192-byte appspace persist write-back (a run of SET_DATA into config offset >=200) fires on
 every control change and is collapsed to a single summary line by default; pass --show-appspace to
@@ -293,6 +294,10 @@ def main():
     ap.add_argument("--async", dest="async_", action="store_true",
                     help="surface async device->host signalling: interrupt-register reads outside any "
                          "mailbox transaction, and any read carrying a §11 notification mask")
+    ap.add_argument("--classify", action="store_true",
+                    help="tag each control write MIX-level (SET_MIX) / MUX-route (SET_MUX) / "
+                         "CONFIG-set (SET_DATA), skipping GET/poll/appspace noise, and print a "
+                         "per-capture verdict — disambiguates a fader move from a routing change")
     args = ap.parse_args()
 
     try:
@@ -305,7 +310,41 @@ def main():
     n = 0
     hist = {}
     appspace = []      # consecutive appspace write-back chunks awaiting a collapsed summary
-    prev_mix = {}      # mix_num -> last-seen coeff list, for --mix-diff
+    prev_mix = {}      # mix_num -> last-seen coeff list, for --mix-diff / --classify
+    cls_keys = {"MIX": set(), "MUX": set(), "CONFIG": set()}  # --classify tallies
+
+    def classify_line(t):
+        """For --classify: return (category, key, detail) for a control write, else None.
+        MIX = SET_MIX (level), MUX = SET_MUX (routing), CONFIG = a SET_DATA control write.
+        GET_*/DATA_CMD/appspace/meter polls return None (not a user-visible state change)."""
+        if t.opcode == 0x002002:                       # SET_MIX — a mix-bus level write
+            mc = t.mix_coeffs()
+            if mc is None:
+                return None
+            mix, coeffs = mc
+            old = prev_mix.get(mix)
+            prev_mix[mix] = coeffs
+            if old is None:                            # no baseline yet (e.g. a full rewrite)
+                nz = sum(1 for c in coeffs if c)
+                return ("MIX", mix, f"bus={mix} (baseline, {nz} non-zero slots)") if nz else None
+            diffs = [f"slot {i}: 0x{old[i]:04x}->0x{coeffs[i]:04x}"
+                     for i in range(min(len(old), len(coeffs))) if old[i] != coeffs[i]]
+            return ("MIX", mix, f"bus={mix} " + "; ".join(diffs)) if diffs else None
+        if t.opcode == 0x003002:                       # SET_MUX — a routing-matrix write
+            me = t.mux_entries()
+            if me is None:
+                return None
+            band, entries = me
+            routed = sum(1 for _d, s in entries if s)
+            return ("MUX", band, f"band={band} entries={len(entries)} ({routed} routed)")
+        if t.opcode == 0x800001 and not t.is_appspace():   # SET_DATA — a single control write
+            ol = t.data_offset_len()
+            if ol is None:
+                return None
+            off, ln = ol
+            val = fmt_bytes(t.data[8:min(t.size, 8 + min(ln, 8))])
+            return ("CONFIG", off, f"off={off} len={ln} val=[{val}]")
+        return None
 
     def mix_diff_line(t):
         """One line showing which coefficient slots changed vs the previous write to this bus."""
@@ -338,6 +377,15 @@ def main():
         if cur is None:
             return
         hist[cur.opcode] = hist.get(cur.opcode, 0) + 1
+        if args.classify:               # tag control writes; suppress GET/poll/appspace noise
+            res = classify_line(cur)
+            if res is not None:
+                cat, key, detail = res
+                label = {"MIX": "MIX-level ", "MUX": "MUX-route ", "CONFIG": "CONFIG-set"}[cat]
+                print(f"#{cur.n:<4} {label}  {detail}")
+                cls_keys[cat].add(key)
+            cur = None
+            return
         if args.mix_diff and cur.opcode in MIX_OPCODES:
             line = mix_diff_line(cur)   # sweep mode: just the changed coefficient slot(s)
             if line is not None:
@@ -399,6 +447,26 @@ def main():
 
     flush()
     emit_appspace_summary()      # close any write-back run at EOF
+
+    if args.classify:
+        m, x, cf = (len(cls_keys[k]) for k in ("MIX", "MUX", "CONFIG"))
+        print("\n=== classification summary ===")
+        print(f"  MIX-level  : {m} bus(es)   {sorted(cls_keys['MIX']) if m else ''}")
+        print(f"  MUX-route  : {x} band(s)   {sorted(cls_keys['MUX']) if x else ''}")
+        print(f"  CONFIG-set : {cf} offset(s) {sorted(cls_keys['CONFIG']) if cf else ''}")
+        if x and m:
+            verdict = ("ROUTING change — SET_MUX (per band) + a SET_MIX rewrite "
+                       "(add/remove/source assignment, NOT a fader move)")
+        elif x:
+            verdict = "ROUTING change — SET_MUX only"
+        elif m:
+            verdict = "MIX-level change — SET_MIX only (fader/level move; no routing)"
+        elif cf:
+            verdict = "CONFIG control write — mute/dim/gain/air/mode; not mix or route"
+        else:
+            verdict = "no mix / route / config write seen in this capture"
+        print(f"  verdict    : {verdict}")
+        return
 
     print("\n--- opcode histogram ---")
     for opc, c in sorted(hist.items(), key=lambda kv: -kv[1]):

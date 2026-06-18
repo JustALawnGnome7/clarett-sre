@@ -98,7 +98,7 @@ driver/                               Out-of-tree module `snd-clarett` (control 
   clarett.h, clarett_main.c (PCI probe), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), Makefile, README.md
 tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction decoder.
-                                      (--brief, --mix-diff, --async, --show-appspace).
+                                      (--brief, --mix-diff, --async, --show-appspace, --classify).
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
                                       outside the control-plane map (data-plane reg discovery).
 FCP Server Resources/*.xml            Focusrite's device descriptors (RE source material).
