@@ -299,8 +299,9 @@ Adding Analogue 2 as a second source to a mixer input produced a full 16-bus `SE
 three `SET_MUX` commands** — one per **sample-rate band**. Payload = `{u32 header, u32 entry[]}`:
 
 - **header** = `band << 16`: band **0** (low, 44.1/48), **1** (med, 88.2/96), **2** (high, 176.4/192).
-  Entry counts shrink with band (high rates drop ADAT S/MUX channels) — matches control-plane §8's
-  91/75/67 structure.
+  Entry counts shrink with band (high rates drop ADAT S/MUX channels): real wire sizes **86/70/62**
+  (each +16 trailing zero-pad words), i.e. the enumerated-destination counts, not the XML `num`
+  (91/75/67); see control-plane §8.
 - **each entry** = u32 packing two **12-bit pins**: `entry = (src_pin << 12) | dst_pin`. `src=0x000`
   = unrouted/silent. Decoded against §3 pins, e.g. `0x400600` = Record 1 (`0x600`) ← Mic 1 (`0x400`);
   `0x300408` = Monitor 1 (`0x408`) ← Mix 1 (`0x300`); the stimulus entry `0x401301` = **Mixer input

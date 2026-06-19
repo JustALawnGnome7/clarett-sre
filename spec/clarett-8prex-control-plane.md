@@ -182,28 +182,42 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 
 A table of *destination ← source* assignments. Size depends on the sample-rate band:
 
-| Band | Rates | Entries |
-|---|---|---|
-| Low | 44.1 / 48 kHz | `num` = **91** |
-| Medium | 88.2 / 96 kHz | `num-m` = **75** |
-| High | 176.4 / 192 kHz | `num-h` = **67** |
+| Band | Rates | XML `num` | **Live wire entries** `[TRACE]` | Zero pad |
+|---|---|---|---|---|
+| Low | 44.1 / 48 kHz | `num` = 91 | **86** | +16 words |
+| Medium | 88.2 / 96 kHz | `num-m` = 75 | **70** | +16 words |
+| High | 176.4 / 192 kHz | `num-h` = 67 | **62** | +16 words |
 
 - Channels with `pin-m="0x0"` drop at the medium band; `pin-h="0x0"` drop at the high band —
   dominated by **ADAT S/MUX** (8 → 4 → 2 ch per port) plus reduced high-rate PCM channels. `[XML/INF]`
-- Enumerated destinations total ≈ **86** (28 hw outputs + 28 PCM capture + 30 mixer inputs); header
-  says 91 → ~5 additional/reserved entries. Exact entry order & the ~5 delta: **`[TRACE]`**.
+- **The device writes exactly the enumerated destinations, not the XML `num`.** Band 0's traced table
+  is **86** entries = 28 hw outputs + 28 PCM capture + 30 mixer inputs — matching the enumerated count
+  exactly. The XML `num`=91 over-counts by 5 reserved/phantom slots that are **never sent on the wire**
+  (the `−5` holds across all three bands: 86/70/62 = `num`−5). This resolves the earlier "~5 delta". `[TRACE-CONFIRMED]`
+- Each band's payload is then **zero-padded by 16 u32 words** to a fixed declared size (412/348/316 bytes
+  = 102/86/78 words for bands 0/1/2). The pad words are all-zero (dst=0, not a valid pin); `fcp_decode.py`
+  strips them so reported counts are the real 86/70/62. A destination present in the table but with
+  `src=0` is a real, *unrouted* slot — distinct from the dst=0 padding.
 
 **Wire format — `SET_MUX` (`0x003002`) `[TRACE-CONFIRMED]`:** the matrix is written as **three commands,
 one per sample-rate band**, payload `{u32 header, u32 entry[]}`:
 - `header = band << 16` (band 0 = low, 1 = medium, 2 = high). Each band sends its own (shrinking)
-  entry list — the live counts confirm the per-band drop, consistent with the 91/75/67 structure.
+  entry list — the live counts (86/70/62 real entries) confirm the per-band drop, though the absolute
+  sizes are the enumerated-destination counts, not the XML `num` (see table above), each +16 zero pad.
 - each `entry` packs two **12-bit pins**: `entry = (src_pin << 12) | dst_pin`, top 8 bits 0.
   `src = 0x000` means the destination is **unrouted / silent**. Pins are the §3 direction-scoped values
   (e.g. `0x300+n` mixer-input slot, `0x408/0x409` monitor out, `0x600+n` PCM capture, `0x400+n` analogue).
 - Worked entries: `0x400600` = Record 1 ← Mic 1; `0x300408` = Monitor 1 ← Mix 1; `0x60a186` =
-  S/PDIF Out 1 ← Playback; `0x401301` = Mixer input slot 2 ← Analogue in 2 (the captured stimulus).
-- A control change that touches routing rewrites the **whole** matrix (all three bands), and is also
-  preceded by a full `SET_MIX` rewrite of all 16 buses.
+  S/PDIF Out 1 ← Playback; `0x401301` = Mixer input slot 2 ← Analogue in 2.
+- **Traced stimulus `[TRACE-CONFIRMED]`** (`clarett_mux_full.log`): setting *Monitor Output 1*'s input
+  from Analogue 1 → Analogue 2 wrote `0x401408`/`0x401409` (Monitor Out 1 L/R ← Analogue in 2), i.e.
+  `0x408/0x409 <- 0x401`; previously `<- 0x400`. Three `SET_MUX` (one per band), **no `SET_MIX`** — a
+  direct output-source reassignment is MUX-only (unlike a mixer-input edit, which also rewrites `SET_MIX`).
+- A control change that touches routing rewrites the **whole** matrix (all three bands). Whether a
+  `SET_MIX` rewrite accompanies it depends on the action: a **direct output-source reassignment** (e.g.
+  Monitor Out ← a different analogue input) is **`SET_MUX` only** (`[TRACE]`, `clarett_mux_full.log`),
+  whereas a **mixer-input edit** (adding/removing a channel *into a mix*) also rewrites the affected
+  `SET_MIX` bus. `--classify` distinguishes them: MUX-only → routing/patchbay; MUX+MIX → mixer-matrix edit.
 
 ### PCM-capture default source map (`record-outputs`) `[XML]`
 Record pin → default hardware-input index, with per-band remap (`input-m`/`input-h`):

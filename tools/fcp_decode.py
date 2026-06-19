@@ -177,7 +177,10 @@ class Txn:
 
     def mux_entries(self):
         """For SET_MUX (0x3002), return (band, [(dst_pin, src_pin), ...]) or None.
-        Payload = {u32 band<<16, u32 entry[]}; each entry = (src_pin<<12) | dst_pin (12-bit pins)."""
+        Payload = {u32 band<<16, u32 entry[]}; each entry = (src_pin<<12) | dst_pin (12-bit pins).
+        The entry table is zero-padded to a fixed per-band size (16 trailing zero words observed);
+        a zero word has dst=0, not a valid destination pin, so trailing pads are stripped — the
+        returned count is the real table size (band 0 = 86 = 28 out + 28 capture + 30 mixer in)."""
         if self.opcode != 0x003002 or self.size < 4 \
                 or any(b is None for b in self.data[:4]):
             return None
@@ -189,6 +192,8 @@ class Txn:
                 break
             v = b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24
             entries.append((v & 0xfff, (v >> 12) & 0xfff))
+        while entries and entries[-1][0] == 0:    # drop the trailing dst=0 zero-padding words
+            entries.pop()
         return band, entries
 
     def get_mux_query(self):
