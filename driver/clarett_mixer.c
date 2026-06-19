@@ -121,13 +121,20 @@ int clarett_create_controls(struct clarett *c)
 	if (!c->ctls)
 		return -ENOMEM;
 
+	/*
+	 * Monitor section (command 2). Trace-confirmed against clarett_monitor_mutedim.log:
+	 * mute @ offset 24 and dim @ offset 28 are 1-bit fields that toggle 0/1 and commit
+	 * with activate=2 (both directions verified). Named "Mute"/"Dim" to match the USB unit
+	 * (scarlett2). For these to physically affect Monitor Out 1-2 the per-output enable bits
+	 * (bytes 72/73, command 3) must be set — see clarett_enable_monitor_hw_controls().
+	 */
 	d = &c->ctls[n++];
 	*d = (struct clarett_ctl){ .type = CT_SWITCH, .offset = 24, .activate = 2, .invert = 1 };
-	scnprintf(d->name, sizeof(d->name), "Master Playback Switch");
+	scnprintf(d->name, sizeof(d->name), "Mute Playback Switch");
 
 	d = &c->ctls[n++];
 	*d = (struct clarett_ctl){ .type = CT_SWITCH, .offset = 28, .activate = 2 };
-	scnprintf(d->name, sizeof(d->name), "Monitor Dim Playback Switch");
+	scnprintf(d->name, sizeof(d->name), "Dim Playback Switch");
 
 	d = &c->ctls[n++];
 	*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = 112, .activate = 2 };

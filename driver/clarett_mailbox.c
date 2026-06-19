@@ -21,7 +21,7 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	u32 cause = 0, first_cause = 0, fcperr = 0;
 	int i, ret = 0, polls = 0;
 
-	if (len > CLARETT_MAX_PAYLOAD)
+	if (len > CLARETT_MBOX_DATA_MAX)
 		return -EINVAL;
 
 	mutex_lock(&c->mbox_lock);
@@ -74,8 +74,10 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 }
 
 /* GET_DATA: request `len` bytes from config `offset`. The response is DMAed into
- * the buffer programmed at REG_DMA_ADDR_LO/HI (c->resp_buf), not returned via MMIO;
- * its byte layout is not yet decoded, so callers currently only dump it. */
+ * the buffer programmed at REG_DMA_ADDR_LO/HI (c->resp_buf), not returned via MMIO.
+ * The response layout is decoded: a 16-byte echoed FCP header (guard on resp[0]) then
+ * the requested bytes at FCP_RESP_DATA_OFF (see clarett.h; clarett_notify_work refreshes
+ * the monitor shadow from it). */
 int clarett_get_data(struct clarett *c, u32 offset, u32 len)
 {
 	u8 buf[8];
@@ -107,7 +109,9 @@ int clarett_data_cmd(struct clarett *c, u32 activate)
 	return clarett_fcp(c, FCP_DATA_CMD, buf, 4);
 }
 
-/* Convenience: write a single config byte and commit it. */
+/* Convenience: write a single config byte and commit it. The commit (DATA_CMD{activate})
+ * applies the change live but RAM-only — it is NOT persisted across a power cycle. Persistence
+ * is a separate DATA_CMD{FCP_ACTIVATE_PERSIST} (command 5), intentionally not issued here. */
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 {
 	int err;
@@ -124,4 +128,20 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 
 	c->shadow[offset] = val;
 	return 0;
+}
+
+/* Read-modify-write the `mask` bits of a shared config byte to the value in `val`, then commit.
+ * Used for the command-3 enable bytes (72/73) that pack one bit per output: the shadow MUST have
+ * been seeded from the device first (clarett_seed_shadow) so the other outputs' bits survive. */
+int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate)
+{
+	u8 updated;
+
+	if (offset >= CLARETT_CONFIG_SIZE)
+		return -EINVAL;
+
+	updated = (c->shadow[offset] & ~mask) | (val & mask);
+	if (updated == c->shadow[offset])
+		return 0;
+	return clarett_write_u8(c, offset, updated, activate);
 }

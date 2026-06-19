@@ -191,9 +191,13 @@ version/identity *check*, not code loading. Two independent proofs:
   `fw app`/`fpga` version words on probe **before issuing any write**, which is only possible if the
   firmware is already resident.
 
-This resolves the open "is the init handshake required?" question: the `0x6000`/`0x7000`/`INIT_2`/
-`READ_SEG` sequence is a **check-then-maybe-update** identity read, not a mandatory load — the control
-plane works without replaying it.
+So **firmware code** (FPGA bitstream + App) is resident from flash and never uploaded — the
+`0x6000`/`0x7000`/`INIT_2`/`READ_SEG` queries are a check-then-maybe-update identity read, not a code
+load. **But this does NOT mean the host can skip init**: a fresh device still requires a host **session
+bring-up** to arm config access (see "Session bring-up IS required" below). An earlier version of this
+note wrongly concluded "the control plane works without replaying init" — that was an artifact of only
+ever testing a device the vendor app had already initialized before hand-over; the fresh-power-cycle
+experiments (`clarett_full_init_mute.log`) disproved it. `[corrected]`
 
 **Vendor firmware files** (in the VM at `…/Focusrite Control/Server/Resources/Firmware/`) are the
 update/recovery payloads, flashed **only on a version mismatch** — never read or pushed at boot:
@@ -205,6 +209,40 @@ update/recovery payloads, flashed **only on a version mismatch** — never read 
 Firmware update is therefore an **optional, user-initiated** capability, never part of bring-up.
 **Clean-room:** these are vendor binary blobs — keep them out of the driver tree (like the XML
 descriptors); any future update support should flash only user-supplied images, not bundled ones.
+
+### Session bring-up IS required — host must arm the device `[HW/TRACE — clarett_full_init_mute.log]`
+Distinct from firmware loading: a freshly power-cycled, self-booted 8PreX does **not** accept config
+operations until the host replays the vendor session init. Confirmed on bare metal:
+- On a **fresh** device, `GET_DATA` returns an FCP error — the config space is not "armed".
+- After replaying the captured bring-up, `GET_DATA` succeeds and config writes ACK cleanly (`done=1`).
+- The bring-up must run against a **fresh** device; re-running it on an already-armed device **wedges**
+  `GET_DATA` (double-init). A robust driver should probe with a `GET` and skip the replay if armed.
+
+**Bring-up sequence** (232 mailbox commands before the first control write; regenerate as a C replay
+table with `tools/fcp_decode.py --emit-init`):
+1. Identity/version (2–3 rounds): `READ_SEG`, `GET_7.1`×3, `INIT_2`, `GET_6.x`, `GET_7.x`.
+2. **`CONFIG_PUSH` (`0x5000`) ×122** — register/enable config items by 2-byte id.
+3. **Subsystem enables `0x000001`** (id 1..8), bracketed by `INIT_2`.
+4. **Count queries** `0x003000`/`0x002000`/`0x001000`/`0x004000` (MUX/MIX/meter/sub-4); subsystem-4
+   setup `0x004001` (idx 0..5) + `0x004005`; `0x006004`/`0x006005`.
+5. **Full config read+writeback**: `GET_DATA` 0..0x1fc0 (8 KB, 1016-B chunks) → `SET_DATA` of the 8 KB
+   persistent store → `DATA_CMD{5}` persist.
+6. **`SET_MIX`×16** (all buses unity `0x2000`) + **`SET_MUX`×3** (full routing matrix).
+
+New opcodes (not in the original control-plane map; names provisional `[INF]`): `0x000001` subsystem
+enable, `0x001000`/`0x002000`/`0x003000`/`0x004000` count queries, `0x004001`/`0x004005` subsystem-4
+setup, `0x006004`/`0x006005` queries.
+
+### Control-plane changes ACK but don't physically manifest without the data plane `[HW]`
+Even after a correct bring-up, a monitor `Mute`/`Dim` write (`SET_DATA{24|28}` + `DATA_CMD{2}`)
+**completes genuinely** (`done=1, fcperr=0`) yet produces **no physical change** — the front-panel
+Monitor Mute/Dim LED does not move, where the vendor app's *identical* write does. We matched the
+vendor's entire control-plane behaviour byte-for-byte (full init, config read/writeback, per-write
+`DATA_CMD{5}` commit); the only remaining difference is that the vendor app **starts the audio engine**
+via the **data plane** (DMA-ring / clocking register writes, outside the `0x8020` mailbox and invisible
+to the MMIO trace). **Conclusion: the control plane is complete and correct, but its effects stay inert
+until the audio engine is streaming — the remaining work is the data plane**
+(`spec/clarett-8prex-data-plane.md`), not any further control-plane command.
 
 ### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.txt`)
 | opcode | name | payload | proof |

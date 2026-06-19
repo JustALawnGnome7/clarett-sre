@@ -57,6 +57,85 @@ static void clarett_hw_init(struct clarett *c)
 	 */
 }
 
+/* Generated bring-up replay table: clarett_init_blob[] + clarett_init_seq[]. */
+#include "clarett_init_seq.h"
+
+/*
+ * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
+ * (clarett_full_init_mute.log), regenerated into clarett_init_seq.h by `fcp_decode.py --emit-init`:
+ * every non-meter command up to the monitor-mute write, minus the bulk 8 KB config read/writeback.
+ * Self-boot does NOT arm config access (GET_DATA fails); this host init arms it. Must run against a
+ * device in its fresh power-on state — re-initializing an already-armed device wedges it instead.
+ * Best-effort: failures are logged and the sequence continues.
+ */
+static int clarett_arm_device(struct clarett *c)
+{
+	int i, err, fails = 0;
+
+	for (i = 0; i < ARRAY_SIZE(clarett_init_seq); i++) {
+		const struct clarett_init_step *s = &clarett_init_seq[i];
+
+		err = clarett_fcp(c, s->opcode, clarett_init_blob + s->off, s->len);
+		if (err) {
+			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
+				 i, s->opcode, err);
+			fails++;
+		}
+	}
+	if (fails)
+		dev_warn(&c->pci->dev, "arm: %d/%zu steps failed\n",
+			 fails, ARRAY_SIZE(clarett_init_seq));
+	return 0;
+}
+
+/*
+ * Seed the config shadow from the device. clarett_hw_init() zeroes the shadow, but the
+ * command-3 enable bytes (72/73) pack one bit per output, so toggling the monitor outputs'
+ * bits needs the real current bytes for a safe read-modify-write. GET the monitoring region
+ * (offset 24, 92 bytes — covers 24/28/52/72-74/112) and copy the DMAed response in. The first
+ * GET after programming the DMA address can come back empty (echo word 0), so retry briefly.
+ */
+static int clarett_seed_shadow(struct clarett *c)
+{
+	const u8 *r = c->resp_buf;
+	u32 echo;
+	int err, attempt, i;
+
+	for (attempt = 0; attempt < 3; attempt++) {
+		err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
+		if (err)
+			return err;
+
+		dma_rmb();	/* order the DMAed response before we read resp_buf */
+		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
+		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
+		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA)) {
+			for (i = 0; i < MONITOR_CFG_LEN; i++)
+				c->shadow[MONITOR_CFG_OFFSET + i] = r[FCP_RESP_DATA_OFF + i];
+			return 0;
+		}
+	}
+	return -EIO;
+}
+
+/*
+ * Make the two monitor outputs follow the monitor section's Mute/Dim. Without these command-3
+ * enable bits, writing the global Mute (24) / Dim (28) flips the master flag but no output obeys
+ * it (control-plane §5). RMW from the seeded shadow so the other outputs' enable bits are kept;
+ * idempotent — clarett_write_bits() no-ops if the bits are already set.
+ */
+static int clarett_enable_monitor_hw_controls(struct clarett *c)
+{
+	int err;
+
+	err = clarett_write_bits(c, HWEN_MUTE_OFFSET, HWEN_MONITOR_MUTE_MASK,
+				 HWEN_MONITOR_MUTE_MASK, HWEN_ACTIVATE);
+	if (err)
+		return err;
+	return clarett_write_bits(c, HWEN_DIM_OFFSET, HWEN_MONITOR_DIM_MASK,
+				  HWEN_MONITOR_DIM_MASK, HWEN_ACTIVATE);
+}
+
 /*
  * MSI handler. One Linux IRQ per MSI vector, dispatched by vector index (dev_id).
  * The device signals control-plane events on vec0; we check the notification cause
@@ -178,7 +257,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
-	int err;
+	int err, seeded;
 
 	err = snd_card_new(&pci->dev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1,
 			   THIS_MODULE, sizeof(*c), &card);
@@ -217,9 +296,30 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_hw_init(c);
 
+	/* Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
+	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled. */
+	clarett_arm_device(c);
+
+	/* Seed the shadow from the device so mixer "get" reflects real state at load and the
+	 * enable-byte RMW below is safe. Best-effort: if it fails we skip the enable writes. */
+	seeded = clarett_seed_shadow(c);
+	if (seeded)
+		dev_warn(&pci->dev,
+			 "config shadow seed failed (%d); leaving hardware mute/dim enables untouched\n",
+			 seeded);
+
 	err = clarett_create_controls(c);
 	if (err)
 		goto err_free;
+
+	/* Make the global Mute/Dim controls actually affect Monitor Out 1-2. Needs the seeded
+	 * shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
+	if (!seeded) {
+		err = clarett_enable_monitor_hw_controls(c);
+		if (err)
+			dev_warn(&pci->dev,
+				 "could not enable monitor hardware mute/dim (%d)\n", err);
+	}
 
 	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
 
