@@ -32,6 +32,27 @@ struct snd_kcontrol;
 #define REG_INFO                 0x8000  /* read-only fw-info header (fw versions, ...) */
 #define REG_MBOX                 0x8020  /* FCP request mailbox                         */
 
+/*
+ * Data-plane streaming registers (recovered from a streaming capture; data-plane spec §3b).
+ * Two structurally identical ring blocks; block 0 (0x200) → MSI vec1, block 1 (0x300) → vec2.
+ * `clarett_engine_start()` replays the captured stream-start sequence with our own ring buffer.
+ */
+#define REG_STREAM_IRQ_CFG       0x108   /* stream-start writes 0x10        */
+#define REG_STREAM_IRQ_CFG2      0x10c   /* stream-start writes 0x1e70700   */
+#define REG_STREAM_IRQ_ARM       0x110   /* stream-start writes 0x7 then 0x0 */
+#define STREAM_BLK0              0x200   /* ring block 0 (vec1); +0x00 = cause (read-to-clear) */
+#define STREAM_BLK1              0x300   /* ring block 1 (vec2) */
+#define   STREAM_OFF_CHANS       0x04    /* channel count = 0x1c (28)       */
+#define   STREAM_OFF_SIZE        0x08    /* size/period   = 0x1c0 [HYP]     */
+#define   STREAM_OFF_CTRL        0x0c    /* enable bit    = 1               */
+#define   STREAM_OFF_BASE_LO     0x10    /* ring base bus address low 32    */
+#define   STREAM_OFF_BASE_HI     0x14    /* ring base bus address high 32   */
+#define   STREAM_OFF_PTR         0x18    /* DMA position (read-only)        */
+#define STREAM_CHANS             0x1c    /* 28 PCM channels per direction   */
+#define STREAM_SIZE_VAL          0x1c0
+#define CLARETT_STREAM_BUF       (128 * 1024)   /* coherent ring buffer (generous; avoids fault) */
+#define CLARETT_STREAM_RING_GAP  0x4000         /* block-1 ring offset (capture spaced them 16 KB) */
+
 /* FCP mailbox header layout, relative to REG_MBOX */
 #define MBOX_CMD                 0x00    /* bit31 = execute flag | opcode               */
 #define MBOX_SIZESEQ             0x04    /* size (low 16) | seq (high 16)               */
@@ -197,6 +218,18 @@ struct clarett {
 
 	struct clarett_ctl *ctls;	/* descriptor array, lifetime = card */
 	int n_ctls;
+
+	/*
+	 * Data-plane engine-start probe (opt-in via the stream_probe module param). Not a PCM
+	 * implementation — it programs the §3b ring registers with this buffer and watches whether
+	 * the engine runs (vec1/vec2 period IRQs + DMA pointer advancing). See clarett_engine_start().
+	 */
+	bool stream_on;
+	void *stream_buf;		/* coherent streaming ring buffer */
+	dma_addr_t stream_dma;
+	size_t stream_size;
+	atomic_t period_irqs[CLARETT_NUM_VECTORS];   /* per-vector IRQ counts */
+	struct delayed_work stream_report;	/* logs pointer/IRQ progress after start */
 
 	/*
 	 * Shadow of the config space backing mixer "get". Updated write-through on

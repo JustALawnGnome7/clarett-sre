@@ -87,11 +87,20 @@ values, rest 0). `0x1c` reads at `0x1c`/`0x202910` = a status word.
 The base pairs are the exact `0x410`/`0x414` GET-response DMA pattern at new offsets; both bases are
 guest-physical (VM RAM), 16 KB apart (`0x589b9000` → `0x589bd000`).
 
+**The DMA engine is DESCRIPTOR-based `[TRACE — engine-start probe]`.** The active probe (driver
+`stream_probe=1`) replayed this exact sequence with a zeroed driver ring and the device immediately
+faulted: **`AMD-Vi IO_PAGE_FAULT address=0x0`** — it dereferenced a *null pointer read from inside the
+ring*, not our base. So `+0x10/+0x14` is a **descriptor-table** base, each entry carrying the actual
+per-channel buffer address; a zeroed table = null buffer pointers. The sizes confirm the shape:
+**`+0x04 = 0x1c = 28` descriptors × 16 bytes = `0x1c0` = `+0x08`** → one 16-byte descriptor per PCM
+channel. `[HYP: descriptor = {buffer addr, length, flags?}; exact layout TBD from a RAM dump]`
+
 **Open questions this leaves (the remaining phases):**
+- **Descriptor format** (the new blocker): field order/size of the 16-byte entry — get it from a
+  guest-RAM dump of the live descriptor table (Phase 2), then build valid descriptors + per-channel
+  buffers and re-run the probe.
 - **Direction:** which block is playback vs capture (run playback-only vs record-only to separate).
-- **`0x208=0x1c0` and the pointer units** — period bytes? frames? period count? (RAM dump + IRQ cadence).
-- **Sample format / interleave** — needs the RAM dump (Phase 2); the base GPA `0x2_589b9000` is known,
-  so `pmemsave 0x2589b9000 <len>` during streaming is now directly possible.
+- **The DMA pointer units** (`+0x18`, saw `0x4`–`0x11`) — descriptor index? (cadence + dump).
 - Whether `0x20c` is per-ring or a global enable (only one of the two was written).
 
 ## 4. Phased capture plan
@@ -164,16 +173,20 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    arm, then `0x20c=1`), and observe:
    - **vec1/vec2 in `/proc/interrupts`** — do they start counting? (engine running = period IRQs)
    - **the DMA pointer regs `0x218`/`0x318`** — do they advance? (DMA is live)
-   - **the front-panel Mute LED** — *does the monitor section now manifest?* This directly tests the
-     "control plane is inert until the engine streams" conclusion — and may make the whole control
-     plane come alive for the cost of just starting the engine, before any sample-format work.
-   Advance one register at a time; a bad base faults the IOMMU. Hook vec1/vec2 IRQ handlers first.
-2. **Sample format / interleave (Phase 2).** Once the ring is DMAing, read our own buffer back
-   directly (capture) or fill it with a 24-bit per-channel ramp (playback) and inspect — no `pmemsave`.
-   Resolves sample width, interleave, channel order, frame stride, and the `0x208=0x1c0`/pointer units.
-3. **Direction + IRQ cadence (Phases 1-tail/3).** Playback-only vs record-only to label `0x200`/`0x300`;
-   confirm the period rate (e.g. 48000/period) on vec1/vec2.
-4. **ALSA PCM (Phase 4).** `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the now-known
+   - **the front-panel Mute LED** — *does the monitor section now manifest?*
+   **DONE (`stream_probe=1`):** the engine did **not** start — `IO_PAGE_FAULT address=0x0`, vec1/vec2=0,
+   pointers flat. Result: the ring base is a **descriptor table** (§3b), not a flat buffer; a zeroed
+   table faults on the first null descriptor. So before the engine can run we need the descriptor format.
+2. **Descriptor format (new blocker, Phase 2 via RAM dump).** In the VM with FC streaming, find the
+   current ring base (a fresh `bar_profile` of the stream start) and `pmemsave <ring_gpa> 0x1c0
+   descs.bin` from the QEMU monitor. Decode the 28×16-byte entries: which words are the buffer address
+   (low/high), which is length, any flags. Cross-check against the per-channel sample buffers the
+   descriptors point to (dump those too) for sample width / interleave / channel order.
+3. **Re-run the engine probe with valid descriptors.** Build a 28-entry descriptor table + per-channel
+   buffers in the driver ring, re-program, and confirm vec1/vec2 fire + pointer advances + (the big
+   question) whether the Mute LED manifests.
+4. **Direction + IRQ cadence.** Playback-only vs record-only to label `0x200`/`0x300`; confirm period rate.
+5. **ALSA PCM (Phase 4).** `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the descriptor
    ring, with the vec1/vec2 handler calling `snd_pcm_period_elapsed`.
 
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming

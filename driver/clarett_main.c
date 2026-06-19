@@ -21,6 +21,12 @@
 #define PCI_VENDOR_FOCUSRITE   0x1cb5
 #define PCI_DEVICE_CLARETT     0x0002
 
+static bool stream_probe;
+module_param(stream_probe, bool, 0444);
+MODULE_PARM_DESC(stream_probe,
+		 "Data-plane experiment: after bring-up, program the §3b ring registers with a driver "
+		 "buffer and watch for vec1/vec2 IRQs + DMA-pointer movement (off by default).");
+
 static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
@@ -136,12 +142,86 @@ static int clarett_enable_monitor_hw_controls(struct clarett *c)
 				  HWEN_MONITOR_DIM_MASK, HWEN_ACTIVATE);
 }
 
+/* 1 s after engine-start, log whether the DMA pointers advanced and the period IRQs fired. */
+static void clarett_stream_report(struct work_struct *work)
+{
+	struct clarett *c = container_of(work, struct clarett, stream_report.work);
+
+	dev_info(&c->pci->dev,
+		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x "
+		 "(IRQs counting / ptr moving from start => engine is running)\n",
+		 atomic_read(&c->period_irqs[1]), atomic_read(&c->period_irqs[2]),
+		 readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(c->bar0 + STREAM_BLK1 + STREAM_OFF_PTR));
+}
+
+/*
+ * Data-plane engine-start probe (data-plane spec §9, opt-in via stream_probe). Replays the captured
+ * §3b stream-start register sequence with our own coherent ring as the DMA base, then watches whether
+ * the engine runs (vec1/vec2 IRQs + advancing DMA pointer). NOT a PCM implementation. The point is to
+ * test whether starting the engine makes the control plane physically manifest (e.g. the Mute LED).
+ */
+static int clarett_engine_start(struct clarett *c)
+{
+	void __iomem *bar = c->bar0;
+	dma_addr_t r0, r1;
+
+	c->stream_size = CLARETT_STREAM_BUF;
+	c->stream_buf = dmam_alloc_coherent(&c->pci->dev, c->stream_size,
+					    &c->stream_dma, GFP_KERNEL);
+	if (!c->stream_buf)
+		return -ENOMEM;
+
+	r0 = c->stream_dma;				/* ring block 0 */
+	r1 = c->stream_dma + CLARETT_STREAM_RING_GAP;	/* ring block 1 */
+
+	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
+
+	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c enable */
+	writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
+	writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
+	writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);	/* 0x214 */
+	writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO);	/* 0x210 (low last) */
+
+	writel(STREAM_CHANS, bar + STREAM_BLK1 + STREAM_OFF_CHANS);	/* 0x304 */
+	writel(STREAM_SIZE_VAL, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	/* 0x308 */
+	writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);	/* 0x314 */
+	writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);	/* 0x310 */
+
+	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
+	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 */
+	writel(0x0, bar + REG_STREAM_IRQ_ARM);				/* 0x110 */
+
+	c->stream_on = true;
+	dev_info(&c->pci->dev,
+		 "engine probe: started; rings @ %pad / %pad, ptr0=0x%x ptr1=0x%x\n",
+		 &r0, &r1, readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
+	schedule_delayed_work(&c->stream_report, msecs_to_jiffies(1000));
+	return 0;
+}
+
+/* Halt the engine before the ring buffer is freed (a bad/continued DMA would fault the IOMMU). */
+static void clarett_engine_stop(struct clarett *c)
+{
+	if (!c->stream_on)
+		return;
+	cancel_delayed_work_sync(&c->stream_report);
+	writel(0, c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);	/* disable ring 0 */
+	writel(0, c->bar0 + REG_STREAM_IRQ_ARM);
+	writel(0, c->bar0 + REG_STREAM_IRQ_CFG);
+	readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);		/* flush posted writes */
+	c->stream_on = false;
+}
+
 /*
  * MSI handler. One Linux IRQ per MSI vector, dispatched by vector index (dev_id).
  * The device signals control-plane events on vec0; we check the notification cause
  * (0x400) there. We must NOT read the mailbox cause (0x100) — that is read-to-clear
  * and racing clarett_fcp()'s poll would make mailbox commands time out (mailbox
- * completion stays polled). vec1/vec2/vec3 don't fire yet (data-plane suspects).
+ * completion stays polled). vec1/vec2 are the data-plane period-IRQ suspects — when the
+ * engine-start probe is active we just count them (MSI is edge-triggered, so not clearing a
+ * cause register can't storm); reading the block cause reg (0x200/0x300) is harmless observation.
  * Every vector returns IRQ_HANDLED so the core doesn't disable the MSI as spurious.
  */
 static irqreturn_t clarett_irq(int irq, void *dev_id)
@@ -157,6 +237,9 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
 		}
+	} else if (ic->idx == 1 || ic->idx == 2) {	/* data-plane period IRQs (probe) */
+		readl(c->bar0 + (ic->idx == 1 ? STREAM_BLK0 : STREAM_BLK1));   /* read-to-clear/observe */
+		atomic_inc(&c->period_irqs[ic->idx]);
 	}
 	return IRQ_HANDLED;
 }
@@ -270,6 +353,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	mutex_init(&c->mbox_lock);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	atomic_set(&c->notify_bits, 0);
+	INIT_DELAYED_WORK(&c->stream_report, clarett_stream_report);
+	atomic_set(&c->period_irqs[1], 0);
+	atomic_set(&c->period_irqs[2], 0);
 
 	err = pcim_enable_device(pci);
 	if (err)
@@ -323,6 +409,15 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
 
+	/* Opt-in data-plane experiment: start the audio engine and watch what happens. Best-effort;
+	 * needs the IRQ handlers (above) hooked first so vec1/vec2 period IRQs are counted. */
+	if (stream_probe && c->irq_ready) {
+		err = clarett_engine_start(c);
+		if (err)
+			dev_warn(&pci->dev, "engine-start probe failed (%d)\n", err);
+		err = 0;
+	}
+
 	strscpy(card->driver, "Clarett8PreX", sizeof(card->driver));
 	strscpy(card->shortname, "Focusrite Clarett 8PreX", sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname),
@@ -340,6 +435,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	return 0;
 
 err_free:
+	clarett_engine_stop(c);			/* halt DMA before the ring buffer is freed */
 	clarett_teardown_irq(c);		/* no-op unless setup_irq() succeeded */
 	cancel_work_sync(&c->notify_work);
 	snd_card_free(card);
@@ -351,6 +447,7 @@ static void clarett_remove(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct clarett *c = card->private_data;
 
+	clarett_engine_stop(c);			/* halt streaming DMA before the buffer is freed */
 	writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
 	clarett_teardown_irq(c);		/* free MSI vectors / IRQ handlers */
 	cancel_work_sync(&c->notify_work);	/* flush any in-flight notification work */
