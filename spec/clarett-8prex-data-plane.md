@@ -1,9 +1,10 @@
 # Clarett 8PreX — Data-Plane Capture Plan (PCM DMA streaming)
 
-**Status:** PLAN — nothing captured yet. This scopes how to reverse-engineer the audio **data plane**
-(bus-master DMA streaming): the methodology shift it needs, the tooling, and the phased capture
-sequence. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[ANCHOR]` = a fact
-already confirmed during control-plane RE that we build on.
+**Status:** Phase 1 (streaming register map) **recovered** from `clarett_full_init_mute.log` — see §3b;
+the rest (sample format, IRQ cadence, implementation) is still open. This scopes how to reverse-engineer
+the audio **data plane** (bus-master DMA streaming): the methodology shift it needs, the tooling, and
+the phased sequence. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` =
+confirmed from a capture; `[ANCHOR]` = a control-plane fact we build on.
 
 The control plane (mixer/routing/gain/mute/clock/notifications) is reverse-engineered and documented
 in `clarett-8prex-control-plane.md` + `clarett-8prex-fcp-transport.md`. This is the remaining work.
@@ -53,16 +54,54 @@ like this FPGA PCIe DMA engine. Expect this to be empirical and slower.
   not just new registers. Clock-source / sample-rate are dedicated FCP commands (control-plane §7),
   still untraced, and must be set before streaming.
 
+## 3b. Data-plane register map — RECOVERED from a streaming capture `[TRACE]`
+
+**Phase 1 is largely already done.** `clarett_full_init_mute.log` was captured with Focusrite Control
+**live**, so its ASIO engine was streaming — the trace contains the full streaming-setup register
+activity (`tools/bar_profile.py clarett_full_init_mute.log --new-only`). Two structurally identical
+**ring blocks** appear, at `0x200` (→ MSI **vec1**) and `0x300` (→ MSI **vec2**), confirming the
+vec1/vec2 period-IRQ hypothesis:
+
+| Reg (block+N) | block 0x200 | block 0x300 | role `[HYP]` |
+|---|---|---|---|
+| `+0x04` | `0x1c` (28) | `0x1c` (28) | channel count (28 PCM ch/direction) |
+| `+0x08` | `0x1c0` (448) | `0x1c0` | size / period (units TBD) |
+| `+0x0c` | `0x1` | *(not written)* | enable/start bit |
+| `+0x10` / `+0x14` | `0x589b9000` / `0x2` | `0x589bd000` / `0x2` | **ring base** bus addr (low32/high32) |
+| `+0x18` / `+0x1c` | read ×126 (`0x10`–`0x11`) | read ×126 (`0x4`–`0x5`) | **DMA pointer** (period-index units `[HYP]`) |
+
+Other data-plane offsets: `0x108=0x10`, `0x10c=0x1e70700`, `0x110=0x7`→`0x0` (IRQ config/arm);
+`0x800`–`0x8a4` read ×126 = a **meter/level readback** block (`0x814`/`0x88c` carry varying level
+values, rest 0). `0x1c` reads at `0x1c`/`0x202910` = a status word.
+
+**Stream-start write sequence `[TRACE]`** (verbatim order in the capture):
+```
+0x108 = 0x10                 # data-plane IRQ config
+0x20c = 0x1                  # ring-0 control (written BEFORE base/size)
+0x204 = 0x1c   (28 ch)       # ring-0 channels
+0x208 = 0x1c0                # ring-0 size/period
+0x214 = 0x2 ; 0x210 = 0x589b9000   # ring-0 base hi then lo (low write last = latch?)
+0x304 = 0x1c ; 0x308 = 0x1c0 ; 0x314 = 0x2 ; 0x310 = 0x589bd000   # ring-1 setup
+0x10c = 0x1e70700 ; 0x110 = 0x7 ; 0x110 = 0x0      # IRQ arm
+```
+The base pairs are the exact `0x410`/`0x414` GET-response DMA pattern at new offsets; both bases are
+guest-physical (VM RAM), 16 KB apart (`0x589b9000` → `0x589bd000`).
+
+**Open questions this leaves (the remaining phases):**
+- **Direction:** which block is playback vs capture (run playback-only vs record-only to separate).
+- **`0x208=0x1c0` and the pointer units** — period bytes? frames? period count? (RAM dump + IRQ cadence).
+- **Sample format / interleave** — needs the RAM dump (Phase 2); the base GPA `0x2_589b9000` is known,
+  so `pmemsave 0x2589b9000 <len>` during streaming is now directly possible.
+- Whether `0x20c` is per-ring or a global enable (only one of the two was written).
+
 ## 4. Phased capture plan
 
-**Phase 1 — Streaming setup (BAR registers). `[PLAN]`**
-In the VM with Focusrite ASIO: driver load → start a playback stream → a few seconds → stop. Run
-`bar_profile.py` and read off the registers active *only during streaming* (flagged `NEW`). Targets:
-- **ring base address pair(s)** — low32/high32 writes (the `0x410`/`0x414` pattern); likely separate
-  playback vs capture, possibly per-channel.
-- **size / period registers**; a **start/stop control bit**; **pointer registers** (read repeatedly
-  while streaming = the DMA position).
-- correlate with the `0x104` enable mask and which cause regs become active.
+**Phase 1 — Streaming setup (BAR registers). ✅ LARGELY DONE — see §3b.**
+The register map (ring blocks `0x200`/`0x300`, base/size/control/pointer, IRQ config) and the
+stream-start write sequence are already recovered from `clarett_full_init_mute.log`. **Remaining:**
+one **playback-only** and one **record-only** capture to label which block is which direction (the
+duplex capture can't tell them apart), and to see whether per-channel vs single-ring changes with
+channel count. Quick to do; everything else in this phase is in hand.
 
 **Phase 2 — Buffer layout (guest RAM). `[PLAN]`**
 With the ring GPA(s) from Phase 1, snapshot guest RAM there during streaming (`pmemsave <gpa> <size>
@@ -113,3 +152,32 @@ program a guessed ring base/size, set the enable bit, and watch for (a) the buff
 (capture) or being consumed (playback) and (b) period IRQs on vec1/vec2 — reading the buffer back
 **directly**, no `pmemsave` needed. Riskier (a bad address faults the IOMMU — we already saw an
 AMD-Vi `IO_PAGE_FAULT` from one), so advance one register at a time.
+
+## 9. Immediate next steps `[PLAN — current]`
+
+Because §3b already gives the register map *and* `clarett_arm_device` already arms a fresh device, the
+fastest path now is an **active probe from our own driver**, not more passive tracing. Sequenced:
+
+1. **Engine-start probe (highest value).** After `clarett_arm_device`, in the driver: allocate a
+   DMA-coherent ring buffer, program the §3b stream-start sequence with *our* ring's bus address
+   (`0x204=28`, `0x208=0x1c0`, base `0x210/0x214`, then the `0x300` block, then `0x108`/`0x10c`/`0x110`
+   arm, then `0x20c=1`), and observe:
+   - **vec1/vec2 in `/proc/interrupts`** — do they start counting? (engine running = period IRQs)
+   - **the DMA pointer regs `0x218`/`0x318`** — do they advance? (DMA is live)
+   - **the front-panel Mute LED** — *does the monitor section now manifest?* This directly tests the
+     "control plane is inert until the engine streams" conclusion — and may make the whole control
+     plane come alive for the cost of just starting the engine, before any sample-format work.
+   Advance one register at a time; a bad base faults the IOMMU. Hook vec1/vec2 IRQ handlers first.
+2. **Sample format / interleave (Phase 2).** Once the ring is DMAing, read our own buffer back
+   directly (capture) or fill it with a 24-bit per-channel ramp (playback) and inspect — no `pmemsave`.
+   Resolves sample width, interleave, channel order, frame stride, and the `0x208=0x1c0`/pointer units.
+3. **Direction + IRQ cadence (Phases 1-tail/3).** Playback-only vs record-only to label `0x200`/`0x300`;
+   confirm the period rate (e.g. 48000/period) on vec1/vec2.
+4. **ALSA PCM (Phase 4).** `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the now-known
+   ring, with the vec1/vec2 handler calling `snd_pcm_period_elapsed`.
+
+Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
+and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
+*register* writes (no new mailbox clock command was needed beyond the bring-up we already replay), so
+clocking may already be covered by `clarett_arm_device`. Confirm during step 1; if the engine won't
+start, capture an FC sample-rate change to find the clock command.
