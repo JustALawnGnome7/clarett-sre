@@ -35,12 +35,16 @@ Each control commits with a `command` opcode. On the **8PreX** these are: `[XML]
 | 2 | monitor section (master mute / dim / gain) |
 | 3 | output hardware-control enable flags (gain/dim/mute enables) |
 | 4 | S/PDIF source (in / out) |
-| 5 | flash / persist app config |
+| 5 | flash / persist app config `[TRACE-CONFIRMED]` |
 | 6 | input mode (Mic/Line/Inst) |
 | 7 | input "Air" |
 | 8 | meter source |
 
 > Note: opcode numbers differ from the USB 8Pre (there air=8, mode=7, flash=6). Use these. `[XML]`
+> **Command 5 confirmed live** (`clarett_monitor_mutedim.log`): after a monitor mute/dim change commits
+> (command 2), Focusrite Control issues a **standalone `DATA_CMD{activate=5}`** — a bare flash-commit with
+> **no preceding `SET_DATA`** — on a short debounce (~52–56 transactions later). This is the persist path,
+> and it is *distinct* from the bulk appspace `SET_DATA` write-back of §8/§12. `[TRACE]`
 > Clock source and sample rate carry **no** offset/opcode → handled by **dedicated FCP commands**,
 > not config-space writes (see §7). `[INF/TRACE]`
 
@@ -277,9 +281,14 @@ traffic is only the GUI's meter view).
 ## 12. App storage & firmware `[XML]`
 
 - `appspace`: app region @ offset **200**, total **8392** bytes, persistent store **8192** bytes,
-  flashed via opcode **5**. **Layout confirmed by trace:** any control change triggers a write-back of
+  flashed via opcode **5**. **Layout confirmed by trace:** some control changes trigger a write-back of
   the full 8192-byte store via `SET_DATA` in 1016-byte (1 KB-payload) chunks from offset 200 to 8392
-  (transport spec §8). The observed write-back is RAM-only (no opcode-5 flash follows). `[TRACE]`
+  (transport spec §8); that bulk write-back is RAM-only (no opcode-5 flash follows it). `[TRACE]`
+- **Two distinct persist behaviours observed — they do not co-occur:** the monitor mute/dim change
+  (`clarett_monitor_mutedim.log`) does the *opposite* — a standalone `DATA_CMD{activate=5}` flash-commit
+  with **no** appspace `SET_DATA` write-back at all (see §2). So persist is per-control: a bulk RAM
+  write-back for some controls, a bare opcode-5 flash-commit for the monitor section. The full trigger
+  matrix (which controls take which path, and when the RAM store is actually flashed) is **`[TRACE]`**. `[TRACE]`
 - Firmware segments:
   - `App_Upgrade` ("App") — `ClarettThunderbolt.tca`, version 1016, version field 32-bit @ offset 8.
   - `FPGA_Upgrade` ("FPGA") — `fp001005_tb_top.bit`, version 1021, version field 32-bit @ offset 12.
