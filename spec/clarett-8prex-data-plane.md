@@ -1,7 +1,8 @@
 # Clarett 8PreX — Data-Plane Capture Plan (PCM DMA streaming)
 
 **Status:** Phase 1 (streaming register map) **recovered** from `clarett_full_init_mute.log` — see §3b;
-the rest (sample format, IRQ cadence, implementation) is still open. This scopes how to reverse-engineer
+Phase 2 (descriptor format + sample layout) **recovered** from live guest-RAM dumps — see §3c. The
+rest (IRQ cadence, implementation) is still open. This scopes how to reverse-engineer
 the audio **data plane** (bus-master DMA streaming): the methodology shift it needs, the tooling, and
 the phased sequence. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` =
 confirmed from a capture; `[ANCHOR]` = a control-plane fact we build on.
@@ -67,7 +68,7 @@ vec1/vec2 period-IRQ hypothesis:
 | `+0x04` | `0x1c` (28) | `0x1c` (28) | channel count (28 PCM ch/direction) |
 | `+0x08` | `0x1c0` (448) | `0x1c0` | size / period (units TBD) |
 | `+0x0c` | `0x1` | *(not written)* | enable/start bit |
-| `+0x10` / `+0x14` | `0x589b9000` / `0x2` | `0x589bd000` / `0x2` | **ring base** bus addr (low32/high32) |
+| `+0x10` / `+0x14` | `0x589b9000` / `0x2` | `0x589bd000` / `0x2` | **descriptor-table base** bus addr (low32 / **high32**, not control — see §3c) |
 | `+0x18` / `+0x1c` | read ×126 (`0x10`–`0x11`) | read ×126 (`0x4`–`0x5`) | **DMA pointer** (period-index units `[HYP]`) |
 
 Other data-plane offsets: `0x108=0x10`, `0x10c=0x1e70700`, `0x110=0x7`→`0x0` (IRQ config/arm);
@@ -91,31 +92,58 @@ guest-physical (VM RAM), 16 KB apart (`0x589b9000` → `0x589bd000`).
 `stream_probe=1`) replayed this exact sequence with a zeroed driver ring and the device immediately
 faulted: **`AMD-Vi IO_PAGE_FAULT address=0x0`** — it dereferenced a *null pointer read from inside the
 ring*, not our base. So `+0x10/+0x14` is a **descriptor-table** base, each entry carrying the actual
-per-channel buffer address; a zeroed table = null buffer pointers. The sizes confirm the shape:
-**`+0x04 = 0x1c = 28` descriptors × 16 bytes = `0x1c0` = `+0x08`** → one 16-byte descriptor per PCM
-channel. `[HYP: descriptor = {buffer addr, length, flags?}; exact layout TBD from a RAM dump]`
+buffer address; a zeroed table = null buffer pointers. The format is now decoded from live RAM — §3c.
 
 **Open questions this leaves (the remaining phases):**
-- **Descriptor format** (the new blocker): field order/size of the 16-byte entry — get it from a
-  guest-RAM dump of the live descriptor table (Phase 2), then build valid descriptors + per-channel
-  buffers and re-run the probe.
-- **Direction:** which block is playback vs capture (run playback-only vs record-only to separate).
 - **The DMA pointer units** (`+0x18`, saw `0x4`–`0x11`) — descriptor index? (cadence + dump).
 - Whether `0x20c` is per-ring or a global enable (only one of the two was written).
+- `+0x08 = 0x1c0` (448) units still TBD — it is **not** the table size (the table is 8-byte entries,
+  hundreds of them, §3c); 448 = 4 frames (4 × `0x70`), so possibly a per-fragment byte length.
+
+## 3c. Descriptor table + sample format — RECOVERED from live guest-RAM dumps `[TRACE]`
+
+Dumped both tables and their target buffers from the live VM via QMP `pmemsave` while FC streamed a
+stereo signal (recipe in §5). **Key gotcha:** `+0x14`/`+0x14` (`0x214`/`0x314`) is the address **high32**
+(`= 0x2`, i.e. the DMA arena sits at guest-physical `0x2_xxxxxxxx`), **not** a control/enable field as
+`bar_profile` first guessed — dumping with `high=0` reads a blank page.
+
+**Descriptor table** (at `0x210/0x214`, `0x310/0x314`):
+- An array of **8-byte little-endian guest-physical addresses** — one bare buffer pointer per entry,
+  no length/flags word. **Zero-terminated** (first all-zero entry ends the list).
+- **TX/playback (`0x200`) ≈ 756 entries; RX/capture (`0x300`) ≈ 2048 entries** — capture runs a deeper
+  scatter list; the count is a *buffer-depth* difference, not a channel-count one. Past the terminator
+  a second structure begins (small per-entry words — likely lengths/control; not yet decoded).
+- Entries point into a contiguous-ish DMA arena (TX ≈ `0x2_77–79xxxxxx`, RX ≈ `0x2_3fcaxxxx`), each
+  pointer to a small fragment (consecutive entries step `0x100`–`0x700`).
+
+**Sample / frame format** (the buffers the descriptors point to):
+- **28-channel interleaved frames, frame stride `0x70` = 112 bytes = 28 × 4** — matches the `+0x04 = 28`
+  channel-count register exactly.
+- Each sample is **32-bit little-endian carrying a 24-bit value left-justified (MSB-aligned)** — every
+  sample's low byte is `0x00`, i.e. `sample24 << 8`. ALSA equivalent: `S32_LE` (24 significant bits).
+
+**Direction `[TRACE]`** — settled by *which* channels were live:
+- **`0x200` block (vec1) = playback / TX:** only ch0/ch1 non-zero, carrying the stereo signal we played.
+- **`0x300` block (vec2) = capture / RX:** the 8 analog-input channels all sat at a low noise floor
+  (nothing plugged in) with two further channels carrying signal — the converters' live input, not a
+  played buffer.
+
+This is enough to build valid tables in the driver: allocate a mapped DMA buffer, lay out 28×`S32_LE`
+interleaved frames, and fill the descriptor table with the fragment bus addresses (a single contiguous
+buffer with entries at the fragment stride satisfies the engine — it only needs valid DMA targets).
 
 ## 4. Phased capture plan
 
 **Phase 1 — Streaming setup (BAR registers). ✅ LARGELY DONE — see §3b.**
 The register map (ring blocks `0x200`/`0x300`, base/size/control/pointer, IRQ config) and the
-stream-start write sequence are already recovered from `clarett_full_init_mute.log`. **Remaining:**
-one **playback-only** and one **record-only** capture to label which block is which direction (the
-duplex capture can't tell them apart), and to see whether per-channel vs single-ring changes with
-channel count. Quick to do; everything else in this phase is in hand.
+stream-start write sequence are already recovered from `clarett_full_init_mute.log`. Direction
+(`0x200`=TX, `0x300`=RX) is now also settled — not by playback-only/record-only captures but by
+reading *which channels were live* in the RAM dumps (§3c). This phase is in hand.
 
-**Phase 2 — Buffer layout (guest RAM). `[PLAN]`**
-With the ring GPA(s) from Phase 1, snapshot guest RAM there during streaming (`pmemsave <gpa> <size>
-<file>` from the QEMU monitor) while playing a **known signal**. Read off: sample width (16/24/32-bit),
-interleave (per-channel blocks vs interleaved frames), channel ordering, frame stride, ring size.
+**Phase 2 — Buffer layout (guest RAM). ✅ DONE — see §3c.**
+Live QMP `pmemsave` of both descriptor tables and their target buffers gave the descriptor format
+(8-byte LE GPA, zero-terminated) and the sample layout (28-ch interleaved `S32_LE` 24-bit MSB-justified,
+`0x70` frame stride), and labelled direction (`0x200`=TX, `0x300`=RX) from which channels were live.
 
 **Phase 3 — Period IRQ correlation. `[PLAN]`**
 Stream with `fcp_decode.py --async`; `vec1`/`vec2` (cause `0x200`/`0x300`) should fire at the period
@@ -177,14 +205,16 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    **DONE (`stream_probe=1`):** the engine did **not** start — `IO_PAGE_FAULT address=0x0`, vec1/vec2=0,
    pointers flat. Result: the ring base is a **descriptor table** (§3b), not a flat buffer; a zeroed
    table faults on the first null descriptor. So before the engine can run we need the descriptor format.
-2. **Descriptor format (new blocker, Phase 2 via RAM dump).** In the VM with FC streaming, find the
-   current ring base (a fresh `bar_profile` of the stream start) and `pmemsave <ring_gpa> 0x1c0
-   descs.bin` from the QEMU monitor. Decode the 28×16-byte entries: which words are the buffer address
-   (low/high), which is length, any flags. Cross-check against the per-channel sample buffers the
-   descriptors point to (dump those too) for sample width / interleave / channel order.
-3. **Re-run the engine probe with valid descriptors.** Build a 28-entry descriptor table + per-channel
-   buffers in the driver ring, re-program, and confirm vec1/vec2 fire + pointer advances + (the big
-   question) whether the Mute LED manifests.
+2. **Descriptor format (Phase 2 via RAM dump). DONE — see §3c.** Live QMP `pmemsave` of both tables and
+   their target buffers gave the full format: 8-byte little-endian GPA per descriptor (zero-terminated;
+   ~756 TX / ~2048 RX entries), buffers = 28-channel interleaved `S32_LE` (24-bit MSB-justified) frames
+   at `0x70` stride, and the direction labels (`0x200`=TX, `0x300`=RX). The earlier "16-byte × 28
+   descriptors" read was wrong (that was `0x1c0` = `+0x08`, a different field).
+3. **Re-run the engine probe with a valid table (next).** Allocate a mapped DMA buffer, lay out
+   28×`S32_LE` interleaved frames, fill the descriptor table with the fragment bus addresses (low32 at
+   `[entry]`, the engine reads the full 64-bit pointer), program base lo/hi at `0x210/0x214` (+ `0x310/
+   0x314`), re-run, and confirm vec1/vec2 fire + pointer advances + (the big question) whether the
+   Mute LED manifests.
 4. **Direction + IRQ cadence.** Playback-only vs record-only to label `0x200`/`0x300`; confirm period rate.
 5. **ALSA PCM (Phase 4).** `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the descriptor
    ring, with the vec1/vec2 handler calling `snd_pcm_period_elapsed`.
