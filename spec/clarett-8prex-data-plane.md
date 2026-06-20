@@ -234,18 +234,32 @@ fastest path now is an **active probe from our own driver**, not more passive tr
      adjacent pool. There is **no writeback pointer** to recover.
    - **Not the descriptor count.** Filling all entries with a full-depth (2048) all-valid cycling ring
      (no early zero terminator) changed nothing — identical burst to base 0.
-   - **Not table-base alignment** (on its own). Page-aligning block 1's base made it *worse* — a fault
-     storm plus a new descriptor *read* fault at 0 — i.e. the RX engine engaged its table but still
-     resolved targets to 0.
+   - **Not table-base alignment.** Cleanly isolated (256-desc baseline, only the page-align added):
+     block 1's base became `…fffdd000` (aligned, `rx_desc[0]=…fffdd840` valid) and capture *still* burst
+     to base 0 — now a 64k-fault storm because the aligned base makes the RX engine engage harder. So
+     the VM's page-aligned bases are incidental, not the fix.
    - **No 4th DMA-address register and no streaming FCP.** The entire capture has exactly three
      address-holding registers (`0x210` TX table, `0x310` RX table, `0x410` GET-response) and the only
-     FCP during streaming is meter polls + a mid-stream control toggle. So the capture write target is
-     set by a **capture-specific step we have not isolated** — block 1's base does not latch into the
-     write engine the way block 0's does for reads.
-   **Next:** the skipped Phase-1 item — capture **playback-only** and **record-only** streams in the VM
-   (FC or a one-direction test app), trace each, and diff the register/FCP sequences. That isolates the
-   capture-specific setup (an enable like `0x30c`? a different base-latch order? an FCP arm?) the duplex
-   capture can't separate, and definitively labels which block is which direction.
+     FCP during streaming is meter polls + a mid-stream control toggle.
+   - **Not a capture-specific register step.** `bar_profile` of a **playback-only** vs a **record-only**
+     stream are *register-identical* — both always program **both** ring blocks (`0x200` and `0x300`)
+     with the same sequence and the same bases (`0x..a000` / `0x..7000`, also identical across the two
+     runs → FC pins fixed DMA buffers). The device always arms full-duplex; there is no extra enable
+     (`0x30c` is never written) or FCP arm for capture. (This also retires the Phase-1 single-direction
+     captures — done.)
+   **Where that leaves it:** the register/FCP setup is symmetric and we replicate it, block 1's base
+   latches (readback confirms) and points at a valid table, yet the capture *write* engine resolves its
+   target to absolute 0 regardless of NDESC/alignment/our descriptor contents. The write burst is a
+   monotonic `0x80`-strided run from 0 (one ~`0x500`-byte region, not per-descriptor resets), so it
+   looks like the device writing one block to a base it holds as 0 — a base set by neither a register,
+   FCP, nor the descriptor ring we can see. **Next candidate angles** (need a new kind of observation —
+   our tooling sees MMIO + RAM snapshots, never the device's own DMA reads/writes):
+   - a **block-1-only** driver probe (configure only `0x300`, skip `0x200`) to confirm the write target
+     is independent of block 0;
+   - check whether the capture engine expects a **64-bit descriptor read** quirk (our 8-byte LE entries'
+     zero high-dwords being misread as separate null descriptors);
+   - dump, in the VM, the exact bytes the device writes for capture by snapshotting block 1's fragments
+     mid-stream and matching the `0x80` record stride against an interleave we haven't considered.
 5. **Then ALSA PCM (Phase 4).** Once both directions DMA into our buffers, wire `snd_pcm_ops`
    (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the vec1/vec2 handler calling
    `snd_pcm_period_elapsed`.
