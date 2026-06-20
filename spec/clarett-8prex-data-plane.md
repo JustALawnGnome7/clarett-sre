@@ -221,19 +221,34 @@ fastest path now is an **active probe from our own driver**, not more passive tr
      `tx_desc[0]=…fffc0840`).
    - **Playback (block 0) reads correctly** — `ptr0` advances with **no read faults**: the device walks
      our TX descriptor table and reads the fragments.
-   - **Capture (block 1) writes to a NULL base** — the remaining bug. The faults are now device *writes*
-     (`flags=0x20`) marching `address=0x0, 0x80, 0x100, 0x180 …` (0x80 stride) from base 0, and our RX
-     fragments stay zero. So the device gets its capture/position write target from somewhere we leave
-     zeroed — most likely the **ring control block** that followed the descriptor zero-terminator in the
-     VM dumps (the `1a3c3700…` / `80006005…` words, §3c), i.e. a position/status writeback pointer. We
-     don't replicate it, so the device writes to null (benign in the VM where address 0 is mapped).
-4. **Recover the ring control block (next blocker).** Dump the VM region *after* each descriptor
-   terminator (`pmemsave <table_base + table_len> …`) and decode the control structure — find the
-   write-target / position-writeback pointer, build it in the driver, and the capture writes should land
-   in our RX fragments (`capture-buf=GOT DATA`).
-5. **Direction + IRQ cadence; then ALSA PCM (Phase 4).** Once both directions DMA into our buffers,
-   wire `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the
-   vec1/vec2 handler calling `snd_pcm_period_elapsed`.
+   - **Capture (block 1) writes to a NULL base** — the remaining bug. The faults are device *writes*
+     (`flags=0x20`) in a one-shot startup burst marching `address=0x0, 0x80, 0x100, 0x180 …` (0x80
+     stride) from base 0; our RX fragments stay zero and the engine then **stalls** (`ptr1` stuck at 4,
+     `ptr0` at ~17 — far below a 48 kHz rate). Playback (block 0, page-aligned base) reads our table
+     fine; capture (block 1) does not write to ours.
+4. **Capture-to-null: hypotheses RULED OUT, root cause still open.** Tested against a freshly
+   power-cycled device:
+   - **Not a ring control block.** Dumping the VM region after the RX descriptor terminator showed
+     unrelated Windows NonPaged **pool** memory (a NIC driver's strings + pool tags `NDst`/`Iptt`/`ExTm`/
+     `VIsr`, kernel VAs `0xffffaf01…`), not a control structure. The `80006005…` words were just
+     adjacent pool. There is **no writeback pointer** to recover.
+   - **Not the descriptor count.** Filling all entries with a full-depth (2048) all-valid cycling ring
+     (no early zero terminator) changed nothing — identical burst to base 0.
+   - **Not table-base alignment** (on its own). Page-aligning block 1's base made it *worse* — a fault
+     storm plus a new descriptor *read* fault at 0 — i.e. the RX engine engaged its table but still
+     resolved targets to 0.
+   - **No 4th DMA-address register and no streaming FCP.** The entire capture has exactly three
+     address-holding registers (`0x210` TX table, `0x310` RX table, `0x410` GET-response) and the only
+     FCP during streaming is meter polls + a mid-stream control toggle. So the capture write target is
+     set by a **capture-specific step we have not isolated** — block 1's base does not latch into the
+     write engine the way block 0's does for reads.
+   **Next:** the skipped Phase-1 item — capture **playback-only** and **record-only** streams in the VM
+   (FC or a one-direction test app), trace each, and diff the register/FCP sequences. That isolates the
+   capture-specific setup (an enable like `0x30c`? a different base-latch order? an FCP arm?) the duplex
+   capture can't separate, and definitively labels which block is which direction.
+5. **Then ALSA PCM (Phase 4).** Once both directions DMA into our buffers, wire `snd_pcm_ops`
+   (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the vec1/vec2 handler calling
+   `snd_pcm_period_elapsed`.
 
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
 and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
