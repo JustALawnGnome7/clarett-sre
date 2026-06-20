@@ -49,9 +49,17 @@ struct snd_kcontrol;
 #define   STREAM_OFF_BASE_HI     0x14    /* ring base bus address high 32   */
 #define   STREAM_OFF_PTR         0x18    /* DMA position (read-only)        */
 #define STREAM_CHANS             0x1c    /* 28 PCM channels per direction   */
-#define STREAM_SIZE_VAL          0x1c0
-#define CLARETT_STREAM_BUF       (128 * 1024)   /* coherent ring buffer (generous; avoids fault) */
-#define CLARETT_STREAM_RING_GAP  0x4000         /* block-1 ring offset (capture spaced them 16 KB) */
+#define STREAM_SIZE_VAL          0x1c0   /* 0x208: bytes the engine DMAs per descriptor */
+/*
+ * Descriptor ring (data-plane spec §3c). 0x210/0x214 (and 0x310/0x314) point at a table of bare
+ * 8-byte little-endian guest-physical addresses, zero-terminated; each entry is one DMA fragment of
+ * STREAM_SIZE_VAL bytes holding 28-channel S32_LE (24-bit MSB-justified) interleaved frames
+ * (CLARETT_STREAM_FRAME = 28 * 4). The probe lays CLARETT_STREAM_NDESC valid entries (+ a zero
+ * terminator) per ring over one contiguous coherent buffer.
+ */
+#define CLARETT_STREAM_NDESC     256            /* descriptors per ring (probe depth)         */
+#define CLARETT_STREAM_FRAG      STREAM_SIZE_VAL /* fragment bytes per descriptor              */
+#define CLARETT_STREAM_FRAME     0x70           /* 112 = 28 channels x S32_LE                  */
 
 /* FCP mailbox header layout, relative to REG_MBOX */
 #define MBOX_CMD                 0x00    /* bit31 = execute flag | opcode               */

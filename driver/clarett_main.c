@@ -142,42 +142,90 @@ static int clarett_enable_monitor_hw_controls(struct clarett *c)
 				  HWEN_MONITOR_DIM_MASK, HWEN_ACTIVATE);
 }
 
-/* 1 s after engine-start, log whether the DMA pointers advanced and the period IRQs fired. */
+/*
+ * Carve the coherent buffer into two identical rings (block 0 = TX, block 1 = RX). Each ring is a
+ * zero-terminated descriptor table followed by its sample fragments; *ring is one ring's byte span,
+ * so block 1 begins at offset *ring. Same math in start and report so they agree.
+ */
+static void clarett_ring_layout(size_t *tbl, size_t *smp, size_t *ring)
+{
+	*tbl = ALIGN((CLARETT_STREAM_NDESC + 1) * sizeof(__le64), 64);
+	*smp = CLARETT_STREAM_NDESC * CLARETT_STREAM_FRAG;
+	*ring = *tbl + *smp;
+}
+
+/* 1 s after engine-start, log whether DMA advanced: period IRQs, pointer regs, capture-buffer writes. */
 static void clarett_stream_report(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, stream_report.work);
+	size_t tbl, smp, ring, i;
+	const u8 *rx_smp;
+	bool rx_data = false;
+
+	clarett_ring_layout(&tbl, &smp, &ring);
+	rx_smp = (const u8 *)c->stream_buf + ring + tbl;	/* block-1 (capture) sample area */
+	for (i = 0; i < smp; i++) {
+		if (rx_smp[i]) {
+			rx_data = true;
+			break;
+		}
+	}
 
 	dev_info(&c->pci->dev,
-		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x "
-		 "(IRQs counting / ptr moving from start => engine is running)\n",
+		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x; capture-buf=%s "
+		 "(IRQs counting / ptr moving / capture-buf written => engine is running)\n",
 		 atomic_read(&c->period_irqs[1]), atomic_read(&c->period_irqs[2]),
 		 readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_PTR),
-		 readl(c->bar0 + STREAM_BLK1 + STREAM_OFF_PTR));
+		 readl(c->bar0 + STREAM_BLK1 + STREAM_OFF_PTR),
+		 rx_data ? "GOT DATA" : "still zero");
 }
 
 /*
  * Data-plane engine-start probe (data-plane spec §9, opt-in via stream_probe). Replays the captured
- * §3b stream-start register sequence with our own coherent ring as the DMA base, then watches whether
- * the engine runs (vec1/vec2 IRQs + advancing DMA pointer). NOT a PCM implementation. The point is to
- * test whether starting the engine makes the control plane physically manifest (e.g. the Mute LED).
+ * §3b stream-start register sequence, but now with a valid descriptor table per §3c: 0x210/0x214 point
+ * at a zeroed-terminated array of 8-byte bus addresses, each naming one STREAM_SIZE_VAL fragment of our
+ * coherent buffer. Then watches whether the engine runs (vec1/vec2 IRQs, advancing pointer, the device
+ * writing the capture buffer). NOT a PCM implementation. The point is to test whether starting the
+ * engine makes the control plane physically manifest (e.g. the Mute LED).
  */
 static int clarett_engine_start(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
-	dma_addr_t r0, r1;
+	size_t tbl, smp, ring;
+	__le64 *tx_tbl, *rx_tbl;
+	dma_addr_t tx_smp, rx_smp, r0, r1;
+	unsigned int i;
 
-	c->stream_size = CLARETT_STREAM_BUF;
+	clarett_ring_layout(&tbl, &smp, &ring);
+	c->stream_size = 2 * ring;
 	c->stream_buf = dmam_alloc_coherent(&c->pci->dev, c->stream_size,
 					    &c->stream_dma, GFP_KERNEL);
 	if (!c->stream_buf)
 		return -ENOMEM;
 
-	r0 = c->stream_dma;				/* ring block 0 */
-	r1 = c->stream_dma + CLARETT_STREAM_RING_GAP;	/* ring block 1 */
+	/* Block 0 (vec1) = playback/TX, block 1 (vec2) = capture/RX (spec §3c). */
+	tx_tbl = (__le64 *)c->stream_buf;
+	rx_tbl = (__le64 *)((u8 *)c->stream_buf + ring);
+	tx_smp = c->stream_dma + tbl;
+	rx_smp = c->stream_dma + ring + tbl;
+
+	/* Fill descriptors with fragment bus addresses; entry [NDESC] stays 0 = ring terminator. */
+	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
+		tx_tbl[i] = cpu_to_le64(tx_smp + (dma_addr_t)i * CLARETT_STREAM_FRAG);
+		rx_tbl[i] = cpu_to_le64(rx_smp + (dma_addr_t)i * CLARETT_STREAM_FRAG);
+	}
+
+	r0 = c->stream_dma;		/* block-0 descriptor-table base */
+	r1 = c->stream_dma + ring;	/* block-1 descriptor-table base */
 
 	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
 
-	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c enable */
+	/*
+	 * Program both descriptor-table bases BEFORE enabling (0x20c). The Windows capture wrote 0x20c=1
+	 * first, but that device kept a non-zero base latched from a prior run; on our freshly-armed
+	 * device the base is 0, so enabling first made the engine fetch the table from address 0
+	 * (IO_PAGE_FAULT @0x0). Base-then-enable avoids that.
+	 */
 	writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
 	writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
 	writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);	/* 0x214 */
@@ -188,15 +236,33 @@ static int clarett_engine_start(struct clarett *c)
 	writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);	/* 0x314 */
 	writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);	/* 0x310 */
 
+	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c enable (after bases set) */
+
 	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
-	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 */
-	writel(0x0, bar + REG_STREAM_IRQ_ARM);				/* 0x110 */
+	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm */
+	/*
+	 * NB: the capture's 0x110=0x0 lands 13 s later (stream-stop), not as a pulse here — writing it
+	 * now would disarm the period IRQs immediately. clarett_engine_stop() issues the 0x0 at teardown.
+	 */
 
 	c->stream_on = true;
 	dev_info(&c->pci->dev,
-		 "engine probe: started; rings @ %pad / %pad, ptr0=0x%x ptr1=0x%x\n",
-		 &r0, &r1, readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 "engine probe: started; %u-desc tables @ %pad / %pad, ptr0=0x%x ptr1=0x%x\n",
+		 CLARETT_STREAM_NDESC, &r0, &r1,
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
+	/* Diagnostic: did the base latch, and what does the device see at descriptor[0]? */
+	dev_info(&c->pci->dev,
+		 "engine regs: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ptr=%08x | "
+		 "tx_desc[0]=%016llx rx_desc[0]=%016llx\n",
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_CTRL),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
+		 le64_to_cpu(tx_tbl[0]), le64_to_cpu(rx_tbl[0]));
 	schedule_delayed_work(&c->stream_report, msecs_to_jiffies(1000));
 	return 0;
 }

@@ -210,14 +210,30 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    ~756 TX / ~2048 RX entries), buffers = 28-channel interleaved `S32_LE` (24-bit MSB-justified) frames
    at `0x70` stride, and the direction labels (`0x200`=TX, `0x300`=RX). The earlier "16-byte × 28
    descriptors" read was wrong (that was `0x1c0` = `+0x08`, a different field).
-3. **Re-run the engine probe with a valid table (next).** Allocate a mapped DMA buffer, lay out
-   28×`S32_LE` interleaved frames, fill the descriptor table with the fragment bus addresses (low32 at
-   `[entry]`, the engine reads the full 64-bit pointer), program base lo/hi at `0x210/0x214` (+ `0x310/
-   0x314`), re-run, and confirm vec1/vec2 fire + pointer advances + (the big question) whether the
-   Mute LED manifests.
-4. **Direction + IRQ cadence.** Playback-only vs record-only to label `0x200`/`0x300`; confirm period rate.
-5. **ALSA PCM (Phase 4).** `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the descriptor
-   ring, with the vec1/vec2 handler calling `snd_pcm_period_elapsed`.
+3. **Re-run the engine probe with a valid table. DONE — the engine RUNS.** With per-ring descriptor
+   tables built (8-byte LE GPA entries over a coherent buffer) and the period IRQs left **armed**, the
+   DMA pointers `0x218/0x318` advance (`ptr0=0x11`, `ptr1=0x4`). Two corrections were needed:
+   - **`0x110=0x0` is stream-stop, not a pulse.** The capture writes `0x110=0x7` at start and `0x110=0x0`
+     **13 s later** (line 9710 vs 31657); issuing the `0x0` immediately disarmed the period IRQs and the
+     engine never clocked. Arm with `0x7` only; the `0x0` belongs at teardown (`clarett_engine_stop`).
+   - **Base-before-enable** (write `0x204/0x208/0x214/0x210` + the `0x300` block, *then* `0x20c=1`) —
+     though on the running engine the base latched either way (readback confirms `blk0 base=…:fffc0000`,
+     `tx_desc[0]=…fffc0840`).
+   - **Playback (block 0) reads correctly** — `ptr0` advances with **no read faults**: the device walks
+     our TX descriptor table and reads the fragments.
+   - **Capture (block 1) writes to a NULL base** — the remaining bug. The faults are now device *writes*
+     (`flags=0x20`) marching `address=0x0, 0x80, 0x100, 0x180 …` (0x80 stride) from base 0, and our RX
+     fragments stay zero. So the device gets its capture/position write target from somewhere we leave
+     zeroed — most likely the **ring control block** that followed the descriptor zero-terminator in the
+     VM dumps (the `1a3c3700…` / `80006005…` words, §3c), i.e. a position/status writeback pointer. We
+     don't replicate it, so the device writes to null (benign in the VM where address 0 is mapped).
+4. **Recover the ring control block (next blocker).** Dump the VM region *after* each descriptor
+   terminator (`pmemsave <table_base + table_len> …`) and decode the control structure — find the
+   write-target / position-writeback pointer, build it in the driver, and the capture writes should land
+   in our RX fragments (`capture-buf=GOT DATA`).
+5. **Direction + IRQ cadence; then ALSA PCM (Phase 4).** Once both directions DMA into our buffers,
+   wire `snd_pcm_ops` (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the
+   vec1/vec2 handler calling `snd_pcm_period_elapsed`.
 
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
 and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
