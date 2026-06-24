@@ -247,19 +247,27 @@ fastest path now is an **active probe from our own driver**, not more passive tr
      runs → FC pins fixed DMA buffers). The device always arms full-duplex; there is no extra enable
      (`0x30c` is never written) or FCP arm for capture. (This also retires the Phase-1 single-direction
      captures — done.)
-   **Where that leaves it:** the register/FCP setup is symmetric and we replicate it, block 1's base
-   latches (readback confirms) and points at a valid table, yet the capture *write* engine resolves its
-   target to absolute 0 regardless of NDESC/alignment/our descriptor contents. The write burst is a
-   monotonic `0x80`-strided run from 0 (one ~`0x500`-byte region, not per-descriptor resets), so it
-   looks like the device writing one block to a base it holds as 0 — a base set by neither a register,
-   FCP, nor the descriptor ring we can see. **Next candidate angles** (need a new kind of observation —
-   our tooling sees MMIO + RAM snapshots, never the device's own DMA reads/writes):
-   - a **block-1-only** driver probe (configure only `0x300`, skip `0x200`) to confirm the write target
-     is independent of block 0;
-   - check whether the capture engine expects a **64-bit descriptor read** quirk (our 8-byte LE entries'
-     zero high-dwords being misread as separate null descriptors);
-   - dump, in the VM, the exact bytes the device writes for capture by snapshotting block 1's fragments
-     mid-stream and matching the `0x80` record stride against an interleave we haven't considered.
+   **BREAKTHROUGH — capture works; the storm is block 0's, not block 1's.** The block-1-only probe
+   (`blk1_only=1`: configure only `0x300`, leave block 0's base null, enable globally via `0x20c`)
+   plus a **0xAA pre-fill marker** on the RX sample area settled it. Result: `ptr1` advanced to `0x4`
+   and `capture-buf=WRITTEN (marker gone)` — **the device overwrote our marker with samples**. Block 1
+   captures correctly into the table we program; it only *looked* broken before because, with nothing
+   plugged in, it writes (near-silent) zeros over an already-zeroed buffer, which the old "any non-zero
+   byte" scan read as "didn't write." Capture is effectively solved.
+   The remaining `IO_PAGE_FAULT address=0x0` is **block 0's**, and it is *not* sample DMA. In the
+   block-1-only run, block 0's base was deliberately left null (`blk0 base=00000000:00000000`) yet block
+   0 still armed (global `0x20c`=1 sets its `ctrl`) and emitted a single write to 0 — i.e. **playback
+   tries to write to a buffer we never configured**. The `0x80`-strided monotonic burst is a
+   **playback-side DMA position/status writeback** (the engine reporting its TX consumer position),
+   whose base is set by neither of the three known DMA registers (`0x210`/`0x310`/`0x410`) nor by any
+   streaming FCP — so it must come from a step we still skip. **Next candidate angles:**
+   - the **8 KB config read/writeback** that `clarett_init_seq` replays at bring-up: it may carry the
+     playback writeback-buffer base (or a bit that disables position writeback); re-examine whether the
+     8 KB block contains a guest-physical address field we currently echo back verbatim.
+   - look for a **playback-only enable/disable bit** in the `0x200` block (or `0x108`/`0x10c`) that
+     suppresses the position writeback — block 1 (capture) has no equivalent storm.
+   - if capture alone is enough for a first PCM milestone, **wire capture-only ALSA** (block 1) now and
+     defer the playback writeback hunt.
 5. **Then ALSA PCM (Phase 4).** Once both directions DMA into our buffers, wire `snd_pcm_ops`
    (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the vec1/vec2 handler calling
    `snd_pcm_period_elapsed`.

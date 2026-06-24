@@ -27,6 +27,12 @@ MODULE_PARM_DESC(stream_probe,
 		 "Data-plane experiment: after bring-up, program the §3b ring registers with a driver "
 		 "buffer and watch for vec1/vec2 IRQs + DMA-pointer movement (off by default).");
 
+static bool blk1_only;
+module_param(blk1_only, bool, 0444);
+MODULE_PARM_DESC(blk1_only,
+		 "Engine-probe isolation: configure ONLY ring block 1 (0x300, capture) and enable it via "
+		 "0x30c, leaving block 0 (0x200) untouched. Isolates whether the capture writes are block 1's.");
+
 static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
@@ -165,7 +171,7 @@ static void clarett_stream_report(struct work_struct *work)
 	clarett_ring_layout(&tbl, &smp, &ring);
 	rx_smp = (const u8 *)c->stream_buf + ring + tbl;	/* block-1 (capture) sample area */
 	for (i = 0; i < smp; i++) {
-		if (rx_smp[i]) {
+		if (rx_smp[i] != 0xAA) {	/* any byte the device overwrote (incl. zeros) */
 			rx_data = true;
 			break;
 		}
@@ -173,11 +179,11 @@ static void clarett_stream_report(struct work_struct *work)
 
 	dev_info(&c->pci->dev,
 		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x; capture-buf=%s "
-		 "(IRQs counting / ptr moving / capture-buf written => engine is running)\n",
+		 "(0xAA marker overwritten => device wrote the RX buffer, even with silence)\n",
 		 atomic_read(&c->period_irqs[1]), atomic_read(&c->period_irqs[2]),
 		 readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_PTR),
 		 readl(c->bar0 + STREAM_BLK1 + STREAM_OFF_PTR),
-		 rx_data ? "GOT DATA" : "still zero");
+		 rx_data ? "WRITTEN (marker gone)" : "untouched (marker intact)");
 }
 
 /*
@@ -215,28 +221,43 @@ static int clarett_engine_start(struct clarett *c)
 		rx_tbl[i] = cpu_to_le64(rx_smp + (dma_addr_t)i * CLARETT_STREAM_FRAG);
 	}
 
+	/*
+	 * Mark the RX (capture) sample area with 0xAA so the report can tell "device wrote silence (zeros)"
+	 * from "device never wrote" — with nothing plugged in, a working capture writes near-zero samples
+	 * that a plain non-zero scan would miss.
+	 */
+	memset((u8 *)c->stream_buf + ring + tbl, 0xAA, smp);
+
 	r0 = c->stream_dma;		/* block-0 descriptor-table base */
 	r1 = c->stream_dma + ring;	/* block-1 descriptor-table base */
 
 	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
 
 	/*
-	 * Program both descriptor-table bases BEFORE enabling (0x20c). The Windows capture wrote 0x20c=1
+	 * Program the descriptor-table base(s) BEFORE enabling. The Windows capture wrote the enable
 	 * first, but that device kept a non-zero base latched from a prior run; on our freshly-armed
 	 * device the base is 0, so enabling first made the engine fetch the table from address 0
 	 * (IO_PAGE_FAULT @0x0). Base-then-enable avoids that.
 	 */
-	writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
-	writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
-	writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);	/* 0x214 */
-	writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO);	/* 0x210 (low last) */
+	if (!blk1_only) {
+		writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
+		writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
+		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
+		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
+	}
 
 	writel(STREAM_CHANS, bar + STREAM_BLK1 + STREAM_OFF_CHANS);	/* 0x304 */
 	writel(STREAM_SIZE_VAL, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	/* 0x308 */
 	writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);	/* 0x314 */
 	writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);	/* 0x310 */
 
-	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c enable (after bases set) */
+	/*
+	 * Enable via 0x20c — the sole *global* enable (0x30c is not a per-block enable; writing it reads
+	 * back 0). In blk1_only mode block 0's base is left null (skipped above), so after the global
+	 * enable block 0 read-faults at 0 (flags=0) while block 1 writes capture: the fault flags then
+	 * attribute the write-to-null (flags=0x20) to block 1's engine specifically.
+	 */
+	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c global enable */
 
 	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
 	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm */
@@ -253,7 +274,7 @@ static int clarett_engine_start(struct clarett *c)
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
 	/* Diagnostic: did the base latch, and what does the device see at descriptor[0]? */
 	dev_info(&c->pci->dev,
-		 "engine regs: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ptr=%08x | "
+		 "engine regs: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ctrl=%08x ptr=%08x | "
 		 "tx_desc[0]=%016llx rx_desc[0]=%016llx\n",
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO),
@@ -261,6 +282,7 @@ static int clarett_engine_start(struct clarett *c)
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_CTRL),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
 		 le64_to_cpu(tx_tbl[0]), le64_to_cpu(rx_tbl[0]));
 	schedule_delayed_work(&c->stream_report, msecs_to_jiffies(1000));
@@ -274,6 +296,7 @@ static void clarett_engine_stop(struct clarett *c)
 		return;
 	cancel_delayed_work_sync(&c->stream_report);
 	writel(0, c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);	/* disable ring 0 */
+	writel(0, c->bar0 + STREAM_BLK1 + STREAM_OFF_CTRL);	/* disable ring 1 (blk1_only path) */
 	writel(0, c->bar0 + REG_STREAM_IRQ_ARM);
 	writel(0, c->bar0 + REG_STREAM_IRQ_CFG);
 	readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);		/* flush posted writes */
