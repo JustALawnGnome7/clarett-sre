@@ -14,6 +14,7 @@
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include <linux/delay.h>
+#include <linux/kthread.h>
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/initval.h>
@@ -234,6 +235,50 @@ static void clarett_stream_report(struct work_struct *work)
 }
 
 /*
+ * Persistent servicing engine. The data-plane DMA engine is flow-controlled: it raises a period on the
+ * 0x300 cause register and waits for the host to ACK by reading it (read-to-clear), exactly as the
+ * Windows driver does — it polls the cause block the whole time audio plays. Without this the engine
+ * does ~4 descriptors and stalls; with it, it clocks for the stream lifetime (verified: counter climbs
+ * monotonically while serviced). This kthread IS the device's required runtime; the future PCM path
+ * calls snd_pcm_period_elapsed from here. Poll at ~5-10 kHz (the proven rate; Windows uses ~400 Hz, so
+ * there is wide margin to slow this down once the counter->frame mapping is pinned).
+ */
+static int clarett_stream_service(void *data)
+{
+	struct clarett *c = data;
+	void __iomem *bar = c->bar0;
+	unsigned long next_log = jiffies + msecs_to_jiffies(2000);
+	u32 wraps = 0;
+	bool seen = false;
+
+	while (!kthread_should_stop()) {
+		u32 c2 = readl(bar + STREAM_BLK1);	/* 0x300 read-to-clear = period ack */
+
+		readl(bar + STREAM_BLK0);		/* 0x200 TX cause (mirror Windows' block poll) */
+		readl(bar + 0x500);			/* 0x500 IRQ summary (mirror) */
+		if (c2 & 0x80000000) {
+			u32 ctr = c2 & 0x7fffffff;
+
+			if (seen && ctr < c->stream_ctr)
+				wraps++;
+			c->stream_ctr = ctr;
+			seen = true;
+			atomic_inc(&c->stream_periods);
+		}
+		if (time_after(jiffies, next_log)) {
+			dev_info(&c->pci->dev,
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u (counter advancing => streaming)\n",
+				 atomic_read(&c->stream_periods), c->stream_ctr, wraps);
+			next_log = jiffies + msecs_to_jiffies(2000);
+		}
+		usleep_range(100, 200);
+	}
+	dev_info(&c->pci->dev, "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u)\n",
+		 atomic_read(&c->stream_periods), c->stream_ctr, wraps);
+	return 0;
+}
+
+/*
  * Data-plane engine-start probe (data-plane spec §9, opt-in via stream_probe). Replays the captured
  * §3b stream-start register sequence, but now with a valid descriptor table per §3c: 0x210/0x214 point
  * at a zeroed-terminated array of 8-byte bus addresses, each naming one STREAM_SIZE_VAL fragment of our
@@ -358,40 +403,18 @@ static int clarett_engine_start(struct clarett *c)
 	}
 
 	/*
-	 * Continuous servicing (data-plane spec §9 step 5). The engine is flow-controlled: it raises a
-	 * period on the 0x300 cause register and waits for the host to ACK via read-to-clear — exactly
-	 * what the Windows driver does, polling the cause block ~400 Hz the *whole time* audio plays. Our
-	 * one-shot probe never serviced it, so it stalled within ms (~4 descriptors). Service inline right
-	 * after arm and watch the 0x300 period counter (steps 0xc, wraps): if it keeps advancing, the
-	 * engine is sustaining a stream. This is the runtime the real PCM path will provide via an hrtimer
-	 * (or the MSI handler) calling snd_pcm_period_elapsed.
+	 * Start the persistent servicing engine immediately after arm (clarett_stream_service): it keeps
+	 * the flow-controlled engine clocked by continuously acking 0x300. The device stalls within ms if
+	 * unserviced, so this must come right after the commit. kthread scheduling adds a small startup
+	 * gap, but the engine only *pauses* waiting for an ack (it does not die), so it recovers once the
+	 * thread begins polling.
 	 */
-	{
-		unsigned long t_end = jiffies + msecs_to_jiffies(2000);
-		u32 periods = 0, wraps = 0, last_ctr = 0, max_ctr = 0;
-		bool seen = false;
-
-		while (time_before(jiffies, t_end)) {
-			u32 c2 = readl(bar + STREAM_BLK1);	/* 0x300 read-to-clear = period ack */
-
-			readl(bar + STREAM_BLK0);		/* 0x200 TX cause (mirror Windows) */
-			readl(bar + 0x500);			/* 0x500 IRQ summary (mirror) */
-			if (c2 & 0x80000000) {
-				u32 ctr = c2 & 0x7fffffff;
-
-				periods++;
-				if (seen && ctr < last_ctr)
-					wraps++;
-				if (ctr > max_ctr)
-					max_ctr = ctr;
-				last_ctr = ctr;
-				seen = true;
-			}
-			usleep_range(100, 200);		/* ~5-10 kHz, sleeps (no soft-lockup) */
-		}
-		dev_info(&c->pci->dev,
-			 "service 2s: 0x300 periods=%u max_ctr=0x%x wraps=%u last=0x%x (advancing/wrapping => STREAMING)\n",
-			 periods, max_ctr, wraps, last_ctr);
+	atomic_set(&c->stream_periods, 0);
+	c->stream_ctr = 0;
+	c->stream_svc = kthread_run(clarett_stream_service, c, "clarett-svc");
+	if (IS_ERR(c->stream_svc)) {
+		dev_warn(&c->pci->dev, "stream servicer failed to start: %ld\n", PTR_ERR(c->stream_svc));
+		c->stream_svc = NULL;
 	}
 
 	c->stream_on = true;
@@ -422,6 +445,10 @@ static void clarett_engine_stop(struct clarett *c)
 {
 	if (!c->stream_on)
 		return;
+	if (c->stream_svc) {
+		kthread_stop(c->stream_svc);		/* stop acking 0x300 before the engine is torn down */
+		c->stream_svc = NULL;
+	}
 	cancel_delayed_work_sync(&c->stream_report);
 	writel(0, c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);	/* disable ring 0 */
 	writel(0, c->bar0 + STREAM_BLK1 + STREAM_OFF_CTRL);	/* disable ring 1 (blk1_only path) */

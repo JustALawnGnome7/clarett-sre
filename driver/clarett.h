@@ -243,6 +243,9 @@ struct clarett {
 	size_t stream_size;
 	atomic_t period_irqs[CLARETT_NUM_VECTORS];   /* per-vector IRQ counts */
 	struct delayed_work stream_report;	/* logs pointer/IRQ progress after start */
+	struct task_struct *stream_svc;		/* polls/acks 0x300 to keep the engine clocked */
+	atomic_t stream_periods;		/* running period count (servicer -> hw pointer) */
+	u32 stream_ctr;				/* last 0x300 period counter (servicer-private) */
 
 	/*
 	 * Shadow of the config space backing mixer "get". Updated write-through on
