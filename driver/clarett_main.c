@@ -357,6 +357,43 @@ static int clarett_engine_start(struct clarett *c)
 			dev_info(&c->pci->dev, "stream-start DATA_CMD{activate=5} ok\n");
 	}
 
+	/*
+	 * Continuous servicing (data-plane spec §9 step 5). The engine is flow-controlled: it raises a
+	 * period on the 0x300 cause register and waits for the host to ACK via read-to-clear — exactly
+	 * what the Windows driver does, polling the cause block ~400 Hz the *whole time* audio plays. Our
+	 * one-shot probe never serviced it, so it stalled within ms (~4 descriptors). Service inline right
+	 * after arm and watch the 0x300 period counter (steps 0xc, wraps): if it keeps advancing, the
+	 * engine is sustaining a stream. This is the runtime the real PCM path will provide via an hrtimer
+	 * (or the MSI handler) calling snd_pcm_period_elapsed.
+	 */
+	{
+		unsigned long t_end = jiffies + msecs_to_jiffies(2000);
+		u32 periods = 0, wraps = 0, last_ctr = 0, max_ctr = 0;
+		bool seen = false;
+
+		while (time_before(jiffies, t_end)) {
+			u32 c2 = readl(bar + STREAM_BLK1);	/* 0x300 read-to-clear = period ack */
+
+			readl(bar + STREAM_BLK0);		/* 0x200 TX cause (mirror Windows) */
+			readl(bar + 0x500);			/* 0x500 IRQ summary (mirror) */
+			if (c2 & 0x80000000) {
+				u32 ctr = c2 & 0x7fffffff;
+
+				periods++;
+				if (seen && ctr < last_ctr)
+					wraps++;
+				if (ctr > max_ctr)
+					max_ctr = ctr;
+				last_ctr = ctr;
+				seen = true;
+			}
+			usleep_range(100, 200);		/* ~5-10 kHz, sleeps (no soft-lockup) */
+		}
+		dev_info(&c->pci->dev,
+			 "service 2s: 0x300 periods=%u max_ctr=0x%x wraps=%u last=0x%x (advancing/wrapping => STREAMING)\n",
+			 periods, max_ctr, wraps, last_ctr);
+	}
+
 	c->stream_on = true;
 	dev_info(&c->pci->dev,
 		 "engine probe: started; %u-desc tables @ %pad / %pad, ptr0=0x%x ptr1=0x%x\n",
