@@ -176,11 +176,22 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 - A stereo route (e.g. into Monitor Out 1-2) writes the *two* corresponding mix buses (0 and 1), each
   with the input's coefficient in its slot; unrouted cells default to unity (`0x2000`), not zero.
 
-## 7. Clocking `[XML]`
+## 7. Clocking `[XML]` + `[TRACE-CONFIRMED]`
 
 - `clock-source`: Internal=24, S/PDIF=3, ADAT 1=0, ADAT 2=1, Wordclock=2.
 - `sample-rate`: 44100, 48000, 88200, 96000, 176400, 192000.
-- Neither has a config offset/opcode → set via dedicated FCP command(s). **`[TRACE]`**
+- Neither has a config offset/opcode → set via a **dedicated FCP command**.
+- **`SET_CLOCK = opcode 0x006003`**, payload = two u32 words `{sample_rate, clock_source}`, size=8.
+  Completes on vec0 `0x20000000` (DONE) like any mailbox command. **`[TRACE-CONFIRMED]`** — captured
+  live by diffing a baseline vs. a sample-rate change (48 kHz→44.1 kHz) in Focusrite Control: the new
+  command was `0x80006003` with data bytes `44 ac 00 00  18 00 00 00` = `{0xac44=44100, 0x18=24=Internal}`.
+  FC issues it at stream start and on every rate/source change; on a rate change it is followed by a
+  full `CONFIG_PUSH` (`0x5000`) re-init burst, the routing re-setup (`0x6004/0x6002/0x6005`), and a
+  `DATA_CMD 0x800002 {activate=5}`.
+- **Not yet replayed by the driver** — the `clarett_full_init_mute.log` bring-up capture happened to omit
+  `0x6003`, so `clarett_init_seq` never sets the clock. This is the leading cause of the data-plane engine
+  arming but never clocking (no `vec1/vec2` period IRQs); see data-plane spec §9. Next: send `SET_CLOCK`
+  in `clarett_engine_start` before arming.
 
 ## 8. Routing matrix `[XML]`
 

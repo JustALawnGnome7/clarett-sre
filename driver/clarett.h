@@ -123,6 +123,11 @@ struct snd_kcontrol;
 #define FCP_SET_DATA             0x800001
 #define FCP_DATA_CMD             0x800002
 
+/* SET_CLOCK (TRACE-CONFIRMED, control-plane §7): payload {u32 sample_rate, u32 clock_source}. */
+#define FCP_SET_CLOCK            0x006003
+#define CLARETT_CLOCK_INTERNAL   24
+#define CLARETT_DEFAULT_RATE     48000
+
 /*
  * Firmware init-handshake opcodes, replayed verbatim at probe (see clarett_init_handshake).
  * Observed at device attach from the vendor app and not fully decoded: CONFIG_PUSH registers

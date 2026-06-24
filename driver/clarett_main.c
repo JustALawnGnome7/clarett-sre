@@ -222,6 +222,16 @@ static int clarett_engine_start(struct clarett *c)
 	}
 
 	/*
+	 * The live vendor descriptor table (RAM dump of the Windows TX ring) flags ONLY its last entry
+	 * with bit 0 set; every other entry is 0x100-aligned (low bit clear). That bit is the engine's
+	 * end-of-list / ring-wrap marker. Our driver previously relied on the zero terminator alone, and
+	 * the playback engine's per-descriptor status writeback bursts to base 0 without it. Fragment
+	 * addresses are even (FRAG=0x1c0, page-aligned base), so bit 0 is free to carry the flag.
+	 */
+	tx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(1);
+	rx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(1);
+
+	/*
 	 * Mark the RX (capture) sample area with 0xAA so the report can tell "device wrote silence (zeros)"
 	 * from "device never wrote" — with nothing plugged in, a working capture writes near-zero samples
 	 * that a plain non-zero scan would miss.
@@ -230,6 +240,26 @@ static int clarett_engine_start(struct clarett *c)
 
 	r0 = c->stream_dma;		/* block-0 descriptor-table base */
 	r1 = c->stream_dma + ring;	/* block-1 descriptor-table base */
+
+	/*
+	 * SET_CLOCK (0x6003): {u32 sample_rate, u32 clock_source}. Focusrite Control issues this at
+	 * stream start; the clarett_full_init_mute.log bring-up capture omitted it, so the engine armed
+	 * but never clocked — no vec1/vec2 period IRQs, pointers frozen, monitor LED dead. Send
+	 * {48000, Internal} before arming the rings. (TRACE-CONFIRMED, control-plane §7.)
+	 */
+	{
+		u8 clk[8];
+		int err;
+
+		clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
+		clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
+		err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
+		if (err)
+			dev_warn(&c->pci->dev, "SET_CLOCK (0x6003) failed: %d\n", err);
+		else
+			dev_info(&c->pci->dev, "SET_CLOCK: rate=%u source=%u (Internal)\n",
+				 CLARETT_DEFAULT_RATE, CLARETT_CLOCK_INTERNAL);
+	}
 
 	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
 
@@ -265,6 +295,20 @@ static int clarett_engine_start(struct clarett *c)
 	 * NB: the capture's 0x110=0x0 lands 13 s later (stream-stop), not as a pulse here — writing it
 	 * now would disarm the period IRQs immediately. clarett_engine_stop() issues the 0x0 at teardown.
 	 */
+
+	/*
+	 * Stream-start commit: DATA_CMD{activate=5}. In the rate-change capture this is the LAST mailbox
+	 * command after SET_CLOCK + the ring arm — the trigger that makes the engine actually clock. Our
+	 * driver otherwise only uses DATA_CMD activates 1/2 (control-plane); 5 is streaming-specific.
+	 */
+	{
+		int err = clarett_data_cmd(c, 5);
+
+		if (err)
+			dev_warn(&c->pci->dev, "stream-start DATA_CMD{activate=5} failed: %d\n", err);
+		else
+			dev_info(&c->pci->dev, "stream-start DATA_CMD{activate=5} ok\n");
+	}
 
 	c->stream_on = true;
 	dev_info(&c->pci->dev,

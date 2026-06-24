@@ -221,11 +221,9 @@ fastest path now is an **active probe from our own driver**, not more passive tr
      `tx_desc[0]=…fffc0840`).
    - **Playback (block 0) reads correctly** — `ptr0` advances with **no read faults**: the device walks
      our TX descriptor table and reads the fragments.
-   - **Capture (block 1) writes to a NULL base** — the remaining bug. The faults are device *writes*
-     (`flags=0x20`) in a one-shot startup burst marching `address=0x0, 0x80, 0x100, 0x180 …` (0x80
-     stride) from base 0; our RX fragments stay zero and the engine then **stalls** (`ptr1` stuck at 4,
-     `ptr0` at ~17 — far below a 48 kHz rate). Playback (block 0, page-aligned base) reads our table
-     fine; capture (block 1) does not write to ours.
+   - **The `0x80`-strided write burst to base 0 is block 0's (playback), not block 1's** — see step 4's
+     RESOLVED block. It is a finite, non-fatal device-default startup writeback, benign in the VM,
+     faulting on bare metal. Capture (block 1) **does** write our RX buffer (marker test, step 4).
 4. **Capture-to-null: hypotheses RULED OUT, root cause still open.** Tested against a freshly
    power-cycled device:
    - **Not a ring control block.** Dumping the VM region after the RX descriptor terminator showed
@@ -260,14 +258,50 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    tries to write to a buffer we never configured**. The `0x80`-strided monotonic burst is a
    **playback-side DMA position/status writeback** (the engine reporting its TX consumer position),
    whose base is set by neither of the three known DMA registers (`0x210`/`0x310`/`0x410`) nor by any
-   streaming FCP — so it must come from a step we still skip. **Next candidate angles:**
-   - the **8 KB config read/writeback** that `clarett_init_seq` replays at bring-up: it may carry the
-     playback writeback-buffer base (or a bit that disables position writeback); re-examine whether the
-     8 KB block contains a guest-physical address field we currently echo back verbatim.
-   - look for a **playback-only enable/disable bit** in the `0x200` block (or `0x108`/`0x10c`) that
-     suppresses the position writeback — block 1 (capture) has no equivalent storm.
-   - if capture alone is enough for a first PCM milestone, **wire capture-only ALSA** (block 1) now and
-     defer the playback writeback hunt.
+   streaming FCP.
+
+   **RESOLVED — the writeback base is a hardwired default of 0, not a config we skip.** The hunt is
+   exhausted on every front and the conclusion is now firm:
+   - **Live vendor TX descriptor table recovered** (RAM dump of the Windows ring, base `0x2_794a9000`,
+     captured by siphoning the per-second-purged QEMU log through `tail -F` to beat the truncation):
+     **347 entries, each a bare 8-byte LE `0x2_xxxxxxxx` fragment address**, zero-terminated. The
+     **only** flagged entry is the **last** (`0x2_77df7001`, bit 0 set); all others are `0x100`-aligned.
+     Bit 0 is an **end-of-list / ring-wrap marker**. There is **no header before, and no writeback
+     pointer anywhere in or after** the table — past the terminator is reclaimed pool (NTFS `INDX`
+     buffers, `.dll` name fragments).
+   - **The 8 KB config carries no address.** It is a **write-only push** (9 `SET_DATA` = 8264 bytes;
+     the largest `GET_DATA` is 8 bytes — count queries only, no 8 KB read), so nothing is hidden in a
+     DMA'd read response. Reassembling all 8192 bytes (device cfg offsets `0xc8..0x20c8`) and scanning
+     every 4-aligned 8-byte window for a `0x2_xxxxxxxx`/page-aligned pointer: **zero hits**.
+   - **Windows' full data-plane register write set == ours, exactly** (`0x108=0x10`, `0x20c=0x1`,
+     `0x204/0x208/0x214/0x210`, `0x304/0x308/0x314/0x310`, `0x10c=0x1e70700`, `0x110=0x7`). No missing
+     register, no value/order difference that matters.
+   - **Adding the end-of-list flag to our last descriptor did NOT stop the storm** — identical burst —
+     so the writeback is not anchored by table format either.
+
+   So the `0x80`-strided burst to base 0 is a **device-default startup writeback** the device does
+   regardless: it succeeds invisibly in the VM (all guest RAM is IOMMU-identity-mapped to the device),
+   and faults harmlessly on bare metal (only our coherent buffers are mapped). Confirming it's benign:
+   the burst is **finite** (~10 faults, `0x0..0x480`, then it stops — a one-shot, not per-period), it is
+   **non-fatal** (AMD-Vi logs and drops each write; the engine advances *through* it), and block 0 ends
+   in **status `0x11` — the exact value Windows' `0x218` reads** (`R[0x11(x104)]`, constant → `0x218` is
+   a status word, not a running position). Our playback engine reaches the **identical steady state as
+   the vendor's.** Nothing left to configure here.
+
+   **The real remaining blocker is the clock, not the writeback.** No period IRQs fire (`vec1=0
+   vec2=0`) and neither pointer climbs at audio rate — the engine reaches the armed state but never
+   streams. That points at the still-untraced **clock-source / sample-rate engagement** (control-plane
+   §7), the most likely reason monitor `Mute`/`Dim` writes complete but the front-panel LED never moves.
+   **Next:**
+   - **Send the clock command — FOUND.** `SET_CLOCK = opcode 0x006003`, payload `{u32 sample_rate, u32
+     clock_source}` (e.g. `{44100, 24=Internal}`), captured by baseline-vs-rate-change diff (control-plane
+     §7, TRACE-CONFIRMED). Our bring-up sends `0x6000/1/2/4/5` but **never `0x6003`**, so the engine never
+     clocks — the leading suspect for `vec1=0 vec2=0` and the dead Mute LED. Wire `SET_CLOCK` into
+     `clarett_engine_start` before arming and re-test for period IRQs + a moving LED.
+   - **Wire capture-only ALSA PCM** over block 1 (proven working) as a shippable milestone in parallel.
+   - The playback writeback-to-0 is tracked as a **benign bare-metal artifact** (floods dmesg only); if
+     it ever proves functionally limiting, revisit at the IOMMU level (reserve/map a low buffer), not by
+     hunting a vendor config that does not exist.
 5. **Then ALSA PCM (Phase 4).** Once both directions DMA into our buffers, wire `snd_pcm_ops`
    (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the vec1/vec2 handler calling
    `snd_pcm_period_elapsed`.
