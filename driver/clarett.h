@@ -17,6 +17,8 @@
 #include <sound/core.h>
 
 struct snd_kcontrol;
+struct snd_pcm;
+struct snd_pcm_substream;
 
 /* --- BAR0 register map (confirmed) -------------------------------------- */
 #define CLARETT_BAR              0
@@ -60,6 +62,21 @@ struct snd_kcontrol;
 #define CLARETT_STREAM_NDESC     256            /* descriptors per ring (probe depth)         */
 #define CLARETT_STREAM_FRAG      STREAM_SIZE_VAL /* fragment bytes per descriptor              */
 #define CLARETT_STREAM_FRAME     0x70           /* 112 = 28 channels x S32_LE                  */
+
+/* --- PCM (data plane) --------------------------------------------------- */
+#define CLARETT_PCM_RATE         48000
+#define CLARETT_PCM_CHANNELS     STREAM_CHANS    /* 28 */
+#define CLARETT_FRAMES_PER_DESC  (CLARETT_STREAM_FRAG / CLARETT_STREAM_FRAME)  /* 448/112 = 4 */
+/*
+ * Frames the engine advances per 0x300 period tick. HYPOTHESIS: one tick == one descriptor — the
+ * persistent-servicer test stalled at ~249 periods over a 256-descriptor ring (~1 tick/descriptor).
+ * But the 0x300 counter's own step was 0xc per period in the VM capture, so the true frames/tick is
+ * NOT yet pinned. This is the one value to CALIBRATE on hardware: feed a known 48 kHz stream, count
+ * 0x300 ticks/second, and set frames/tick = 48000 / ticks_per_sec. Until then the stream plumbing is
+ * correct but the reported sample rate (hence pitch) may be off by this factor.
+ */
+#define CLARETT_DESCS_PER_TICK   1
+#define CLARETT_FRAMES_PER_TICK  (CLARETT_FRAMES_PER_DESC * CLARETT_DESCS_PER_TICK)
 
 /* FCP mailbox header layout, relative to REG_MBOX */
 #define MBOX_CMD                 0x00    /* bit31 = execute flag | opcode               */
@@ -246,6 +263,25 @@ struct clarett {
 	struct task_struct *stream_svc;		/* polls/acks 0x300 to keep the engine clocked */
 	atomic_t stream_periods;		/* running period count (servicer -> hw pointer) */
 	u32 stream_ctr;				/* last 0x300 period counter (servicer-private) */
+	bool stream_run;			/* servicer ACKs 0x300 only while set (PCM trigger gate) */
+
+	/*
+	 * PCM capture (data plane). The descriptor table maps the ALSA-managed DMA buffer into
+	 * hardware fragments; the servicer kthread advances pcm_frames per 0x300 tick and calls
+	 * snd_pcm_period_elapsed (clarett_pcm_tick). Capture = ring block 1 (0x300) only.
+	 */
+	struct snd_pcm *pcm;
+	struct snd_pcm_substream *pcm_sub;	/* live capture substream (NULL when idle) */
+	/*
+	 * The hardware rings live in ONE contiguous coherent buffer (c->stream_buf), the exact layout the
+	 * engine-start probe proved clocks — split allocations (separate table / ALSA buffer / TX ring) do
+	 * NOT clock. Block 0 (silent dummy TX, full-duplex requirement) occupies the first half, block 1
+	 * (capture) the second. Captured samples are memcpy'd from the block-1 RX area into the ALSA buffer
+	 * each period (clarett_pcm_tick). FC always arms both blocks even for record-only (data-plane §9).
+	 */
+	bool pcm_running;			/* trigger START..STOP: gate snd_pcm_period_elapsed delivery */
+	u64 pcm_frames;				/* frames streamed (servicer model -> hw pointer) */
+	u64 pcm_last_period;			/* last period index reported via period_elapsed */
 
 	/*
 	 * Shadow of the config space backing mixer "get". Updated write-through on
@@ -274,5 +310,15 @@ int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activ
 
 /* mixer.c */
 int clarett_create_controls(struct clarett *c);
+
+/* main.c — data-plane engine (shared with pcm.c) */
+void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1);
+void clarett_engine_run(struct clarett *c);
+void clarett_engine_stop(struct clarett *c);
+int clarett_engine_start(struct clarett *c);
+
+/* pcm.c */
+int clarett_create_pcm(struct clarett *c);
+void clarett_pcm_tick(struct clarett *c);
 
 #endif /* CLARETT_H */

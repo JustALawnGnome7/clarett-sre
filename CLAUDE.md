@@ -94,9 +94,9 @@ spec/clarett-8prex-control-plane.md   Authored control-plane spec (offsets, opco
                                       enums, pins, mixer, routing). Provenance-tagged.
 spec/clarett-8prex-fcp-transport.md   Mailbox/transport framing; confirmed reg map.
 spec/clarett-8prex-data-plane.md      PCM-DMA capture PLAN (not yet traced): method, phases, risks.
-driver/                               Out-of-tree module `snd-clarett` (control plane only).
-  clarett.h, clarett_main.c (PCI probe), clarett_mailbox.c (FCP transport),
-  clarett_mixer.c (kcontrols), Makefile, README.md
+driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
+  clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
+  clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md
 tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction decoder.
                                       (--brief, --mix-diff, --async, --show-appspace, --classify).
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
@@ -123,9 +123,20 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 
 ## Driver limitations / TODO
 
-- **No PCM / data plane** — the big next effort (trace audio streaming: DMA ring,
-  descriptors, period IRQ cadence, sample format; vec1/vec2 are the likely
-  playback/capture period IRQs). Capture plan: `spec/clarett-8prex-data-plane.md`.
+- **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (opt-in
+  `enable_pcm=1`) registers a 28ch S32_LE @48k capture device, driven by the persistent `0x300` servicer
+  (`clarett_pcm_tick` → `snd_pcm_period_elapsed`). Hardware-confirmed this session:
+  - The engine clocks via the PCM path (248-period burst, `ctr=0x1b3`) — requires (a) one **contiguous**
+    buffer for both rings, (b) **full-duplex** arming (silent dummy TX on block 0; block-1-only won't
+    clock and hangs `activate=5`), and (c) a **`0xAA` RX pre-fill before arming** (KEY: the lone diff
+    that made it clock; likely a write-visibility/`dma_wmb` effect, not the content).
+  - Servicer ACKs `0x300` from `prepare()` (engine stalls in ms if unserviced from arm); `trigger` only
+    gates `period_elapsed` via `pcm_running`.
+  - **THE WALL:** engine streams exactly one ring pass then cleanly stalls (device alive). No driver-side
+    revive works — rewrite `0x110`/bases, full cause-block `pollall`, re-`activate=5` all fail. Our
+    descriptor table already matches the VM's, so the wrap is an unobserved runtime behaviour → next is a
+    fresh VM capture of a long capture session. Debug params: `rekick`/`rekick_ms`/`pollall`/`pcm_selftest`.
+  - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-8prex-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP

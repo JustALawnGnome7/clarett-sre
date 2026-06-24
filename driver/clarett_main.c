@@ -35,6 +35,30 @@ MODULE_PARM_DESC(blk1_only,
 		 "Engine-probe isolation: configure ONLY ring block 1 (0x300, capture) and enable it via "
 		 "0x30c, leaving block 0 (0x200) untouched. Isolates whether the capture writes are block 1's.");
 
+static bool enable_pcm;
+module_param(enable_pcm, bool, 0444);
+MODULE_PARM_DESC(enable_pcm,
+		 "Register a capture PCM device (28ch S32_LE @48k, ring block 1) driven by the 0x300 "
+		 "servicer. Experimental data-plane bring-up; mutually exclusive with stream_probe.");
+
+static int rekick;
+module_param(rekick, int, 0444);
+MODULE_PARM_DESC(rekick,
+		 "Stall re-kick when 0x300 freezes mid-stream (the one-ring-pass stall): 0=off, "
+		 "1=rewrite 0x110 arm, 2=rewrite ring bases + 0x110, 3=rewrite 0x20c enable + 0x110, "
+		 "4=re-issue activate=5 stream commit (mailbox).");
+
+static int rekick_ms = 20;
+module_param(rekick_ms, int, 0444);
+MODULE_PARM_DESC(rekick_ms, "Stall threshold for rekick: ms with no new 0x300 period before kicking.");
+
+static bool pollall;
+module_param(pollall, bool, 0444);
+MODULE_PARM_DESC(pollall,
+		 "Servicer reads the FULL cause block 0x100/0x200/0x300/0x400/0x500 each loop, mimicking "
+		 "Focusrite Control's poll exactly (it skips 0x100/0x400 by default). Tests whether the full "
+		 "poll is the 'host keeping up' signal that lets the engine wrap past one ring pass.");
+
 static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
@@ -243,19 +267,75 @@ static void clarett_stream_report(struct work_struct *work)
  * calls snd_pcm_period_elapsed from here. Poll at ~5-10 kHz (the proven rate; Windows uses ~400 Hz, so
  * there is wide margin to slow this down once the counter->frame mapping is pinned).
  */
+/*
+ * Stall re-kick (experiment, module param `rekick`). The engine streams exactly one ring pass (~248
+ * periods) then freezes even under continuous ACKing — Focusrite Control arms once and streams for
+ * minutes, so the engine *can* wrap; we are missing whatever lets it. A FULL re-arm does NOT restart a
+ * stalled engine (tested: re-arm after a pass => 0 periods), so try lighter nudges that don't disable
+ * it. Re-writing the ring bases re-fetches the descriptor table from the top; 0x110 re-arms the period
+ * IRQ. Methods are swept by `rekick` to find one (if any) that resumes the counter.
+ */
+static void clarett_stream_rekick(struct clarett *c)
+{
+	void __iomem *bar = c->bar0;
+
+	switch (rekick) {
+	case 4:	/* re-issue the stream-start commit (mailbox); heavier than a register poke */
+		clarett_data_cmd(c, 5);
+		break;
+	case 2:	/* rewrite both ring bases (rewind descriptor walk) then re-arm */
+		writel(readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);
+		writel(readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO);
+		writel(readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);
+		writel(readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);
+		writel(0x7, bar + REG_STREAM_IRQ_ARM);
+		break;
+	case 3:	/* rewrite global enable then re-arm */
+		writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);
+		writel(0x7, bar + REG_STREAM_IRQ_ARM);
+		break;
+	default: /* 1: just re-arm the period IRQ */
+		writel(0x7, bar + REG_STREAM_IRQ_ARM);
+		break;
+	}
+}
+
 static int clarett_stream_service(void *data)
 {
 	struct clarett *c = data;
 	void __iomem *bar = c->bar0;
 	unsigned long next_log = jiffies + msecs_to_jiffies(2000);
-	u32 wraps = 0;
+	unsigned long last_tick = jiffies;
+	u32 wraps = 0, rekicks = 0;
 	bool seen = false;
 
 	while (!kthread_should_stop()) {
-		u32 c2 = readl(bar + STREAM_BLK1);	/* 0x300 read-to-clear = period ack */
+		u32 c2;
 
-		readl(bar + STREAM_BLK0);		/* 0x200 TX cause (mirror Windows' block poll) */
-		readl(bar + 0x500);			/* 0x500 IRQ summary (mirror) */
+		/*
+		 * Gate ACKing on stream_run. The engine is armed (and prefilled ~4 descriptors) by
+		 * clarett_engine_arm, but stays paused until the PCM trigger flips stream_run — reading
+		 * 0x300 (read-to-clear) IS the period ACK that releases it, so withholding the read keeps
+		 * the engine quiescent between prepare and START. The probe path sets stream_run at start.
+		 */
+		if (!READ_ONCE(c->stream_run)) {
+			usleep_range(300, 600);
+			continue;
+		}
+
+		/*
+		 * Mirror Windows' cause-block poll. By default we skip 0x100 (mailbox cause — read-to-clear,
+		 * racing clarett_fcp's poll) and 0x400 (notify), reading only 0x200/0x300/0x500. pollall reads
+		 * the full block in FC's order to test whether that complete poll is the signal that lets the
+		 * engine wrap. Safe during pure streaming (no mailbox/notify traffic in flight).
+		 */
+		if (pollall)
+			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 */
+		readl(bar + STREAM_BLK0);		/* 0x200 TX cause */
+		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period ack */
+		if (pollall)
+			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 */
+		readl(bar + 0x500);			/* 0x500 IRQ summary */
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
 
@@ -263,19 +343,106 @@ static int clarett_stream_service(void *data)
 				wraps++;
 			c->stream_ctr = ctr;
 			seen = true;
+			last_tick = jiffies;
 			atomic_inc(&c->stream_periods);
+			clarett_pcm_tick(c);		/* advance PCM pointer / period_elapsed (no-op if idle) */
+		} else if (rekick && seen &&
+			   time_after(jiffies, last_tick + msecs_to_jiffies(rekick_ms))) {
+			/* Stalled mid-stream: counter frozen for rekick_ms while still ACKing. Nudge it. */
+			if (!rekicks)
+				dev_info(&c->pci->dev,
+					 "stall dump: caps=%08x irq0=%08x blk0=%08x blk1=%08x p0=%08x p1=%08x info=%08x (0xffffffff == dead/off-bus)\n",
+					 readl(bar + REG_CAPS), readl(bar + REG_IRQ0_CAUSE),
+					 readl(bar + STREAM_BLK0), readl(bar + STREAM_BLK1),
+					 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+					 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
+					 readl(bar + REG_INFO));
+			clarett_stream_rekick(c);
+			rekicks++;
+			last_tick = jiffies;		/* don't re-kick until another rekick_ms elapses */
 		}
 		if (time_after(jiffies, next_log)) {
 			dev_info(&c->pci->dev,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u (counter advancing => streaming)\n",
-				 atomic_read(&c->stream_periods), c->stream_ctr, wraps);
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u\n",
+				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks);
 			next_log = jiffies + msecs_to_jiffies(2000);
 		}
 		usleep_range(100, 200);
 	}
-	dev_info(&c->pci->dev, "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u)\n",
-		 atomic_read(&c->stream_periods), c->stream_ctr, wraps);
+	dev_info(&c->pci->dev, "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u)\n",
+		 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks);
 	return 0;
+}
+
+/*
+ * Arm the data-plane engine over caller-provided descriptor-table bases (data-plane spec §3b/§9).
+ * r0 = block-0 (TX/playback) table base, r1 = block-1 (RX/capture) table base; pass 0 to skip a block
+ * (capture-only uses r0=0, the proven blk1_only config). Replays SET_CLOCK, the 12-register stream
+ * arm (base-before-enable), and the DATA_CMD{5} commit. Sleeps (mailbox FCP) — call from prepare or
+ * probe context, never from the atomic PCM trigger. Leaves the engine armed-and-committed but paused:
+ * it prefills a few descriptors and waits for the servicer to ACK 0x300 (gated by stream_run).
+ */
+void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
+{
+	void __iomem *bar = c->bar0;
+	u8 clk[8];
+	int err;
+
+	/*
+	 * SET_CLOCK (0x6003): {u32 sample_rate, u32 clock_source}. FC issues this at stream start; without
+	 * it the engine arms but never clocks (control-plane §7, TRACE-CONFIRMED).
+	 */
+	clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
+	clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
+	err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
+	if (err)
+		dev_warn(&c->pci->dev, "SET_CLOCK (0x6003) failed: %d\n", err);
+
+	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
+
+	/*
+	 * Program each ring block's geometry+base BEFORE the global enable (a freshly-armed device has a
+	 * null base, so enable-first faults at address 0). A null base argument skips the block, leaving
+	 * it disarmed — capture-only passes r0=0 (block 0 untouched), matching the validated blk1_only run.
+	 */
+	if (r0) {
+		writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
+		writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
+		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
+		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
+	}
+	if (r1) {
+		writel(STREAM_CHANS, bar + STREAM_BLK1 + STREAM_OFF_CHANS);	/* 0x304 */
+		writel(STREAM_SIZE_VAL, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	/* 0x308 */
+		writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI); /* 0x314 */
+		writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO); /* 0x310 */
+	}
+
+	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c global enable */
+	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
+	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm (0x0 is stream-stop) */
+
+	/*
+	 * Stream-start commit: DATA_CMD{activate=5} — the rate-change capture's final mailbox command, the
+	 * trigger that makes the engine clock. (control-plane DATA_CMD otherwise uses activates 1/2 only.)
+	 */
+	err = clarett_data_cmd(c, 5);
+	if (err)
+		dev_warn(&c->pci->dev, "stream-start DATA_CMD{activate=5} failed: %d\n", err);
+
+	c->stream_on = true;
+}
+
+/* Start the persistent 0x300 servicer kthread. The caller flips stream_run to release ACKing. */
+void clarett_engine_run(struct clarett *c)
+{
+	atomic_set(&c->stream_periods, 0);
+	c->stream_ctr = 0;
+	c->stream_svc = kthread_run(clarett_stream_service, c, "clarett-svc");
+	if (IS_ERR(c->stream_svc)) {
+		dev_warn(&c->pci->dev, "stream servicer failed to start: %ld\n", PTR_ERR(c->stream_svc));
+		c->stream_svc = NULL;
+	}
 }
 
 /*
@@ -286,7 +453,7 @@ static int clarett_stream_service(void *data)
  * writing the capture buffer). NOT a PCM implementation. The point is to test whether starting the
  * engine makes the control plane physically manifest (e.g. the Mute LED).
  */
-static int clarett_engine_start(struct clarett *c)
+int clarett_engine_start(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
 	size_t tbl, smp, ring;
@@ -333,91 +500,11 @@ static int clarett_engine_start(struct clarett *c)
 	r0 = c->stream_dma;		/* block-0 descriptor-table base */
 	r1 = c->stream_dma + ring;	/* block-1 descriptor-table base */
 
-	/*
-	 * SET_CLOCK (0x6003): {u32 sample_rate, u32 clock_source}. Focusrite Control issues this at
-	 * stream start; the clarett_full_init_mute.log bring-up capture omitted it, so the engine armed
-	 * but never clocked — no vec1/vec2 period IRQs, pointers frozen, monitor LED dead. Send
-	 * {48000, Internal} before arming the rings. (TRACE-CONFIRMED, control-plane §7.)
-	 */
-	{
-		u8 clk[8];
-		int err;
+	/* Arm+commit the engine (SET_CLOCK, 12-register sequence, DATA_CMD{5}); blk1_only skips block 0. */
+	clarett_engine_arm(c, blk1_only ? 0 : r0, r1);
+	WRITE_ONCE(c->stream_run, true);	/* probe streams immediately — no PCM trigger to gate it */
+	clarett_engine_run(c);
 
-		clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
-		clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
-		err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
-		if (err)
-			dev_warn(&c->pci->dev, "SET_CLOCK (0x6003) failed: %d\n", err);
-		else
-			dev_info(&c->pci->dev, "SET_CLOCK: rate=%u source=%u (Internal)\n",
-				 CLARETT_DEFAULT_RATE, CLARETT_CLOCK_INTERNAL);
-	}
-
-	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
-
-	/*
-	 * Program the descriptor-table base(s) BEFORE enabling. The Windows capture wrote the enable
-	 * first, but that device kept a non-zero base latched from a prior run; on our freshly-armed
-	 * device the base is 0, so enabling first made the engine fetch the table from address 0
-	 * (IO_PAGE_FAULT @0x0). Base-then-enable avoids that.
-	 */
-	if (!blk1_only) {
-		writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
-		writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
-		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
-		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
-	}
-
-	writel(STREAM_CHANS, bar + STREAM_BLK1 + STREAM_OFF_CHANS);	/* 0x304 */
-	writel(STREAM_SIZE_VAL, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	/* 0x308 */
-	writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);	/* 0x314 */
-	writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);	/* 0x310 */
-
-	/*
-	 * Enable via 0x20c — the sole *global* enable (0x30c is not a per-block enable; writing it reads
-	 * back 0). In blk1_only mode block 0's base is left null (skipped above), so after the global
-	 * enable block 0 read-faults at 0 (flags=0) while block 1 writes capture: the fault flags then
-	 * attribute the write-to-null (flags=0x20) to block 1's engine specifically.
-	 */
-	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c global enable */
-
-	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
-	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm */
-	/*
-	 * NB: the capture's 0x110=0x0 lands 13 s later (stream-stop), not as a pulse here — writing it
-	 * now would disarm the period IRQs immediately. clarett_engine_stop() issues the 0x0 at teardown.
-	 */
-
-	/*
-	 * Stream-start commit: DATA_CMD{activate=5}. In the rate-change capture this is the LAST mailbox
-	 * command after SET_CLOCK + the ring arm — the trigger that makes the engine actually clock. Our
-	 * driver otherwise only uses DATA_CMD activates 1/2 (control-plane); 5 is streaming-specific.
-	 */
-	{
-		int err = clarett_data_cmd(c, 5);
-
-		if (err)
-			dev_warn(&c->pci->dev, "stream-start DATA_CMD{activate=5} failed: %d\n", err);
-		else
-			dev_info(&c->pci->dev, "stream-start DATA_CMD{activate=5} ok\n");
-	}
-
-	/*
-	 * Start the persistent servicing engine immediately after arm (clarett_stream_service): it keeps
-	 * the flow-controlled engine clocked by continuously acking 0x300. The device stalls within ms if
-	 * unserviced, so this must come right after the commit. kthread scheduling adds a small startup
-	 * gap, but the engine only *pauses* waiting for an ack (it does not die), so it recovers once the
-	 * thread begins polling.
-	 */
-	atomic_set(&c->stream_periods, 0);
-	c->stream_ctr = 0;
-	c->stream_svc = kthread_run(clarett_stream_service, c, "clarett-svc");
-	if (IS_ERR(c->stream_svc)) {
-		dev_warn(&c->pci->dev, "stream servicer failed to start: %ld\n", PTR_ERR(c->stream_svc));
-		c->stream_svc = NULL;
-	}
-
-	c->stream_on = true;
 	dev_info(&c->pci->dev,
 		 "engine probe: started; %u-desc tables @ %pad / %pad, ptr0=0x%x ptr1=0x%x\n",
 		 CLARETT_STREAM_NDESC, &r0, &r1,
@@ -441,10 +528,11 @@ static int clarett_engine_start(struct clarett *c)
 }
 
 /* Halt the engine before the ring buffer is freed (a bad/continued DMA would fault the IOMMU). */
-static void clarett_engine_stop(struct clarett *c)
+void clarett_engine_stop(struct clarett *c)
 {
 	if (!c->stream_on)
 		return;
+	WRITE_ONCE(c->stream_run, false);		/* stop the servicer ACKing 0x300 */
 	if (c->stream_svc) {
 		kthread_stop(c->stream_svc);		/* stop acking 0x300 before the engine is torn down */
 		c->stream_svc = NULL;
@@ -653,9 +741,17 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
 
+	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. */
+	if (enable_pcm) {
+		err = clarett_create_pcm(c);
+		if (err)
+			dev_warn(&pci->dev, "PCM create failed (%d); continuing mixer-only\n", err);
+		err = 0;
+	}
+
 	/* Opt-in data-plane experiment: start the audio engine and watch what happens. Best-effort;
 	 * needs the IRQ handlers (above) hooked first so vec1/vec2 period IRQs are counted. */
-	if (stream_probe && c->irq_ready) {
+	if (stream_probe && !enable_pcm && c->irq_ready) {
 		err = clarett_engine_start(c);
 		if (err)
 			dev_warn(&pci->dev, "engine-start probe failed (%d)\n", err);

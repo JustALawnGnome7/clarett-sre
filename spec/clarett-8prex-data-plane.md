@@ -343,6 +343,38 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    - The playback writeback-to-0 stays a **benign bare-metal artifact** (floods dmesg only); revisit at
      the IOMMU level (reserve/map a low buffer) only if it proves functionally limiting.
 
+   **IMPLEMENTED — capture PCM (`enable_pcm=1`); clocks on hardware, stalls after one ring pass.**
+   `driver/clarett_pcm.c` registers a 28-channel `S32_LE` @48 kHz **capture** device on ring block 1,
+   driven by the persistent `0x300` servicer. Hardware-tested this session — what was learned:
+   - The engine arm is factored into `clarett_engine_arm(c, r0, r1)` / `clarett_engine_run()` /
+     `clarett_engine_stop()` (shared with `stream_probe`). The contiguous hardware buffer holds BOTH
+     rings (block 0 = silent dummy TX, block 1 = capture); captured frames are `memcpy`'d into the
+     ALSA-managed buffer each period. Split allocations (separate table / ALSA buffer / TX ring) do
+     **NOT** clock — the rings must be one contiguous buffer with `r1 = r0 + ring`, like the probe.
+   - **FULL-DUPLEX arming is required.** Block-1-only (`r0=0`) raises no periods AND hangs the
+     `activate=5` commit. We arm block 0 over a silent dummy TX ring purely to satisfy the engine.
+   - **The `0xAA` RX pre-fill is functionally required (KEY FINDING).** `memset`-ing the RX sample area
+     before arming is the lone difference between the proven `engine_start` (clocks) and the original
+     `create_pcm` arm (did not). With it, `create_pcm` clocks an identical 248-period burst (`ctr=0x1b3`).
+     [WHY unknown: likely forces coherent-buffer/descriptor write visibility to the device, not the
+     content — `dma_wmb()` may be the real fix; confirm later.]
+   - **Context split:** mailbox arming (`SET_CLOCK` + `DATA_CMD{5}`) runs in `prepare()` and the servicer
+     ACKs `0x300` from there (the engine bursts and stalls within ms if unserviced from arm); the atomic
+     `trigger` only flips `pcm_running` to gate `snd_pcm_period_elapsed` delivery. `hw_free`/`close` tear
+     the engine down before the managed buffer is freed.
+   - **OPEN CALIBRATION:** `CLARETT_DESCS_PER_TICK` (frames per `0x300` tick) is a hypothesis (1 tick ≈
+     1 descriptor). Counter math is unresolved: `periods=248` reads vs `ctr=0x1b3` (435) ⇒ bit31 likely
+     stays set across ~7 reads per real period, so the read-count over-counts. Calibrate on hardware.
+   - **THE WALL — one-ring-pass stall (`enable_pcm` not yet functional).** The engine streams exactly one
+     ring pass (~248 periods, `ctr=0x1b3`) then **cleanly stalls** — device fully alive (`caps`/`info`
+     read sane, `0x300`=`0`, not `0xffffffff`; the earlier "dead `0x7fffffff`" was a one-off). Every
+     driver-side revival lever was tried and FAILED: rewrite `0x110` (rekick=1), rewrite ring bases
+     (rekick=2), full cause-block poll `0x100..0x500` mimicking FC (`pollall`), re-issue `activate=5`
+     commit (rekick=4). Our descriptor table already matches the VM's structure exactly, so the wrap
+     mechanism is a runtime behaviour we have **not yet observed** — next is a fresh VM capture of a long
+     *capture* session hunting for steady-state writes the 122k-line siphon may have missed (a per-buffer
+     re-arm/doorbell). Debug levers live behind module params `rekick`/`rekick_ms`/`pollall`/`pcm_selftest`.
+
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
 and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
 *register* writes (no new mailbox clock command was needed beyond the bring-up we already replay), so
