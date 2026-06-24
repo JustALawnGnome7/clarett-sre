@@ -5,7 +5,7 @@
  * A representative subset of the control-plane spec, all single-byte fields so
  * each maps to one SET_DATA{offset,1,value} + DATA_CMD{activate} pair:
  *   - master mute / monitor dim / master monitor gain
- *   - the 10 analogue output gains
+ *   - the per-model analogue output gains (clarett_model.out_gains)
  *   - per analogue input: Air switch and Mic/Line[/Inst] mode
  *
  * "get" returns the shadow: write-through on put, plus the monitor bytes are
@@ -42,6 +42,19 @@ static int clarett_ctl_info(struct snd_kcontrol *kc,
 	return -EINVAL;
 }
 
+/* Map a device byte to its enum item index (inverse of d->values). Identity when values is NULL. */
+static unsigned int clarett_enum_item(const struct clarett_ctl *d, u8 dev)
+{
+	int i;
+
+	if (!d->values)
+		return dev < (u8)d->n_texts ? dev : 0;
+	for (i = 0; i < d->n_texts; i++)
+		if (d->values[i] == dev)
+			return i;
+	return 0;
+}
+
 static int clarett_ctl_get(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *uc)
 {
@@ -58,7 +71,7 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 		uc->value.integer.value[0] = CLARETT_GAIN_MAX - dev;
 		break;
 	case CT_ENUM:
-		uc->value.enumerated.item[0] = dev;
+		uc->value.enumerated.item[0] = clarett_enum_item(d, dev);
 		break;
 	}
 	return 0;
@@ -91,7 +104,7 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 
 		if (item >= (unsigned int)d->n_texts)
 			return -EINVAL;
-		dev = item;
+		dev = d->values ? d->values[item] : item;
 		break;
 	}
 	default:
@@ -105,15 +118,8 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 
 int clarett_create_controls(struct clarett *c)
 {
-	static const char * const mode3[] = { "Mic", "Line", "Inst" };
-	static const char * const mode2[] = { "Mic", "Line" };
-	static const struct { const char *name; u32 off; } outs[] = {
-		{ "Monitor 1", 32 }, { "Monitor 2", 33 },
-		{ "Line 3", 36 }, { "Line 4", 37 }, { "Line 5", 40 },
-		{ "Line 6", 41 }, { "Line 7", 44 }, { "Line 8", 45 },
-		{ "Line 9", 48 }, { "Line 10", 49 },
-	};
-	const int total = 3 + ARRAY_SIZE(outs) + 8 + 8;
+	const struct clarett_model *m = c->model;
+	const int total = 3 + m->n_out_gains + 2 * m->n_analogue;	/* monitor + gains + air + mode */
 	struct clarett_ctl *d;
 	int i, n = 0, err;
 
@@ -140,28 +146,24 @@ int clarett_create_controls(struct clarett *c)
 	*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = 112, .activate = 2 };
 	scnprintf(d->name, sizeof(d->name), "Master Playback Volume");
 
-	for (i = 0; i < ARRAY_SIZE(outs); i++) {
+	for (i = 0; i < m->n_out_gains; i++) {
 		d = &c->ctls[n++];
-		*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = outs[i].off, .activate = 1 };
-		scnprintf(d->name, sizeof(d->name), "%s Playback Volume", outs[i].name);
+		*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = m->out_gains[i].offset, .activate = 1 };
+		scnprintf(d->name, sizeof(d->name), "%s Playback Volume", m->out_gains[i].name);
 	}
 
-	for (i = 0; i < 8; i++) {
+	/* Air @ 174+i and Mode @ 166+i are shared bases across models (XML diff). */
+	for (i = 0; i < m->n_analogue; i++) {
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_SWITCH, .offset = 174 + i, .activate = 7 };
 		scnprintf(d->name, sizeof(d->name), "Analogue %d Air Capture Switch", i + 1);
 	}
 
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < m->n_analogue; i++) {
 		d = &c->ctls[n++];
-		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = 166 + i, .activate = 6 };
-		if (i < 2) {
-			d->texts = mode3;
-			d->n_texts = 3;
-		} else {
-			d->texts = mode2;
-			d->n_texts = 2;
-		}
+		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = 166 + i, .activate = 6,
+			.texts = m->analogue[i].mode_texts, .n_texts = m->analogue[i].n_modes,
+			.values = m->analogue[i].mode_values };
 		scnprintf(d->name, sizeof(d->name), "Analogue %d Mode Capture Enum", i + 1);
 	}
 

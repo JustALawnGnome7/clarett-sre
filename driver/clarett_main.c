@@ -95,7 +95,7 @@ static void clarett_hw_init(struct clarett *c)
 	 */
 }
 
-/* Generated bring-up replay table: clarett_init_blob[] + clarett_init_seq[]. */
+/* Generated per-model bring-up replay tables (clarett_init_blob_8prex[] / clarett_init_seq_8prex[]). */
 #include "clarett_init_seq.h"
 
 /*
@@ -111,8 +111,8 @@ static int clarett_arm_device(struct clarett *c)
 	int i, err, fails = 0;
 	bool clk_sent = false;
 
-	for (i = 0; i < ARRAY_SIZE(clarett_init_seq); i++) {
-		const struct clarett_init_step *s = &clarett_init_seq[i];
+	for (i = 0; i < c->model->n_init_steps; i++) {
+		const struct clarett_init_step *s = &c->model->init_seq[i];
 
 		/*
 		 * SET_CLOCK before CONFIG_PUSH. FC issues 0x6003 at device-open, ahead of the config/routing
@@ -131,7 +131,7 @@ static int clarett_arm_device(struct clarett *c)
 			clk_sent = true;
 		}
 
-		err = clarett_fcp(c, s->opcode, clarett_init_blob + s->off, s->len);
+		err = clarett_fcp(c, s->opcode, c->model->init_blob + s->off, s->len);
 		if (err) {
 			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
 				 i, s->opcode, err);
@@ -139,8 +139,8 @@ static int clarett_arm_device(struct clarett *c)
 		}
 	}
 	if (fails)
-		dev_warn(&c->pci->dev, "arm: %d/%zu steps failed\n",
-			 fails, ARRAY_SIZE(clarett_init_seq));
+		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
+			 fails, c->model->n_init_steps);
 	return 0;
 }
 
@@ -197,11 +197,11 @@ static int clarett_enable_monitor_hw_controls(struct clarett *c)
  * zero-terminated descriptor table followed by its sample fragments; *ring is one ring's byte span,
  * so block 1 begins at offset *ring. Same math in start and report so they agree.
  */
-static void clarett_ring_layout(size_t *tbl, size_t *smp, size_t *ring)
+static void clarett_ring_layout(struct clarett *c, size_t *tbl, size_t *smp, size_t *ring)
 {
-	*tbl = ALIGN((CLARETT_STREAM_NDESC + 1) * sizeof(__le64), 64);
-	*smp = CLARETT_STREAM_NDESC * CLARETT_STREAM_FRAG;
-	*ring = *tbl + *smp;
+	*tbl = clarett_tbl_bytes();
+	*smp = clarett_buf_bytes(c);
+	*ring = clarett_ring_bytes(c);
 }
 
 /* 1 s after engine-start, log whether DMA advanced: period IRQs, pointer regs, capture-buffer writes. */
@@ -239,7 +239,7 @@ static void clarett_stream_report(struct work_struct *work)
 	if (c2_min == 0xffffffff)
 		c2_min = 0;
 
-	clarett_ring_layout(&tbl, &smp, &ring);
+	clarett_ring_layout(c, &tbl, &smp, &ring);
 	rx_smp = (const u8 *)c->stream_buf + ring + tbl;	/* block-1 (capture) sample area */
 	for (i = 0; i < smp; i++) {
 		if (rx_smp[i] != 0xAA) {	/* any byte the device overwrote (incl. zeros) */
@@ -406,14 +406,14 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 	 * it disarmed — capture-only passes r0=0 (block 0 untouched), matching the validated blk1_only run.
 	 */
 	if (r0) {
-		writel(STREAM_CHANS, bar + STREAM_BLK0 + STREAM_OFF_CHANS);	/* 0x204 = 28 */
-		writel(STREAM_SIZE_VAL, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	/* 0x208 */
+		writel(c->model->playback_channels, bar + STREAM_BLK0 + STREAM_OFF_CHANS); /* 0x204 */
+		writel(c->model->stream_frag, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	  /* 0x208 */
 		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
 		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
 	}
 	if (r1) {
-		writel(STREAM_CHANS, bar + STREAM_BLK1 + STREAM_OFF_CHANS);	/* 0x304 */
-		writel(STREAM_SIZE_VAL, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	/* 0x308 */
+		writel(c->model->capture_channels, bar + STREAM_BLK1 + STREAM_OFF_CHANS);  /* 0x304 */
+		writel(c->model->stream_frag, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	  /* 0x308 */
 		writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI); /* 0x314 */
 		writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO); /* 0x310 */
 	}
@@ -461,7 +461,7 @@ int clarett_engine_start(struct clarett *c)
 	dma_addr_t tx_smp, rx_smp, r0, r1;
 	unsigned int i;
 
-	clarett_ring_layout(&tbl, &smp, &ring);
+	clarett_ring_layout(c, &tbl, &smp, &ring);
 	c->stream_size = 2 * ring;
 	c->stream_buf = dmam_alloc_coherent(&c->pci->dev, c->stream_size,
 					    &c->stream_dma, GFP_KERNEL);
@@ -476,8 +476,8 @@ int clarett_engine_start(struct clarett *c)
 
 	/* Fill descriptors with fragment bus addresses; entry [NDESC] stays 0 = ring terminator. */
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
-		tx_tbl[i] = cpu_to_le64(tx_smp + (dma_addr_t)i * CLARETT_STREAM_FRAG);
-		rx_tbl[i] = cpu_to_le64(rx_smp + (dma_addr_t)i * CLARETT_STREAM_FRAG);
+		tx_tbl[i] = cpu_to_le64(tx_smp + (dma_addr_t)i * c->model->stream_frag);
+		rx_tbl[i] = cpu_to_le64(rx_smp + (dma_addr_t)i * c->model->stream_frag);
 	}
 
 	/*
@@ -682,6 +682,10 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c = card->private_data;
 	c->card = card;
 	c->pci = pci;
+	/* All Clarett Thunderbolt units share PCI id 1cb5:0002, so the match can't
+	 * distinguish models; driver_data carries the default. Runtime model
+	 * disambiguation (fw-info / routing count) is a later step. */
+	c->model = (const struct clarett_model *)ent->driver_data;
 	mutex_init(&c->mbox_lock);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	atomic_set(&c->notify_bits, 0);
@@ -795,8 +799,86 @@ static void clarett_remove(struct pci_dev *pci)
 	/* BAR mapping, DMA buffer and device enable are devres-managed */
 }
 
+/* --- per-model descriptors ---------------------------------------------- */
+
+static const struct clarett_out_gain clarett_8prex_gains[] = {
+	{ "Monitor 1", 32 }, { "Monitor 2", 33 },
+	{ "Line 3", 36 }, { "Line 4", 37 }, { "Line 5", 40 }, { "Line 6", 41 },
+	{ "Line 7", 44 }, { "Line 8", 45 }, { "Line 9", 48 }, { "Line 10", 49 },
+};
+
+static const char * const clarett_mode_mli[] = { "Mic", "Line", "Inst" };
+static const char * const clarett_mode_ml[]  = { "Mic", "Line" };
+
+/* Analogue 1-2 add Inst; 3-8 are Mic/Line. Device byte == text index (identity). */
+static const struct clarett_preamp clarett_8prex_preamps[] = {
+	{ clarett_mode_mli, NULL, 3 }, { clarett_mode_mli, NULL, 3 },
+	{ clarett_mode_ml,  NULL, 2 }, { clarett_mode_ml,  NULL, 2 },
+	{ clarett_mode_ml,  NULL, 2 }, { clarett_mode_ml,  NULL, 2 },
+	{ clarett_mode_ml,  NULL, 2 }, { clarett_mode_ml,  NULL, 2 },
+};
+
+static const struct clarett_model clarett_8prex = {
+	.name = "Clarett 8PreX",
+	.out_gains = clarett_8prex_gains,
+	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
+	.n_analogue = 8,
+	.analogue = clarett_8prex_preamps,
+	.capture_channels = STREAM_CHANS,
+	.playback_channels = STREAM_CHANS,
+	.stream_frag = STREAM_SIZE_VAL,
+	.init_blob = clarett_init_blob_8prex,
+	.init_seq = clarett_init_seq_8prex,
+	.n_init_steps = ARRAY_SIZE(clarett_init_seq_8prex),
+};
+
+/*
+ * Clarett 2Pre (Thunderbolt) — STUB, not yet wired. The control-plane values below are derived from
+ * the XML diff against the 8PreX (FCP Server Resources/Clarett 2Pre.xml): shared offsets/commands, the
+ * first 4 of the 8PreX output gains, 2 preamps with the no-Mic Line/Inst encoding (Line=1, Inst=2 — the
+ * clarett_ctl.values map handles it), 14ch capture / 4ch playback. To enable on real hardware (step 5):
+ *   1. Confirm the 2Pre enumerates as 1cb5:0002 with the same 64K BAR0 (assumed shared across the line).
+ *   2. Capture its bring-up from a freshly power-cycled unit, then:
+ *        tools/fcp_decode.py <attach.log> --emit-init --init-model 2pre > driver/clarett_init_2pre.h
+ *      and #include it; fill .init_blob/.init_seq/.n_init_steps with the _2pre symbols.
+ *   3. Capture a stream to pin .stream_frag (8PreX = 0x1c0); confirm whether TX(4ch)/RX(14ch) are
+ *      symmetric or need per-direction fragment sizing (the one deferred geometry question, clarett.h).
+ *   4. Add runtime model disambiguation (fw-info / routing-count query) — the shared PCI id means
+ *      driver_data alone can't tell a 2Pre from an 8PreX — and select c->model accordingly in probe.
+ *   5. Drop the #if 0 and add the id_table row / disambiguation.
+ */
+#if 0
+static const struct clarett_out_gain clarett_2pre_gains[] = {
+	{ "Monitor 1", 32 }, { "Monitor 2", 33 }, { "Line 3", 36 }, { "Line 4", 37 },
+};
+
+static const char * const clarett_mode_li[] = { "Line", "Inst" };
+static const u8 clarett_mode_li_vals[] = { 1, 2 };	/* no Mic(0) on the 2Pre — per-model encoding */
+
+static const struct clarett_preamp clarett_2pre_preamps[] = {
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+};
+
+static const struct clarett_model clarett_2pre = {
+	.name = "Clarett 2Pre",
+	.out_gains = clarett_2pre_gains,
+	.n_out_gains = ARRAY_SIZE(clarett_2pre_gains),
+	.n_analogue = 2,
+	.analogue = clarett_2pre_preamps,
+	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
+	.playback_channels = 4,			/* playback pin count */
+	.stream_frag = 0,			/* TODO(step 5): capture; 8PreX = STREAM_SIZE_VAL (0x1c0) */
+	/* TODO(step 5): #include "clarett_init_2pre.h" and reference clarett_init_{blob,seq}_2pre */
+	.init_blob = NULL,
+	.init_seq = NULL,
+	.n_init_steps = 0,
+};
+#endif
+
 static const struct pci_device_id clarett_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_FOCUSRITE, PCI_DEVICE_CLARETT) },
+	{ PCI_DEVICE(PCI_VENDOR_FOCUSRITE, PCI_DEVICE_CLARETT),
+	  .driver_data = (kernel_ulong_t)&clarett_8prex },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, clarett_ids);

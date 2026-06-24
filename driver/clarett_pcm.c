@@ -27,13 +27,12 @@
 #include <sound/pcm.h>
 #include "clarett.h"
 
-/* Per-ring geometry. The ALSA buffer is pinned to exactly the RX sample-area size so the RX ring and
- * the ALSA ring share one geometry (256 descriptors, 1:1 byte offsets) — the per-period copy is then a
- * straight offset copy with no rescaling. */
-#define CLARETT_BUF_BYTES   (CLARETT_STREAM_NDESC * CLARETT_STREAM_FRAG)        /* 256*448 = 114688 */
-#define CLARETT_TBL_BYTES   ALIGN((CLARETT_STREAM_NDESC + 1) * sizeof(__le64), 64)
-#define CLARETT_RING_BYTES  (CLARETT_TBL_BYTES + CLARETT_BUF_BYTES)             /* table + samples */
-#define CLARETT_HWBUF_BYTES (2 * CLARETT_RING_BYTES)                            /* block 0 + block 1 */
+/*
+ * Per-ring geometry is derived per-model at runtime (clarett.h: clarett_buf_bytes() &c.). The ALSA buffer
+ * is pinned to exactly the RX sample-area size (clarett_buf_bytes) so the RX ring and the ALSA ring share
+ * one geometry (CLARETT_STREAM_NDESC descriptors, 1:1 byte offsets) — the per-period copy is then a
+ * straight offset copy with no rescaling.
+ */
 
 /*
  * Diagnostic: after arming in prepare(), inline-poll 0x300 for ~1 s to measure whether the engine
@@ -52,7 +51,7 @@ static void clarett_selftest_poll(struct clarett *c, const char *when)
 	void __iomem *bar = c->bar0;
 	unsigned long end = jiffies + msecs_to_jiffies(2000);
 	__le64 *tx_tbl = (__le64 *)c->stream_buf;
-	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + CLARETT_RING_BYTES);
+	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + clarett_ring_bytes(c));
 	u32 periods = 0, last = 0, maxc = 0;
 
 	dev_info(&c->pci->dev,
@@ -83,26 +82,24 @@ static void clarett_selftest_poll(struct clarett *c, const char *when)
 		 when, periods, maxc, last);
 }
 
+/*
+ * Constant capability template; the per-model geometry fields (channels, buffer/period bytes,
+ * periods_max) are filled in clarett_pcm_open() from c->model.
+ */
 static const struct snd_pcm_hardware clarett_pcm_hw = {
 	.info             = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 			    SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_BLOCK_TRANSFER,
-	.formats          = SNDRV_PCM_FMTBIT_S32_LE,	/* 28ch interleaved, 24-bit MSB-justified */
+	.formats          = SNDRV_PCM_FMTBIT_S32_LE,	/* interleaved, 24-bit MSB-justified */
 	.rates            = SNDRV_PCM_RATE_48000,
 	.rate_min         = CLARETT_PCM_RATE,
 	.rate_max         = CLARETT_PCM_RATE,
-	.channels_min     = CLARETT_PCM_CHANNELS,
-	.channels_max     = CLARETT_PCM_CHANNELS,
-	.buffer_bytes_max = CLARETT_BUF_BYTES,
-	.period_bytes_min = CLARETT_STREAM_FRAG,	/* one descriptor fragment */
-	.period_bytes_max = CLARETT_BUF_BYTES / 2,
 	.periods_min      = 2,
-	.periods_max      = CLARETT_STREAM_NDESC / 2,
 };
 
 /* Pointer to the block-1 (capture) sample area inside the contiguous hardware buffer. */
 static u8 *clarett_rx_area(struct clarett *c)
 {
-	return (u8 *)c->stream_buf + CLARETT_RING_BYTES + CLARETT_TBL_BYTES;
+	return (u8 *)c->stream_buf + clarett_ring_bytes(c) + clarett_tbl_bytes();
 }
 
 /*
@@ -123,13 +120,13 @@ void clarett_pcm_tick(struct clarett *c)
 	runtime = ss->runtime;
 
 	/* Descriptor that just completed (model: one descriptor per tick, see CLARETT_DESCS_PER_TICK). */
-	desc = div_u64(c->pcm_frames, CLARETT_FRAMES_PER_DESC) % CLARETT_STREAM_NDESC;
-	off  = desc * CLARETT_STREAM_FRAG;
+	desc = div_u64(c->pcm_frames, clarett_cap_frames_per_desc(c)) % CLARETT_STREAM_NDESC;
+	off  = desc * c->model->stream_frag;
 	if (runtime->dma_area)
 		memcpy(runtime->dma_area + off, clarett_rx_area(c) + off,
-		       CLARETT_DESCS_PER_TICK * CLARETT_STREAM_FRAG);
+		       CLARETT_DESCS_PER_TICK * c->model->stream_frag);
 
-	c->pcm_frames += CLARETT_FRAMES_PER_TICK;
+	c->pcm_frames += clarett_cap_frames_per_desc(c) * CLARETT_DESCS_PER_TICK;
 
 	/* Deliver period boundaries to ALSA only between trigger START and STOP. ACKing (stream_run) runs
 	 * from prepare so the engine is serviced from the instant it is armed — it stalls within ms if not
@@ -145,19 +142,26 @@ void clarett_pcm_tick(struct clarett *c)
 
 static int clarett_pcm_open(struct snd_pcm_substream *ss)
 {
+	struct clarett *c = snd_pcm_substream_chip(ss);
 	struct snd_pcm_runtime *runtime = ss->runtime;
+	size_t buf = clarett_buf_bytes(c);
 	int err;
 
 	runtime->hw = clarett_pcm_hw;
+	runtime->hw.channels_min     = c->model->capture_channels;
+	runtime->hw.channels_max     = c->model->capture_channels;
+	runtime->hw.buffer_bytes_max = buf;
+	runtime->hw.period_bytes_min = c->model->stream_frag;	/* one descriptor fragment */
+	runtime->hw.period_bytes_max = buf / 2;
+	runtime->hw.periods_max      = CLARETT_STREAM_NDESC / 2;
 
 	/* Pin the buffer to the full RX-area size so RX ring and ALSA ring share one geometry. */
-	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-					   CLARETT_BUF_BYTES, CLARETT_BUF_BYTES);
+	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
 	if (err < 0)
 		return err;
 	/* Period must be a whole number of descriptor fragments. */
 	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
-					 CLARETT_STREAM_FRAG);
+					 c->model->stream_frag);
 }
 
 static int clarett_pcm_close(struct snd_pcm_substream *ss)
@@ -192,7 +196,7 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
 	dma_addr_t r0 = c->stream_dma;				/* block 0 (TX) table base */
-	dma_addr_t r1 = c->stream_dma + CLARETT_RING_BYTES;	/* block 1 (RX) table base */
+	dma_addr_t r1 = c->stream_dma + clarett_ring_bytes(c);	/* block 1 (RX) table base */
 
 	clarett_engine_stop(c);		/* idempotent: no-op unless a prior prepare armed it */
 
@@ -262,15 +266,18 @@ static const struct snd_pcm_ops clarett_pcm_ops = {
  * already silence and the terminators are already zero. */
 static void clarett_build_rings(struct clarett *c)
 {
+	size_t ring = clarett_ring_bytes(c);
+	size_t tbl  = clarett_tbl_bytes();
+	u32 frag = c->model->stream_frag;
 	__le64 *tx_tbl = (__le64 *)c->stream_buf;
-	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + CLARETT_RING_BYTES);
-	dma_addr_t tx_smp = c->stream_dma + CLARETT_TBL_BYTES;
-	dma_addr_t rx_smp = c->stream_dma + CLARETT_RING_BYTES + CLARETT_TBL_BYTES;
+	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + ring);
+	dma_addr_t tx_smp = c->stream_dma + tbl;
+	dma_addr_t rx_smp = c->stream_dma + ring + tbl;
 	unsigned int i;
 
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
-		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * CLARETT_STREAM_FRAG);
-		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * CLARETT_STREAM_FRAG);
+		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * frag);
+		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * frag);
 	}
 	tx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(1);	/* end-of-list / wrap flag */
 	rx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(1);
@@ -281,26 +288,26 @@ static void clarett_build_rings(struct clarett *c)
 	 * so it appears to be functionally required for the engine to start raising periods — not just a
 	 * capture-detection marker. [WHY: not yet understood; confirm empirically.]
 	 */
-	memset(clarett_rx_area(c), 0xAA, CLARETT_BUF_BYTES);
+	memset(clarett_rx_area(c), 0xAA, clarett_buf_bytes(c));
 }
 
 int clarett_create_pcm(struct clarett *c)
 {
 	struct snd_pcm *pcm;
+	size_t buf = clarett_buf_bytes(c);
 	int err;
 
-	err = snd_pcm_new(c->card, "Clarett 8PreX", 0, 0, 1, &pcm);	/* 0 playback, 1 capture */
+	err = snd_pcm_new(c->card, c->model->name, 0, 0, 1, &pcm);	/* 0 playback, 1 capture */
 	if (err < 0)
 		return err;
 
 	pcm->private_data = c;
-	strscpy(pcm->name, "Clarett 8PreX", sizeof(pcm->name));
+	strscpy(pcm->name, c->model->name, sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &clarett_pcm_ops);
-	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV, &c->pci->dev,
-				       CLARETT_BUF_BYTES, CLARETT_BUF_BYTES);
+	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV, &c->pci->dev, buf, buf);
 	c->pcm = pcm;
 
-	c->stream_size = CLARETT_HWBUF_BYTES;
+	c->stream_size = 2 * clarett_ring_bytes(c);
 	c->stream_buf = dmam_alloc_coherent(&c->pci->dev, c->stream_size,
 					    &c->stream_dma, GFP_KERNEL);
 	if (!c->stream_buf)
@@ -308,11 +315,11 @@ int clarett_create_pcm(struct clarett *c)
 	clarett_build_rings(c);
 
 	dev_info(&c->pci->dev,
-		 "capture PCM registered (28ch S32_LE @%u, %u-desc ring @%pad)\n",
-		 CLARETT_PCM_RATE, CLARETT_STREAM_NDESC, &c->stream_dma);
+		 "capture PCM registered (%uch S32_LE @%u, %u-desc ring @%pad)\n",
+		 c->model->capture_channels, CLARETT_PCM_RATE, CLARETT_STREAM_NDESC, &c->stream_dma);
 
 	if (pcm_selftest) {
-		clarett_engine_arm(c, c->stream_dma, c->stream_dma + CLARETT_RING_BYTES);
+		clarett_engine_arm(c, c->stream_dma, c->stream_dma + clarett_ring_bytes(c));
 		clarett_selftest_poll(c, "probe-arm");
 		clarett_engine_stop(c);
 	}
@@ -324,7 +331,7 @@ int clarett_create_pcm(struct clarett *c)
 	 * engine is stopped afterwards so normal prepare-time arming still drives operation.
 	 */
 	if (pcm_selftest) {
-		clarett_engine_arm(c, c->stream_dma, c->stream_dma + CLARETT_RING_BYTES);
+		clarett_engine_arm(c, c->stream_dma, c->stream_dma + clarett_ring_bytes(c));
 		clarett_selftest_poll(c, "probe-arm");
 		clarett_engine_stop(c);
 	}

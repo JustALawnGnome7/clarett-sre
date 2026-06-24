@@ -50,23 +50,22 @@ struct snd_pcm_substream;
 #define   STREAM_OFF_BASE_LO     0x10    /* ring base bus address low 32    */
 #define   STREAM_OFF_BASE_HI     0x14    /* ring base bus address high 32   */
 #define   STREAM_OFF_PTR         0x18    /* DMA position (read-only)        */
-#define STREAM_CHANS             0x1c    /* 28 PCM channels per direction   */
-#define STREAM_SIZE_VAL          0x1c0   /* 0x208: bytes the engine DMAs per descriptor */
+#define STREAM_CHANS             0x1c    /* 8PreX: 28 PCM channels/direction (populates clarett_8prex) */
+#define STREAM_SIZE_VAL          0x1c0   /* 8PreX: bytes the engine DMAs per descriptor (0x208 reg)    */
 /*
  * Descriptor ring (data-plane spec §3c). 0x210/0x214 (and 0x310/0x314) point at a table of bare
  * 8-byte little-endian guest-physical addresses, zero-terminated; each entry is one DMA fragment of
- * STREAM_SIZE_VAL bytes holding 28-channel S32_LE (24-bit MSB-justified) interleaved frames
- * (CLARETT_STREAM_FRAME = 28 * 4). The probe lays CLARETT_STREAM_NDESC valid entries (+ a zero
- * terminator) per ring over one contiguous coherent buffer.
+ * clarett_model.stream_frag bytes holding capture_channels-wide S32_LE (24-bit MSB-justified)
+ * interleaved frames (frame stride = channels * 4). The probe lays CLARETT_STREAM_NDESC valid entries
+ * (+ a zero terminator) per ring over one contiguous coherent buffer.
+ *
+ * STREAM_CHANS / STREAM_SIZE_VAL are the 8PreX values that populate clarett_8prex; all runtime stream
+ * geometry is derived per-model from c->model via clarett_buf_bytes() &c. (defined below struct clarett).
  */
-#define CLARETT_STREAM_NDESC     256            /* descriptors per ring (probe depth)         */
-#define CLARETT_STREAM_FRAG      STREAM_SIZE_VAL /* fragment bytes per descriptor              */
-#define CLARETT_STREAM_FRAME     0x70           /* 112 = 28 channels x S32_LE                  */
+#define CLARETT_STREAM_NDESC     256            /* descriptors per ring (probe depth; model-independent) */
 
 /* --- PCM (data plane) --------------------------------------------------- */
-#define CLARETT_PCM_RATE         48000
-#define CLARETT_PCM_CHANNELS     STREAM_CHANS    /* 28 */
-#define CLARETT_FRAMES_PER_DESC  (CLARETT_STREAM_FRAG / CLARETT_STREAM_FRAME)  /* 448/112 = 4 */
+#define CLARETT_PCM_RATE         48000          /* default rate, both models (see clocking enum) */
 /*
  * Frames the engine advances per 0x300 period tick. HYPOTHESIS: one tick == one descriptor — the
  * persistent-servicer test stalled at ~249 periods over a 256-descriptor ring (~1 tick/descriptor).
@@ -76,7 +75,6 @@ struct snd_pcm_substream;
  * correct but the reported sample rate (hence pitch) may be off by this factor.
  */
 #define CLARETT_DESCS_PER_TICK   1
-#define CLARETT_FRAMES_PER_TICK  (CLARETT_FRAMES_PER_DESC * CLARETT_DESCS_PER_TICK)
 
 /* FCP mailbox header layout, relative to REG_MBOX */
 #define MBOX_CMD                 0x00    /* bit31 = execute flag | opcode               */
@@ -183,6 +181,53 @@ struct clarett_init_step {
 };
 
 /*
+ * Per-model descriptor (multi-model support). One const instance per supported
+ * Clarett Thunderbolt variant, selected at probe and pinned as clarett.model.
+ * Every value that differs between variants lives here; the mailbox/engine/mixer
+ * *code* stays model-agnostic. Encodings are per-model (clean-room rule) — never
+ * assume a value carries across models.
+ *
+ * NOTE: all Clarett Thunderbolt units reportedly share PCI id 1cb5:0002, so the
+ * id_table cannot distinguish models; driver_data carries the default (8PreX)
+ * and runtime disambiguation (fw-info / routing-count query) is a later step.
+ */
+struct clarett_out_gain {
+	const char *name;	/* ALSA control name prefix, e.g. "Monitor 1"  */
+	u8 offset;		/* config-space byte offset (SET_DATA target)  */
+};
+
+/*
+ * Per-preamp input mode enum. mode_values is the per-model device encoding:
+ * NEVER assume text index == device byte (8PreX Mic/Line/Inst = 0/1/2, but the
+ * 2Pre's Line/Inst = 1/2 with no Mic). NULL = identity (index == device byte).
+ */
+struct clarett_preamp {
+	const char * const *mode_texts;
+	const u8 *mode_values;
+	int n_modes;
+};
+
+struct clarett_model {
+	const char *name;			/* human-readable model name */
+
+	/* control plane */
+	const struct clarett_out_gain *out_gains;
+	int n_out_gains;
+	int n_analogue;				/* preamp count (air + mode controls) */
+	const struct clarett_preamp *analogue;	/* [n_analogue] */
+
+	/* data plane / PCM geometry */
+	u8 capture_channels;			/* block-1 RX stream width */
+	u8 playback_channels;			/* block-0 TX stream width */
+	u32 stream_frag;			/* engine DMA bytes per descriptor */
+
+	/* device bring-up replay (per-model; from fcp_decode.py --emit-init) */
+	const u8 *init_blob;
+	const struct clarett_init_step *init_seq;
+	int n_init_steps;
+};
+
+/*
  * GET-response DMA layout (confirmed on hardware). The device DMAs the response
  * into resp_buf as a 16-byte FCP header followed by the requested bytes:
  *   resp[0..3]  = echoed cmd (CMD_EXEC_FLAG | opcode) — guard on this
@@ -213,6 +258,7 @@ struct clarett_ctl {
 	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
 	const char * const *texts;	/* CT_ENUM                                    */
 	int n_texts;
+	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
 	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
 };
 
@@ -229,6 +275,7 @@ struct clarett {
 	struct pci_dev *pci;
 	struct snd_card *card;
 	void __iomem *bar0;
+	const struct clarett_model *model;	/* selected at probe; see struct clarett_model */
 
 	struct mutex mbox_lock;		/* serialises FCP transactions */
 	u16 seq;
@@ -298,6 +345,34 @@ static inline void clarett_put_le32(u8 *p, u32 v)
 	p[1] = v >> 8;
 	p[2] = v >> 16;
 	p[3] = v >> 24;
+}
+
+/*
+ * Runtime stream geometry, derived per-model from c->model. The hardware rings live in one contiguous
+ * coherent buffer of 2 * clarett_ring_bytes(): block 0 (TX) then block 1 (RX), each a descriptor table
+ * (clarett_tbl_bytes, model-independent) followed by CLARETT_STREAM_NDESC sample fragments. NOTE: TX and
+ * RX share one stream_frag here (true on the 8PreX, where both directions are 28ch); per-direction
+ * (asymmetric) geometry for narrower models is deferred until captured (step 5).
+ */
+static inline size_t clarett_tbl_bytes(void)
+{
+	return ALIGN((CLARETT_STREAM_NDESC + 1) * sizeof(__le64), 64);
+}
+
+static inline size_t clarett_buf_bytes(const struct clarett *c)
+{
+	return (size_t)CLARETT_STREAM_NDESC * c->model->stream_frag;
+}
+
+static inline size_t clarett_ring_bytes(const struct clarett *c)
+{
+	return clarett_tbl_bytes() + clarett_buf_bytes(c);
+}
+
+/* Capture frames per descriptor fragment: stream_frag / (capture_channels * 4 bytes, S32_LE). */
+static inline u32 clarett_cap_frames_per_desc(const struct clarett *c)
+{
+	return c->model->stream_frag / ((u32)c->model->capture_channels * 4);
 }
 
 /* mailbox.c */
