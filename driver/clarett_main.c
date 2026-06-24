@@ -13,6 +13,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
+#include <linux/delay.h>
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/initval.h>
@@ -83,9 +84,27 @@ static void clarett_hw_init(struct clarett *c)
 static int clarett_arm_device(struct clarett *c)
 {
 	int i, err, fails = 0;
+	bool clk_sent = false;
 
 	for (i = 0; i < ARRAY_SIZE(clarett_init_seq); i++) {
 		const struct clarett_init_step *s = &clarett_init_seq[i];
+
+		/*
+		 * SET_CLOCK before CONFIG_PUSH. FC issues 0x6003 at device-open, ahead of the config/routing
+		 * push, in every capture; the device appears to latch the clock into its audio subsystem while
+		 * processing that push, so a SET_CLOCK sent only later (engine_start) never engages period
+		 * generation (0x300 stays flat). Inject it just before the first 0x5000, matching the order.
+		 */
+		if (!clk_sent && s->opcode == 0x005000) {
+			u8 clk[8];
+
+			clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
+			clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
+			err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
+			dev_info(&c->pci->dev, "arm: SET_CLOCK{%u, Internal} before CONFIG_PUSH -> %d\n",
+				 CLARETT_DEFAULT_RATE, err);
+			clk_sent = true;
+		}
 
 		err = clarett_fcp(c, s->opcode, clarett_init_blob + s->off, s->len);
 		if (err) {
@@ -167,6 +186,33 @@ static void clarett_stream_report(struct work_struct *work)
 	size_t tbl, smp, ring, i;
 	const u8 *rx_smp;
 	bool rx_data = false;
+	u32 c1_hits = 0, c2_hits = 0, c2_min = 0xffffffff, c2_max = 0;
+
+	/*
+	 * The real streaming signal is the block cause register, which the Windows driver POLLS (not
+	 * MSI): during playback 0x300 returns 0x80000000 | period-counter stepping by 0xc, while
+	 * 0x218/0x318 stay static (0x12/0x4 — the same values our engine reaches). Poll 0x200/0x300
+	 * here in a ~40 ms burst; bit31-set reads with an advancing low counter == periods firing.
+	 */
+	for (i = 0; i < 2000; i++) {
+		u32 c1 = readl(c->bar0 + STREAM_BLK0);		/* 0x200 cause (read-to-clear) */
+		u32 c2 = readl(c->bar0 + STREAM_BLK1);		/* 0x300 cause (read-to-clear) */
+
+		if (c1 & 0x80000000)
+			c1_hits++;
+		if (c2 & 0x80000000) {
+			u32 ctr = c2 & 0x7fffffff;
+
+			c2_hits++;
+			if (ctr < c2_min)
+				c2_min = ctr;
+			if (ctr > c2_max)
+				c2_max = ctr;
+		}
+		udelay(20);
+	}
+	if (c2_min == 0xffffffff)
+		c2_min = 0;
 
 	clarett_ring_layout(&tbl, &smp, &ring);
 	rx_smp = (const u8 *)c->stream_buf + ring + tbl;	/* block-1 (capture) sample area */
@@ -178,11 +224,12 @@ static void clarett_stream_report(struct work_struct *work)
 	}
 
 	dev_info(&c->pci->dev,
-		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x; capture-buf=%s "
-		 "(0xAA marker overwritten => device wrote the RX buffer, even with silence)\n",
+		 "engine probe @1s: vec1=%d vec2=%d IRQs; ptr0=0x%x ptr1=0x%x; "
+		 "cause-poll 0x200:hits=%u 0x300:hits=%u ctr=0x%x..0x%x; capture-buf=%s\n",
 		 atomic_read(&c->period_irqs[1]), atomic_read(&c->period_irqs[2]),
 		 readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_PTR),
 		 readl(c->bar0 + STREAM_BLK1 + STREAM_OFF_PTR),
+		 c1_hits, c2_hits, c2_min, c2_max,
 		 rx_data ? "WRITTEN (marker gone)" : "untouched (marker intact)");
 }
 

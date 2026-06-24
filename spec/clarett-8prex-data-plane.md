@@ -292,19 +292,56 @@ fastest path now is an **active probe from our own driver**, not more passive tr
    vec2=0`) and neither pointer climbs at audio rate — the engine reaches the armed state but never
    streams. That points at the still-untraced **clock-source / sample-rate engagement** (control-plane
    §7), the most likely reason monitor `Mute`/`Dim` writes complete but the front-panel LED never moves.
-   **Next:**
-   - **Send the clock command — FOUND.** `SET_CLOCK = opcode 0x006003`, payload `{u32 sample_rate, u32
-     clock_source}` (e.g. `{44100, 24=Internal}`), captured by baseline-vs-rate-change diff (control-plane
-     §7, TRACE-CONFIRMED). Our bring-up sends `0x6000/1/2/4/5` but **never `0x6003`**, so the engine never
-     clocks — the leading suspect for `vec1=0 vec2=0` and the dead Mute LED. Wire `SET_CLOCK` into
-     `clarett_engine_start` before arming and re-test for period IRQs + a moving LED.
-   - **Wire capture-only ALSA PCM** over block 1 (proven working) as a shippable milestone in parallel.
-   - The playback writeback-to-0 is tracked as a **benign bare-metal artifact** (floods dmesg only); if
-     it ever proves functionally limiting, revisit at the IOMMU level (reserve/map a low buffer), not by
-     hunting a vendor config that does not exist.
-5. **Then ALSA PCM (Phase 4).** Once both directions DMA into our buffers, wire `snd_pcm_ops`
-   (open/hw_params/prepare/trigger/pointer) over the descriptor ring with the vec1/vec2 handler calling
-   `snd_pcm_period_elapsed`.
+   **Clock command FOUND and wired — but the engine still won't clock.** `SET_CLOCK = opcode 0x006003`,
+   payload `{u32 sample_rate, u32 clock_source}` (e.g. `{48000, 24=Internal}`), captured by
+   baseline-vs-rate-change diff (control-plane §7, TRACE-CONFIRMED). Our bring-up sends `0x6000/1/2/4/5`
+   but never `0x6003`. `clarett_engine_start` now sends `SET_CLOCK` before arming and `DATA_CMD{activate=5}`
+   (the rate-change capture's final mailbox command, the only `DATA_CMD` in it) as the stream-start commit.
+   Both are **device-accepted** (`done=1 fcperr=0`). Result on bare metal: **still `vec1=0 vec2=0`, both
+   pointers frozen at their startup-burst values** (`ptr0≈0x12`, `ptr1=0x4`). The engine takes a ~4-desc
+   prefill and stops.
+   - **NOT the IOMMU wedge.** `blk1_only=1` (block 0 absent → only a single benign read fault at 0, no
+     write storm) with `SET_CLOCK`+commit: block 1 *still* stalls at `ptr1=0x4`, `vec2=0`. A clean engine
+     with clock+commit does not stream, so the block-0 writeback fault was never the cause.
+   - **NOT a missing register/mailbox trigger.** A full-write siphon of an FC stream-start shows the arm
+     is exactly our 12 register writes with **nothing after `0x110=0x7`**; `activate=5` is the only
+     `DATA_CMD`. Everything observable, we replay.
+
+   **RESOLVED via a full streaming capture — the streaming signal is `0x300`, and the engine needs
+   continuous host servicing, not just an arm.** A 122 k-line full read+write siphon of a *successful*
+   FC playback session settled what every prior fragment couldn't:
+   - **`0x218`/`0x318` are static status words, not position counters.** Throughout active VM playback
+     they read a constant `0x12` / `0x4` — **the exact values our bare-metal engine reaches.** Our
+     "frozen pointers" were never a stall; the VM's don't move either. We were reading the wrong signal.
+   - **The streaming signal is the block cause register `0x300` (vec2).** During playback it returns
+     `0x80000000 | period_counter`, the low counter **stepping by `0xc` per period** (`0x8000000c,
+     0x80000018, 0x80000024 … 0x800000f0`, wrapping). `0x200` (vec1/TX) stays `0`. Windows **POLLS** the
+     whole cause block `0x100/0x200/0x300/0x400/0x500` ≈400×/s (≈18 k reads each over ~45 s) — it does
+     **not** use MSI for periods. (Our probe now polls `0x300` directly; see `clarett_stream_report`.)
+   - **The ONLY register writes in the entire streaming capture are our exact 12 arm writes.** No
+     `0x500`-block write, no extra IRQ/stream enable, nothing. Plus `SET_CLOCK` + `activate=5` (mailbox).
+     We replicate every observable BAR0 write.
+   - **Every remaining MMIO lever, ruled out on bare metal** (each a fresh power-cycle, with the correct
+     `0x300` poll detector): `SET_CLOCK` accepted both in `engine_start` *and* injected **before
+     `CONFIG_PUSH`** (clock-first ordering) → `0x300:hits=0` either way; `DATA_CMD{activate=5}` accepted →
+     no change; `blk1_only` clean engine → no periods. The clock command lands (`done=0`), the engine
+     reaches VM-identical armed status, **DMA works** (block 1 wrote our buffer), yet `0x300` never ticks.
+
+   **Conclusion: this is not missing RE — it is the missing streaming RUNTIME.** The "~4 descriptors then
+   stop" is a **flow-controlled DMA engine**: it fills a small buffer, raises a period on `0x300`, and
+   waits for the host to acknowledge (the continuous ~400 Hz cause poll + doorbells + position-writeback
+   consumption Windows does *the whole time audio plays*). A one-shot arm-and-check probe structurally
+   cannot demonstrate streaming — nothing services the engine, so it stalls within milliseconds; our
+   `@1s` 2000-read burst is a full second too late to recover it. We now have everything needed to build
+   the runtime: descriptor format, sample layout, directions, the 12-register arm, `SET_CLOCK`, the
+   commit, and **the period signal (`0x300`, polled, +`0xc`/period)**.
+5. **ALSA PCM (Phase 4) — the actual remaining work.** Build a **continuous servicing path**, not a
+   probe: from arm, poll `0x300` at ~period rate (mirroring FC's ~400 Hz), ack each period (read-to-clear)
+   + ring the doorbell as FC does, and on each period advance the ring and call `snd_pcm_period_elapsed`.
+   If the engine keeps clocking under live servicing, wire it straight into `snd_pcm_ops`
+   (open/hw_params/prepare/trigger/pointer). Capture (block 1) is the proven-working first target.
+   - The playback writeback-to-0 stays a **benign bare-metal artifact** (floods dmesg only); revisit at
+     the IOMMU level (reserve/map a low buffer) only if it proves functionally limiting.
 
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
 and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
