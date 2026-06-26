@@ -1,7 +1,10 @@
-# snd-clarett — Focusrite Clarett 8PreX (Thunderbolt) ALSA driver
+# snd-clarett — Focusrite Clarett (Thunderbolt) ALSA driver
+
+Supported: **Clarett 8PreX** and **Clarett 2Pre** (one module, per-model descriptor).
 
 Status: **control plane only** (mixer-only sound card). PCM/streaming is not yet
-implemented. Built from the clean-room notes in `../spec/`.
+implemented (and is gated off for the 2Pre until its stream geometry is captured).
+Built from the clean-room notes in `../spec/`.
 
 > **⚠️ Control changes do not physically take effect yet.** The driver brings up the
 > device and every mixer write completes without error, but the hardware does not act
@@ -35,6 +38,28 @@ sudo insmod snd-clarett.ko
 ```
 
 `make KDIR=/path/to/kernel` to build against another tree.
+
+## Model selection (`model=`)
+
+The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` **and** presents a
+byte-identical PCIe interface — every MMIO register, FCP query response, config-space
+read, and even the dummy serial is the same across models (verified on real 8PreX and
+2Pre hardware). So the driver **cannot auto-detect the model** and takes a parameter:
+
+```sh
+sudo insmod snd-clarett.ko model=2pre     # or model=8prex (default)
+```
+
+There is no auto-detect of any kind. The model name *does* live in the Thunderbolt
+DROM, but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3
+model), and TB2 units are firmware-tunnelled rather than enumerated as kernel-managed
+TB routers — so they never expose a `device_name` on `/sys/bus/thunderbolt`, and there
+is nothing for userspace to key on either. Set the model explicitly; to make it
+persistent:
+
+```sh
+echo 'options snd_clarett model=2pre' | sudo tee /etc/modprobe.d/snd-clarett.conf
+```
 
 ## ⚠️ The device must NOT be bound to vfio-pci
 
@@ -92,4 +117,8 @@ Never load this while the VM is using the device.
   `DATA_CMD{5}` flash-commit (command 5), which the driver intentionally does not
   issue — auto-persisting every change would wear the flash. See
   `FCP_ACTIVATE_PERSIST` in `clarett.h` to add a deliberate "save" action.
-- Single-card only; no module params for index/id.
+- Single-card only; no module params for index/id (but see `model=` above).
+- **2Pre: control plane only.** Model/init/mixer are wired (channel counts 4 playback /
+  14 record are hardware-confirmed), but PCM is gated off until a 2Pre streaming capture
+  pins `stream_frag` — and the 2Pre is asymmetric (TX 4ch / RX 14ch), unlike the 8PreX's
+  symmetric 28/28, so it may need per-direction fragment sizing.

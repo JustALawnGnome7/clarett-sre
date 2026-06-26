@@ -15,6 +15,8 @@
 #include <linux/workqueue.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/string.h>
+#include <linux/jiffies.h>
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/initval.h>
@@ -59,6 +61,35 @@ MODULE_PARM_DESC(pollall,
 		 "Focusrite Control's poll exactly (it skips 0x100/0x400 by default). Tests whether the full "
 		 "poll is the 'host keeping up' signal that lets the engine wrap past one ring pass.");
 
+/*
+ * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
+ * byte-identical PCIe interface (MMIO regs, FCP query responses, config-space, even the dummy serial),
+ * so the model is NOT auto-detectable from the device — it must be named. Default 8PreX preserves prior
+ * behaviour. There is no userspace shortcut either: the line is entirely Thunderbolt 2 (discontinued
+ * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
+ * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
+ */
+static const struct clarett_model clarett_8prex, clarett_2pre;	/* defined below; selected by clarett_pick_model() */
+
+static char *model;
+module_param(model, charp, 0444);
+MODULE_PARM_DESC(model,
+		 "Force interface model: \"8prex\" (default) or \"2pre\". All Clarett Thunderbolt units share "
+		 "PCI id 1cb5:0002 and are indistinguishable from the PCIe side, so the model must be specified "
+		 "explicitly (e.g. via /etc/modprobe.d/).");
+
+static const struct clarett_model *clarett_pick_model(const struct pci_device_id *ent)
+{
+	if (model) {
+		if (sysfs_streq(model, "2pre"))
+			return &clarett_2pre;
+		if (sysfs_streq(model, "8prex"))
+			return &clarett_8prex;
+		pr_warn("snd_clarett: unknown model=\"%s\"; falling back to default\n", model);
+	}
+	return (const struct clarett_model *)ent->driver_data;
+}
+
 static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
@@ -97,6 +128,8 @@ static void clarett_hw_init(struct clarett *c)
 
 /* Generated per-model bring-up replay tables (clarett_init_blob_8prex[] / clarett_init_seq_8prex[]). */
 #include "clarett_init_seq.h"
+/* clarett_init_blob_2pre[] / clarett_init_seq_2pre[] (fcp_decode.py --emit-init --init-model 2pre). */
+#include "clarett_init_2pre.h"
 
 /*
  * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
@@ -682,10 +715,10 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c = card->private_data;
 	c->card = card;
 	c->pci = pci;
-	/* All Clarett Thunderbolt units share PCI id 1cb5:0002, so the match can't
-	 * distinguish models; driver_data carries the default. Runtime model
-	 * disambiguation (fw-info / routing count) is a later step. */
-	c->model = (const struct clarett_model *)ent->driver_data;
+	/* Shared PCI id across the line → the match can't pick the model; the model= param does
+	 * (clarett_pick_model), defaulting to the id_table's 8PreX. See clarett_pick_model(). */
+	c->model = clarett_pick_model(ent);
+	dev_info(&pci->dev, "model: %s\n", c->model->name);
 	mutex_init(&c->mbox_lock);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	atomic_set(&c->notify_bits, 0);
@@ -745,8 +778,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
 
-	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. */
-	if (enable_pcm) {
+	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe.
+	 * Requires a known stream fragment size; models without a captured streaming geometry (stream_frag
+	 * == 0, e.g. the 2Pre) stay mixer-only until that's pinned. */
+	if (enable_pcm && !c->model->stream_frag) {
+		dev_warn(&pci->dev, "PCM unavailable for %s (stream geometry not yet captured); mixer-only\n",
+			 c->model->name);
+	} else if (enable_pcm) {
 		err = clarett_create_pcm(c);
 		if (err)
 			dev_warn(&pci->dev, "PCM create failed (%d); continuing mixer-only\n", err);
@@ -755,15 +793,15 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	/* Opt-in data-plane experiment: start the audio engine and watch what happens. Best-effort;
 	 * needs the IRQ handlers (above) hooked first so vec1/vec2 period IRQs are counted. */
-	if (stream_probe && !enable_pcm && c->irq_ready) {
+	if (stream_probe && c->model->stream_frag && !enable_pcm && c->irq_ready) {
 		err = clarett_engine_start(c);
 		if (err)
 			dev_warn(&pci->dev, "engine-start probe failed (%d)\n", err);
 		err = 0;
 	}
 
-	strscpy(card->driver, "Clarett8PreX", sizeof(card->driver));
-	strscpy(card->shortname, "Focusrite Clarett 8PreX", sizeof(card->shortname));
+	strscpy(card->driver, "Clarett", sizeof(card->driver));
+	snprintf(card->shortname, sizeof(card->shortname), "Focusrite %s", c->model->name);
 	snprintf(card->longname, sizeof(card->longname),
 		 "%s at %s, fw app 0x%08x", card->shortname, pci_name(pci),
 		 c->fw_app);
@@ -774,8 +812,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	pci_set_drvdata(pci, card);
 	dev_info(&pci->dev,
-		 "Clarett 8PreX: serial %08x%08x fw app 0x%08x fpga 0x%08x\n",
-		 c->serial_hi, c->serial_lo, c->fw_app, c->fw_fpga);
+		 "%s: serial %08x%08x fw app 0x%08x fpga 0x%08x\n",
+		 c->model->name, c->serial_hi, c->serial_lo, c->fw_app, c->fw_fpga);
 	return 0;
 
 err_free:
@@ -833,21 +871,17 @@ static const struct clarett_model clarett_8prex = {
 };
 
 /*
- * Clarett 2Pre (Thunderbolt) — STUB, not yet wired. The control-plane values below are derived from
- * the XML diff against the 8PreX (FCP Server Resources/Clarett 2Pre.xml): shared offsets/commands, the
- * first 4 of the 8PreX output gains, 2 preamps with the no-Mic Line/Inst encoding (Line=1, Inst=2 — the
- * clarett_ctl.values map handles it), 14ch capture / 4ch playback. To enable on real hardware (step 5):
- *   1. Confirm the 2Pre enumerates as 1cb5:0002 with the same 64K BAR0 (assumed shared across the line).
- *   2. Capture its bring-up from a freshly power-cycled unit, then:
- *        tools/fcp_decode.py <attach.log> --emit-init --init-model 2pre > driver/clarett_init_2pre.h
- *      and #include it; fill .init_blob/.init_seq/.n_init_steps with the _2pre symbols.
- *   3. Capture a stream to pin .stream_frag (8PreX = 0x1c0); confirm whether TX(4ch)/RX(14ch) are
- *      symmetric or need per-direction fragment sizing (the one deferred geometry question, clarett.h).
- *   4. Add runtime model disambiguation (fw-info / routing-count query) — the shared PCI id means
- *      driver_data alone can't tell a 2Pre from an 8PreX — and select c->model accordingly in probe.
- *   5. Drop the #if 0 and add the id_table row / disambiguation.
+ * Clarett 2Pre (Thunderbolt). Control-plane values from the XML diff against the 8PreX
+ * (FCP Server Resources/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
+ * gains, 2 preamps with the no-Mic Line/Inst encoding (Line=1, Inst=2 — clarett_ctl.values handles it).
+ * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
+ * trace). The bring-up replay is the captured 2Pre attach (clarett_init_2pre.h). Selected via the model=
+ * param: the whole Clarett TB line shares PCI id 1cb5:0002 and an identical PCIe interface, so the model
+ * is NOT auto-detectable (verified: every MMIO reg / FCP response / config read / PCI config byte is
+ * identical to the 8PreX, and these TB2 units expose no DROM device_name to disambiguate by either).
+ * stream_frag stays 0 until a 2Pre streaming capture pins it (PCM is gated off meanwhile — TX 4ch /
+ * RX 14ch is asymmetric, unlike the 8PreX's symmetric 28/28; see clarett.h).
  */
-#if 0
 static const struct clarett_out_gain clarett_2pre_gains[] = {
 	{ "Monitor 1", 32 }, { "Monitor 2", 33 }, { "Line 3", 36 }, { "Line 4", 37 },
 };
@@ -868,13 +902,11 @@ static const struct clarett_model clarett_2pre = {
 	.analogue = clarett_2pre_preamps,
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
-	.stream_frag = 0,			/* TODO(step 5): capture; 8PreX = STREAM_SIZE_VAL (0x1c0) */
-	/* TODO(step 5): #include "clarett_init_2pre.h" and reference clarett_init_{blob,seq}_2pre */
-	.init_blob = NULL,
-	.init_seq = NULL,
-	.n_init_steps = 0,
+	.stream_frag = 0,			/* TODO: pin from a 2Pre streaming capture; PCM gated off until then */
+	.init_blob = clarett_init_blob_2pre,
+	.init_seq = clarett_init_seq_2pre,
+	.n_init_steps = ARRAY_SIZE(clarett_init_seq_2pre),
 };
-#endif
 
 static const struct pci_device_id clarett_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_FOCUSRITE, PCI_DEVICE_CLARETT),
