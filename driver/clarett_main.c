@@ -100,6 +100,16 @@ static void clarett_hw_init(struct clarett *c)
 	c->fw_fpga   = readl(bar + REG_INFO + 4);
 
 	/*
+	 * Foundational device-enable writes — the VERY FIRST two writes the vendor driver issues at device
+	 * open, before the IRQ enable / DMA-buffer setup (full boot->stream capture lines 97-99: 0x510=0x8 then
+	 * 0x500=0x8). These sit outside both the FCP init replay (pre-mailbox) and the engine arm (not engine
+	 * regs), so every prior approach missed them. The engine raised period 0 but the period counter never
+	 * advanced (audio clock not running) without this; suspected global clock/converter-subsystem enable.
+	 */
+	writel(0x8, bar + 0x510);
+	writel(0x8, bar + 0x500);
+
+	/*
 	 * Program the GET-response DMA buffer address (init trace wrote
 	 * REG_DMA_ADDR_LO/HI). REG_DMA_ADDR_HI is the *high 32 bits* of the bus
 	 * address: confirmed when hardcoding the trace's 0x2 caused an IOMMU
@@ -418,50 +428,42 @@ static int clarett_stream_service(void *data)
 void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 {
 	void __iomem *bar = c->bar0;
-	u8 clk[8];
-	int err;
 
 	/*
-	 * SET_CLOCK (0x6003): {u32 sample_rate, u32 clock_source}. FC issues this at stream start; without
-	 * it the engine arms but never clocks (control-plane §7, TRACE-CONFIRMED).
+	 * Faithful replica of the VM's register-only arm — the exact 14-write sequence that brings 0x300 alive
+	 * (2pre_streamstart.log @line 29158: 0x110=0 stop, then 0x100=0xf, 0x108, 0x20c=1, per-block geometry,
+	 * 0x10c, 0x110=7, and 0x300 immediately reads 0x8000000c, ticking +0xc/period). Two corrections vs the
+	 * old order: (1) ack the cause block (0x100=0xf) first — we previously only READ 0x100, never wrote it;
+	 * (2) the global enable (0x20c=1) comes BEFORE the geometry/base writes, as the VM does (DMA only starts
+	 * on the 0x110=7 arm, which stays last, so there is no null-base fault).
+	 *
+	 * NO per-arm FCP. The VM issues SET_CLOCK / CONFIG_PUSH / 0x6004 / 0x6005 only in the in-session
+	 * handshake (clarett_stream_handshake, run from PCM prepare BEFORE this), and issues NO DATA_CMD at all
+	 * during 2Pre stream start. The old SET_CLOCK + DATA_CMD{5} here were redundant/wrong (the device latches
+	 * the clock during the handshake's CONFIG_PUSH) and one SET_CLOCK was timing out (-110). A null base arg
+	 * skips that block (capture-only passes r0=0).
 	 */
-	clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
-	clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
-	err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
-	if (err)
-		dev_warn(&c->pci->dev, "SET_CLOCK (0x6003) failed: %d\n", err);
-
+	writel(0xf, bar + REG_IRQ0_CAUSE);				/* 0x100 = 0xf: ack cause block */
 	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
+	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c global enable (before geometry) */
 
-	/*
-	 * Program each ring block's geometry+base BEFORE the global enable (a freshly-armed device has a
-	 * null base, so enable-first faults at address 0). A null base argument skips the block, leaving
-	 * it disarmed — capture-only passes r0=0 (block 0 untouched), matching the validated blk1_only run.
-	 */
 	if (r0) {
 		writel(c->model->playback_channels, bar + STREAM_BLK0 + STREAM_OFF_CHANS); /* 0x204 */
-		writel(c->model->stream_frag, bar + STREAM_BLK0 + STREAM_OFF_SIZE);	  /* 0x208 */
+		writel(clarett_period_bytes(c->model->playback_channels),
+		       bar + STREAM_BLK0 + STREAM_OFF_SIZE);				  /* 0x208 period */
 		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
 		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
 	}
 	if (r1) {
 		writel(c->model->capture_channels, bar + STREAM_BLK1 + STREAM_OFF_CHANS);  /* 0x304 */
-		writel(c->model->stream_frag, bar + STREAM_BLK1 + STREAM_OFF_SIZE);	  /* 0x308 */
+		writel(clarett_period_bytes(c->model->capture_channels),
+		       bar + STREAM_BLK1 + STREAM_OFF_SIZE);				  /* 0x308 period */
 		writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI); /* 0x314 */
 		writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO); /* 0x310 */
 	}
 
-	writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);			/* 0x20c global enable */
 	writel(0x1e70700, bar + REG_STREAM_IRQ_CFG2);			/* 0x10c */
 	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm (0x0 is stream-stop) */
-
-	/*
-	 * Stream-start commit: DATA_CMD{activate=5} — the rate-change capture's final mailbox command, the
-	 * trigger that makes the engine clock. (control-plane DATA_CMD otherwise uses activates 1/2 only.)
-	 */
-	err = clarett_data_cmd(c, 5);
-	if (err)
-		dev_warn(&c->pci->dev, "stream-start DATA_CMD{activate=5} failed: %d\n", err);
 
 	c->stream_on = true;
 }
@@ -778,13 +780,10 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
 
-	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe.
-	 * Requires a known stream fragment size; models without a captured streaming geometry (stream_frag
-	 * == 0, e.g. the 2Pre) stay mixer-only until that's pinned. */
-	if (enable_pcm && !c->model->stream_frag) {
-		dev_warn(&pci->dev, "PCM unavailable for %s (stream geometry not yet captured); mixer-only\n",
-			 c->model->name);
-	} else if (enable_pcm) {
+	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. Both
+	 * models use the per-direction descriptor path (geometry derived from channel counts), so no per-model
+	 * gate is needed beyond enable_pcm. */
+	if (enable_pcm) {
 		err = clarett_create_pcm(c);
 		if (err)
 			dev_warn(&pci->dev, "PCM create failed (%d); continuing mixer-only\n", err);
@@ -879,8 +878,11 @@ static const struct clarett_model clarett_8prex = {
  * param: the whole Clarett TB line shares PCI id 1cb5:0002 and an identical PCIe interface, so the model
  * is NOT auto-detectable (verified: every MMIO reg / FCP response / config read / PCI config byte is
  * identical to the 8PreX, and these TB2 units expose no DROM device_name to disambiguate by either).
- * stream_frag stays 0 until a 2Pre streaming capture pins it (PCM is gated off meanwhile — TX 4ch /
- * RX 14ch is asymmetric, unlike the 8PreX's symmetric 28/28; see clarett.h).
+ * PCM uses the per-direction descriptor path (shared with the 8PreX): on hardware the engine dereferences
+ * the ring base as a descriptor table (the 0xAA flat-buffer attempt faulted at 0xaaaa.. — descriptor mode
+ * is the engine's default and is not flipped by the stream-config FCP handshake we can replay). Asymmetric
+ * TX 4ch / RX 14ch: periods 0x40 / 0xe0, descriptor fragments 0x100 / 0x700 (clarett_frag_bytes). The 2Pre's
+ * descriptor geometry is INFERRED (the VM uses flat mode for it); see clarett.h / spec §9 step 5.
  */
 static const struct clarett_out_gain clarett_2pre_gains[] = {
 	{ "Monitor 1", 32 }, { "Monitor 2", 33 }, { "Line 3", 36 }, { "Line 4", 37 },
@@ -894,6 +896,13 @@ static const struct clarett_preamp clarett_2pre_preamps[] = {
 	{ clarett_mode_li, clarett_mode_li_vals, 2 },
 };
 
+/* Per-channel stream-routing CONFIG_PUSH ids, captured verbatim from the 2Pre rate-change handshake
+ * (2pre_streamstart.log): 4 TX (playback) + 14 RX (record) channels, re-pushed at PCM prepare. */
+static const u8 clarett_2pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e };
+static const u8 clarett_2pre_stream_rx[] = {
+	0x0d, 0x0e, 0x15, 0x16, 0x27, 0x28, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+};
+
 static const struct clarett_model clarett_2pre = {
 	.name = "Clarett 2Pre",
 	.out_gains = clarett_2pre_gains,
@@ -902,7 +911,12 @@ static const struct clarett_model clarett_2pre = {
 	.analogue = clarett_2pre_preamps,
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
-	.stream_frag = 0,			/* TODO: pin from a 2Pre streaming capture; PCM gated off until then */
+	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
+						 * clarett_frag_bytes() per direction */
+	.stream_tx_ids = clarett_2pre_stream_tx,
+	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
+	.stream_rx_ids = clarett_2pre_stream_rx,
+	.n_stream_rx_ids = ARRAY_SIZE(clarett_2pre_stream_rx),
 	.init_blob = clarett_init_blob_2pre,
 	.init_seq = clarett_init_seq_2pre,
 	.n_init_steps = ARRAY_SIZE(clarett_init_seq_2pre),

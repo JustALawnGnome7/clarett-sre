@@ -118,7 +118,10 @@ Never load this while the VM is using the device.
   issue — auto-persisting every change would wear the flash. See
   `FCP_ACTIVATE_PERSIST` in `clarett.h` to add a deliberate "save" action.
 - Single-card only; no module params for index/id (but see `model=` above).
-- **2Pre: control plane only.** Model/init/mixer are wired (channel counts 4 playback /
-  14 record are hardware-confirmed), but PCM is gated off until a 2Pre streaming capture
-  pins `stream_frag` — and the 2Pre is asymmetric (TX 4ch / RX 14ch), unlike the 8PreX's
-  symmetric 28/28, so it may need per-direction fragment sizing.
+- **2Pre: experimental flat-buffer capture PCM** (`enable_pcm=1`). A RAM dump of the live
+  2Pre stream showed it streams a **flat contiguous sample ring** at `0x210`/`0x310` with no
+  descriptor table (unlike the 8PreX's scatter-gather list), with asymmetric TX 4ch / RX 14ch
+  periods (`0x40` / `0xe0`). The driver uses a separate flat-buffer engine path (`flat_buffer`
+  model flag) sharing the 8PreX's register arm + servicer. The ring/wrap length
+  (`CLARETT_FLAT_FRAMES`, currently 1024 frames = the VM's observed 16 KB TX area) is a
+  hypothesis pending hardware confirmation — capture may not yet clock or may wrap elsewhere.

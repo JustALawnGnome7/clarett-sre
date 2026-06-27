@@ -14,6 +14,7 @@
 #include <linux/pci.h>
 #include <linux/atomic.h>
 #include <linux/workqueue.h>
+#include <linux/lcm.h>		/* lcm() — descriptor fragment alignment */
 #include <sound/core.h>
 
 struct snd_kcontrol;
@@ -62,7 +63,7 @@ struct snd_pcm_substream;
  * STREAM_CHANS / STREAM_SIZE_VAL are the 8PreX values that populate clarett_8prex; all runtime stream
  * geometry is derived per-model from c->model via clarett_buf_bytes() &c. (defined below struct clarett).
  */
-#define CLARETT_STREAM_NDESC     256            /* descriptors per ring (probe depth; model-independent) */
+#define CLARETT_STREAM_NDESC     256            /* descriptors per ring (model-independent) */
 
 /* --- PCM (data plane) --------------------------------------------------- */
 #define CLARETT_PCM_RATE         48000          /* default rate, both models (see clocking enum) */
@@ -143,6 +144,13 @@ struct snd_pcm_substream;
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 
+/* No-arg session-lifecycle commands the VM issues per stream-config, in-session, before arming the engine
+ * (2pre_streamstart.log; both models). Names are by observation, not confirmed semantics. The device appears
+ * to reset stream-mode (flat vs descriptor) when idle, so this handshake must be re-run at PCM prepare — see
+ * clarett_stream_handshake() / spec §9 step 5 / dataplane memory. */
+#define FCP_STREAM_ENABLE        0x006004   /* VM issues twice */
+#define FCP_STREAM_COMMIT        0x006005
+
 /*
  * Firmware init-handshake opcodes, replayed verbatim at probe (see clarett_init_handshake).
  * Observed at device attach from the vendor app and not fully decoded: CONFIG_PUSH registers
@@ -219,7 +227,19 @@ struct clarett_model {
 	/* data plane / PCM geometry */
 	u8 capture_channels;			/* block-1 RX stream width */
 	u8 playback_channels;			/* block-0 TX stream width */
-	u32 stream_frag;			/* engine DMA bytes per descriptor */
+	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
+						 * the PCM path derives per-direction fragments from channel counts */
+
+	/*
+	 * Per-channel stream-routing CONFIG_PUSH ids, re-issued in-session at PCM prepare (the device resets
+	 * stream routing when idle; the probe-time push goes stale). Captured from the VM rate-change handshake
+	 * (2pre_streamstart.log): one CONFIG_PUSH{u16 id} per stream channel. tx[] after GET_7.2, rx[] after
+	 * GET_7.3, matching the wire order. NULL/0 = skip the burst (8PreX ids not yet captured).
+	 */
+	const u8 *stream_tx_ids;
+	const u8 *stream_rx_ids;
+	u8 n_stream_tx_ids;
+	u8 n_stream_rx_ids;
 
 	/* device bring-up replay (per-model; from fcp_decode.py --emit-init) */
 	const u8 *init_blob;
@@ -369,10 +389,56 @@ static inline size_t clarett_ring_bytes(const struct clarett *c)
 	return clarett_tbl_bytes() + clarett_buf_bytes(c);
 }
 
-/* Capture frames per descriptor fragment: stream_frag / (capture_channels * 4 bytes, S32_LE). */
-static inline u32 clarett_cap_frames_per_desc(const struct clarett *c)
+/*
+ * Hardware IRQ period in bytes for a stream of `channels` (the 0x208/0x308 SIZE register value): one period
+ * is 4 interleaved S32_LE frames. Holds for both models (8PreX 28ch -> 0x1c0, 2Pre TX 4ch -> 0x40 / RX 14ch
+ * -> 0xe0). This is the IRQ granularity, decoupled from the descriptor fragment (4 periods per 8PreX fragment).
+ */
+static inline u32 clarett_period_bytes(u8 channels)
 {
-	return c->model->stream_frag / ((u32)c->model->capture_channels * 4);
+	return (u32)channels * 4 * 4;
+}
+
+/*
+ * PCM descriptor-table geometry (per-direction), built to match the live vendor table from the 8PreX RAM
+ * dump: every entry is a bare 8-byte LE bus address, 0x100-aligned, and the LAST entry carries a wrap flag
+ * in its low bits (the address low byte is 0, so the flag never collides) — there is NO zero terminator.
+ *
+ * clarett_frag_bytes(): the per-descriptor fragment = the smallest 0x100-aligned span that is also a whole
+ * number of interleaved frames = lcm(0x100, channels*4). 28ch->0x700 (16 frames), 14ch->0x700 (32 frames),
+ * 4ch->0x100 (16 frames). 0x100 alignment is the fix for the one-ring-pass wall: the old path used the period
+ * (0x1c0, NOT 0x100-aligned) as the stride, so the wrap flag landed on a misaligned entry and never engaged.
+ */
+#define CLARETT_DESC_ALIGN	0x100
+#define CLARETT_DESC_WRAP_TX	0x01	/* last-entry flag, block 0 (TX): bit0 = end-of-list/wrap */
+#define CLARETT_DESC_WRAP_RX	0x03	/* last-entry flag, block 1 (RX): bit0 wrap | bit1 (IRQ?), per dump */
+
+static inline u32 clarett_frag_bytes(u8 channels)
+{
+	return lcm((u32)CLARETT_DESC_ALIGN, (u32)channels * 4);
+}
+/* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
+ * No +1 terminator slot — the wrap flag on the last entry is the terminator. */
+static inline size_t clarett_pcm_tbl_bytes(void)
+{
+	return ALIGN((size_t)CLARETT_STREAM_NDESC * sizeof(__le64), CLARETT_DESC_ALIGN);
+}
+static inline size_t clarett_pcm_tx_samples(const struct clarett *c)
+{
+	return (size_t)CLARETT_STREAM_NDESC * clarett_frag_bytes(c->model->playback_channels);
+}
+static inline size_t clarett_pcm_rx_samples(const struct clarett *c)
+{
+	return (size_t)CLARETT_STREAM_NDESC * clarett_frag_bytes(c->model->capture_channels);
+}
+/* One ring per direction = table + samples. The contiguous buffer is [TX ring][RX ring]; r1 = r0 + tx ring. */
+static inline size_t clarett_pcm_tx_ring(const struct clarett *c)
+{
+	return clarett_pcm_tbl_bytes() + clarett_pcm_tx_samples(c);
+}
+static inline size_t clarett_pcm_rx_ring(const struct clarett *c)
+{
+	return clarett_pcm_tbl_bytes() + clarett_pcm_rx_samples(c);
 }
 
 /* mailbox.c */

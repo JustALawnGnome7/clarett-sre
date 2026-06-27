@@ -375,6 +375,144 @@ fastest path now is an **active probe from our own driver**, not more passive tr
      *capture* session hunting for steady-state writes the 122k-line siphon may have missed (a per-buffer
      re-arm/doorbell). Debug levers live behind module params `rekick`/`rekick_ms`/`pollall`/`pcm_selftest`.
 
+   - **LONG STREAMING CAPTURE DONE (2Pre, `2pre_stream.log`, ~35 s full-duplex, June 26 2026 —
+     `tools/stream_profile.py`).** The "next step" above is now executed and resolves the open question:
+     - **There are NO steady-state writes. Period servicing is READ-ONLY.** Over ~35 s the engine raised
+       **7836 period IRQs** (the `0x300` counter wrapping ~390×) with **only 6 arm sequences total** (a
+       warmup burst + occasional stream-restart re-arms). Between arms the host writes **nothing** — no
+       per-buffer re-arm, no doorbell, no base rewrite. **This RETIRES the per-buffer-write hypothesis:**
+       a free-running engine wraps the ring autonomously; reading the cause registers (read-to-clear) is
+       the entire ack. The wall is therefore NOT a missing write.
+     - **The actual per-period read set Windows performs (NEW — never replicated by our servicer):**
+       `0x100` (vec0 cause, `=0x80000000`) → `0x300` (blk1 cause, `=0x80000000|ctr`) → `0x200` (blk0
+       cause, `=0`) → **`0x21c`,`0x218` (blk0 status/PTR)** → **`0x31c`,`0x318` (blk1 status/PTR)**, and it
+       does **NOT** read `0x400`/`0x500` per period. Our servicer reads `0x200/0x300/0x500` (and `0x100`
+       only under `pollall`) but **never reads the four status/PTR words `0x218/0x21c/0x318/0x31c`.** That
+       `pollall` already covered `0x100/0x400` and failed → the untested lead is the **per-period
+       status-word reads**; the engine's consumer-advance handshake likely requires reading `0x318` (RX
+       position) each period to release the next ring segment. ACTION: mirror this exact read set in
+       `clarett_stream_service` and re-test on a fresh device.
+     - **STATUS-WORD HYPOTHESIS FALSIFIED (hardware-tested, June 26 2026).** Added the four per-period
+       status reads (`0x218/0x21c/0x318/0x31c`) to `clarett_stream_service`, fresh 8PreX, `enable_pcm=1`,
+       `arecord -c28`: **same wall** — `ctr=0x1b3, wraps=0`; the engine reached the identical one-ring-pass
+       stall (`periods` merely dropped 248→24 because the extra reads slowed the poll loop). Reverted.
+       The engine halts at the SAME counter (`0x1b3`) regardless of servicing — so the stall point is
+       intrinsic, not service-cadence-driven.
+     - **FULL WRITE CENSUS of the working stream (decisive):** the ONLY region0 writes in all 35 s are the
+       12–13 stream-engine regs we already replicate (`0x108/0x10c/0x110`, `0x20c`, `0x204/8/0x214/0x210`,
+       `0x304/8/0x314/0x310`) + `0x100` ack. **No hidden register, no descriptor-count register, no
+       per-period write.** This RULES THE ENTIRE BAR/MMIO DOMAIN OUT — we replicate every write and every
+       meaningful read. The wall is in the **descriptor-table / RAM domain**, invisible to MMIO traces.
+     - **Concrete RAM-domain discrepancy found:** the recovered vendor TX table is **`0x100`-aligned per
+       entry** (step-4 RAM dump: "every entry 0x100-aligned except the last"), but our driver packs
+       fragments at `base + i*stream_frag` (frag `0x1c0`/`0x40`/`0xe0`, none a multiple of `0x100`) → our
+       entries are `0x40/0x80/0xc0`-aligned, NOT `0x100`-aligned. The vendor evidently allocates each
+       fragment in its own `0x100`-aligned slot (frag rounded up to a `0x100` boundary, with padding),
+       which our tight packing does not match. Also: 8PreX counter **freezes** at `0x1b3` (no wrap), vs the
+       2Pre VM counter cleanly **wrapping** `0xf0→0` ~390× — our engine halts at end-of-ring instead of
+       wrapping. **DEFINITIVE NEXT STEP** (how the format was first recovered): QMP `pmemsave` the live
+       2Pre tables during streaming (GPAs TX `0x2_680f7000` / RX `0x2_680fb000`) and read off the real
+       entry count, per-entry stride/alignment, and wrap-flag placement — then rebuild our table to match
+       (likely `0x100`-aligned slots + correct depth) rather than guessing through hardware cycles.
+     - **RAM DUMP DONE — BOMBSHELL: the 2Pre uses FLAT sample buffers, NOT a descriptor table (June 26
+       2026).** `pmemsave` of both bases during a live 2Pre stream (`/tmp/{tx,rx}_tbl.bin`, 12 KB each):
+       **100 % of 32-bit words are 16-bit audio** (low 16 bits all zero = MSB-justified samples; real ±50 %-FS
+       values; TX≠RX content), and **ZERO 8-byte `0x2_xxxxxxxx` GPA descriptor entries.** So for the 2Pre
+       the engine treats `0x210`/`0x310` as **flat contiguous PCM ring buffers** — RX *writes* captured
+       audio there, TX *reads* playback audio from there — with **no descriptor-table indirection at all.**
+       Our driver builds an 8-byte-GPA descriptor table and points the engine at THAT; if the device wants
+       flat samples at `0x210`, our table bytes are misinterpreted and the wrap goes wrong → **the leading
+       root cause of the one-ring-pass wall.** Our DMA buffer is already `dma_alloc_coherent` (physically
+       contiguous), so the flat scheme is directly usable.
+       - **Reconciliation with §9-step-4's "347-entry 8PreX descriptor table":** that dump genuinely looked
+         like addresses (all high32==2, zero-terminated, one bit-0 flag — audio has none of those traits),
+         so this is most likely a **Windows-allocation difference**, not a misread: the 28-ch 8PreX buffer
+         is large/fragmented → Windows programs scatter-gather (descriptor list); the smaller 2Pre buffer
+         is contiguous → Windows programs a flat base. The device evidently supports BOTH at `0x210`. For
+         an in-kernel driver with a contiguous coherent buffer, **flat is the right (and simpler) path.**
+       - **NEXT (disambiguate cheaply, then implement):** (1) re-`pmemsave` the **8PreX** `0x210` target
+         during a live 8PreX stream — confirm table vs flat (resolves whether it's a true mode difference).
+         (2) Add a flat-buffer engine path: point `0x210`/`0x310` straight at the contiguous sample area
+         (no table), determine the buffer-length / wrap config (candidates: the `0x208`/`0x308` SIZE field;
+         the gap to the next block's base — 2Pre TX span = `0x680fb000-0x680f7000` = `0x4000` = 16 KB; or a
+         fixed internal size the host buffer must meet/exceed), and re-test the wrap on a fresh device.
+     - **8PreX RAM DUMP DONE (`/tmp/{tx,rx}_8prex.bin`) — CONFIRMED per-model mode difference + a real
+       descriptor bug (June 26 2026).** Same register `0x210`, same `pmemsave` method: the 8PreX base holds
+       a **descriptor table** (low-16-zero only ~5 % — NOT audio), the 2Pre holds **flat audio**. So the
+       mode is genuinely per-model (large 28-ch buffer → Windows scatter-gather list; small 2Pre buffer →
+       flat contiguous). 8PreX table geometry, both directions: **347 entries** (TX `BASEhi=2`, RX
+       `BASEhi=1`), **`0x100`-aligned** 8-byte GPAs, **bit-0 wrap flag on the LAST entry (346)**, dominant
+       contiguous **fragment stride `0x700` = 16 frames** (28ch×4B×16), scatter-gathered across physical
+       pages; total ring `347 × 0x700 ≈ 607 KB`. **BUG FOUND:** our driver uses `stream_frag = 0x1c0` as the
+       descriptor fragment stride, but `0x1c0` is the **`0x208` SIZE/period value (4 frames)**, NOT the
+       fragment size — the real descriptor fragment is **`0x700` (16 frames) = 4 × the SIZE field**. We
+       conflated the two. So our 8PreX table is built with 4×-too-small fragments AND too few entries
+       (256 vs 347) → the likely mechanical cause of the one-ring-pass stall. SIZE/period `= channels×4×4`
+       holds for both models (8PreX `0x1c0`, 2Pre TX `0x40`/RX `0xe0`); the descriptor fragment is a
+       SEPARATE, larger quantity (`channels×4×16` on the 8PreX).
+     - **IMPLEMENTATION PLAN (two paths, both leverage our CONTIGUOUS coherent buffer):**
+       - *2Pre — flat buffer (simplest, confirmed-correct):* point `0x210`/`0x310` at the contiguous sample
+         area directly, no descriptor table; find the wrap length (counter wrapped `0xf0→0`; TX base→RX base
+         gap = 16 KB is a candidate). Most promising route to first working 2Pre audio.
+       - *8PreX — fix the descriptor table:* fragment stride `0x700` (16 frames), `0x100`-aligned,
+         contiguously tiled over our coherent buffer, ~347 entries (or as many as the buffer holds), bit-0
+         flag on the last; keep `0x208=0x1c0`. Re-test the wrap on a fresh device.
+     - **8PreX `0x700`-FRAGMENT FIX IMPLEMENTED & FALSIFIED ON HARDWARE (June 26 2026) — REVERTED.** Built a
+       `0x700` descriptor stride (`0x100`-aligned, sample area padded to `0x100`) with `0x208` kept at `0x1c0`
+       via a new `period_bytes` model field (the period-vs-fragment split is correct: the 8PreX VM does write
+       `0x208=0x1c0` AND use a `0x700` table, trace+dump confirmed). **Result: the engine arms cleanly (every
+       FCP `done=1 fcperr=0`, alloc OK) but raises ZERO periods (`periods=0 ctr=0`)** — whereas the `0x1c0`
+       stride clocks (~248 periods). Controlled re-test holding total buffer size constant (`NDESC=64` so
+       `64×0x700 == 256×0x1c0 == 112 KB/ring`, same alloc): **still `periods=0`.** So it is the `0x700`
+       descriptor stride ITSELF that stops our engine clocking, NOT buffer size/address/count. **Yet the VM
+       streams fine with a `0x700` table** → there is a difference we still can't observe between the VM's
+       (scatter-gathered, physically discontiguous, 347-entry) table and our (contiguous, uniform-`0x700`,
+       256/64-entry) one. Hypotheses still open: the engine wants descriptors == `0x208` SIZE (`0x1c0`) and
+       advances one/period (our `0x1c0` "works" only by writing into a tight ring, and the `0x700` table
+       desyncs it); OR it needs the physically-discontiguous layout; OR a count near 347. **Reverted to the
+       known-clocking `0x1c0`/256 baseline** (`git checkout` of clarett.h+clarett_main.c) — do NOT re-apply
+       the `0x700` change without a new idea for the VM-vs-ours difference. Tools added: `tools/stream_profile.py`,
+       `tools/dma_bases.py`. Dumps: `/tmp/{tx,rx}_8prex.bin` (table), `/tmp/{tx,rx}_tbl.bin` (2Pre flat audio).
+     - **★ WALL BROKEN on the 2Pre via a FLAT-BUFFER path (June 26 2026) ★.** Implemented `flat_buffer`
+       model mode (clarett.h/main/pcm): engine streams a contiguous sample ring directly at `0x210`/`0x310`
+       with NO descriptor table; one coherent buffer = TX flat ring (`CLARETT_FLAT_FRAMES`=1024 frames=16 KB,
+       == the VM gap) + RX flat ring (56 KB); per-direction period = `channels×16` to `0x208`/`0x308` (TX
+       `0x40`/RX `0xe0`); engine arm + `0x300` servicer SHARED with the 8PreX; unified PCM tick (proven
+       algebraically identical to the old 8PreX per-descriptor copy → 8PreX path regression-safe). Hardware
+       (`model=2pre enable_pcm=1`): **`stream-svc: periods=7182 ctr=0x1c10 wraps=2`** — ~28 ring passes of
+       CONTINUOUS streaming, vs the 8PreX's hard one-pass stall (`ctr=0x1b3 wraps=0`). The device wants a
+       flat buffer for the 2Pre; descriptor-table mode was the wrong model for it.
+       - **arecord `EIO` diagnosed → the "flat" model is INCOMPLETE; the engine reads DESCRIPTORS (June 26).**
+         `AMD-Vi IO_PAGE_FAULT` storm at `address=0xaaaaaaaaaaaaaaXX` (stepping `0x80`) + `0x0`: the engine
+         DEREFERENCES our buffer contents as DMA pointers. With the `0xAA` prefill it reads `0xaaaa..` as a
+         fragment pointer and writes a **16-frame fragment** there (fault decode: 7×`0x80` = `0x380` =
+         `14ch*4*16`) → faults, **capture never lands** (arecord gets `0xAA`/garbage, XRUNs at 66 %). The
+         `0x0` faults are the same benign TX position-writeback the 8PreX does. KEY CONTROL TEST: **remove
+         the prefill (zeroed buffer) → faults vanish BUT `periods=0` (engine won't clock)**. So the engine
+         needs a NON-NULL pointer in the buffer to clock, and a VALID one (into our DMA buffer) to capture.
+       - **The contradiction / impasse:** (a) the VM `pmemsave` of `0x310` was pure flat audio from byte 0
+         (no pointers), yet the live engine reads pointers; (b) giving the **8PreX** VALID 16-frame (`0x700`)
+         descriptors gave `periods=0` (didn't clock), while INVALID `0xAA` ones clock. So in OUR setup
+         "valid descriptors" and "engine clocks" are mutually exclusive — for BOTH models. The engine's
+         **flat-vs-descriptor (and clock-gating) mode is selected by something the VM does that we don't
+         replay** — and it's NOT the arm registers (those match the VM byte-for-byte). The 16-frame fragment
+         + 4-frame period (`= channels*64` / `channels*16`) structure is now confirmed identical across both
+         models. The `0xAA` prefill is kept (engine clocks for debugging); arecord still `EIO` (no real data).
+       - **NEXT (RE, not more guessing):** find the mode/clock-gate selector. Candidates: (1) diff our 2Pre
+         init replay (`clarett_init_2pre.h`) against the VM's FULL streaming setup for a config push / FCP we
+         drop or send differently; (2) a fresh long 2Pre capture correlating the buffer-content writes the VM
+         makes BEFORE arming (does Windows seed a descriptor/position word we don't?); (3) check whether the
+         8 KB config blob carries a DMA-mode bit. Position-rate calibration is moot until real data captures.
+     - **2Pre stream geometry PINNED (the explicit milestone):** block 0 (TX) `0x204=4` chans / `0x208=0x40`
+       (64 B) frag; block 1 (RX) `0x304=0xe` (14) chans / `0x308=0xe0` (224 B) frag. **Universal invariant
+       across all models: `stream_frag = channels × 4 bytes × 4 frames/descriptor`** (8PreX 28→0x1c0, 2Pre
+       TX 4→0x40, RX 14→0xe0). The 2Pre is **asymmetric** → needs per-direction frag (the current single
+       `clarett_model.stream_frag` cannot represent it; derive from channel count instead). Arm order:
+       `0x108=0x10`, `0x20c=1` (block-0 CTRL = **global** engine enable; `0x30c` block-1 CTRL is **never**
+       written — confirmed by grep), block-0 CHANS/SIZE/BASEhi/BASElo, block-1 CHANS/SIZE/BASEhi/BASElo,
+       `0x10c=0x1e70700`, `0x110=0x7` then `0x110=0x0` at stop, ack `0x100=0xf`. The `0xc`/period counter
+       step is confirmed identical to the 8PreX (model-independent).
+
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
 and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
 *register* writes (no new mailbox clock command was needed beyond the bring-up we already replay), so
