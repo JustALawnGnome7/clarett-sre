@@ -108,6 +108,7 @@ static void clarett_hw_init(struct clarett *c)
 	 */
 	writel(0x8, bar + 0x510);
 	writel(0x8, bar + 0x500);
+	/* (0x500 reads back 0x00ff0000 == the VM's value — converter/clock status reports ready.) */
 
 	/*
 	 * Program the GET-response DMA buffer address (init trace wrote
