@@ -139,6 +139,17 @@ struct snd_pcm_substream;
 #define FCP_SET_DATA             0x800001
 #define FCP_DATA_CMD             0x800002
 
+/*
+ * GET_METER (0x001001): Focusrite Control polls this continuously (~24 Hz) the entire time it is
+ * connected — the bulk of the trace "noise". It is not just a GUI meter read: it is the device's
+ * required host heartbeat. With NO periodic poll the device accepts control writes (done=1, fcperr=0)
+ * but never applies them to hardware (front-panel LEDs/preamp do not move), and the stream engine
+ * stalls after one ring pass. Replaying FC's exact 8-byte payload {0x00300000, 0x00000001} as a
+ * periodic heartbeat is what makes control changes physically manifest. See clarett_meter_work().
+ */
+#define FCP_GET_METER            0x001001
+#define CLARETT_METER_POLL_MS    40
+
 /* SET_CLOCK (TRACE-CONFIRMED, control-plane §7): payload {u32 sample_rate, u32 clock_source}. */
 #define FCP_SET_CLOCK            0x006003
 #define CLARETT_CLOCK_INTERNAL   24
@@ -313,6 +324,10 @@ struct clarett {
 	struct work_struct notify_work;
 	atomic_t notify_bits;
 
+	/* Periodic GET_METER heartbeat — the device requires it to apply control writes to
+	 * hardware (and to sustain streaming). See FCP_GET_METER / clarett_meter_work(). */
+	struct delayed_work meter_work;
+
 	struct clarett_ctl *ctls;	/* descriptor array, lifetime = card */
 	int n_ctls;
 
@@ -447,6 +462,13 @@ int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate);
+void clarett_verify_write(struct clarett *c, u32 offset, u8 expected);
+extern bool clarett_verify_writes;
+
+/* BAR0 access wrappers that optionally log in QEMU vfio_region_* format (trace_regs param). */
+void clarett_wl(struct clarett *c, u32 off, u32 val);
+u32 clarett_rl(struct clarett *c, u32 off);
+extern bool clarett_trace_regs;
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
 
 /* mixer.c */

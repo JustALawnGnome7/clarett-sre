@@ -83,6 +83,7 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	struct clarett *c = snd_kcontrol_chip(kc);
 	const struct clarett_ctl *d = (const void *)kc->private_value;
 	u8 dev, old = c->shadow[d->offset];
+	int err;
 
 	switch (d->type) {
 	case CT_SWITCH: {
@@ -113,7 +114,20 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 
 	if (dev == old)
 		return 0;
-	return clarett_write_u8(c, d->offset, dev, d->activate) ? : 1;
+
+	err = clarett_write_u8(c, d->offset, dev, d->activate);
+	if (err)
+		return err;
+
+	/*
+	 * NOTE: this is byte-identical to Focusrite Control's per-toggle sequence (SET_DATA +
+	 * DATA_CMD{activate}; FC's standalone DATA_CMD{5} is a once-at-end debounced persist, not
+	 * per-toggle). On hardware the write completes (done=1, fcperr=0) but the front-panel state
+	 * does not move — under investigation; see clarett_verify_writes / control-manifestation memo.
+	 */
+	if (clarett_verify_writes)
+		clarett_verify_write(c, d->offset, dev);
+	return 1;
 }
 
 int clarett_create_controls(struct clarett *c)

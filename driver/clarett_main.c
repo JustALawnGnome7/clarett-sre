@@ -61,6 +61,30 @@ MODULE_PARM_DESC(pollall,
 		 "Focusrite Control's poll exactly (it skips 0x100/0x400 by default). Tests whether the full "
 		 "poll is the 'host keeping up' signal that lets the engine wrap past one ring pass.");
 
+bool clarett_verify_writes;
+module_param_named(verify_writes, clarett_verify_writes, bool, 0444);
+MODULE_PARM_DESC(verify_writes,
+		 "Diagnostic: after each control write, GET_DATA the offset back and log whether the "
+		 "device's config RAM reflects it. Use with meter_poll_ms=0 to avoid heartbeat DMA racing "
+		 "the read-back buffer.");
+
+static int meter_poll_ms = CLARETT_METER_POLL_MS;
+module_param(meter_poll_ms, int, 0444);
+MODULE_PARM_DESC(meter_poll_ms,
+		 "Period (ms) of the GET_METER heartbeat the device requires to APPLY control writes to "
+		 "hardware. Focusrite Control polls ~every 40 ms continuously; without it our byte-correct "
+		 "writes complete (done=1) but the front-panel preamp/monitor state never moves. Default 40. "
+		 "Set 0 to disable (for A/B testing the hypothesis).");
+
+static int dma_bits = 32;
+module_param(dma_bits, int, 0444);
+MODULE_PARM_DESC(dma_bits,
+		 "DMA coherent mask width (bits). Default 32 lands the stream buffer at the top of 32-bit "
+		 "IOVA space (~0xffe00000); the VM's buffers sat mid-range (~1.5-1.9 GB). Lower this (e.g. "
+		 "31 -> <2GB, 30 -> <1GB) to force the allocation into the VM's range and test whether the "
+		 "engine's burst-then-stall is sensitive to buffer address. Long shot: PTR advances at "
+		 "0xffe00000 with no fault, so the high address is not obviously the blocker.");
+
 /*
  * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
  * byte-identical PCIe interface (MMIO regs, FCP query responses, config-space, even the dummy serial),
@@ -69,6 +93,36 @@ MODULE_PARM_DESC(pollall,
  * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
  * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
  */
+static bool drain_causes;
+module_param(drain_causes, bool, 0444);
+MODULE_PARM_DESC(drain_causes,
+		 "In the meter worker, also read (read-to-clear) cause blocks 0x200/0x300/0x500 each tick, "
+		 "mimicking FC's status loop (FC polls all five 0x100-0x500 in lockstep ~24Hz). Our mailbox "
+		 "poll drains 0x100 and the notify path drains 0x400, but 0x200/0x300/0x500 are otherwise "
+		 "untouched in a control-only session. Tests whether the device gates config-commit on the "
+		 "host continuously clearing those status blocks. Drives its own ~40ms loop even with "
+		 "meter_poll_ms=0. Default false.");
+
+static bool monitor_enables = true;
+module_param(monitor_enables, bool, 0444);
+MODULE_PARM_DESC(monitor_enables,
+		 "At probe, write the monitor HW-enable bits (0x48/0x49, cmd3) so global Mute/Dim affect "
+		 "Monitor Out 1-2. Default true. FC's captured 2Pre control session does NOT send these, so "
+		 "they are additive writes we make beyond FC. Set 0 to make our command stream an exact "
+		 "SUBSET of FC's (combine with inject_clock=0) and A/B whether any extra write we make is "
+		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
+		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
+
+static bool inject_clock = true;
+module_param(inject_clock, bool, 0444);
+MODULE_PARM_DESC(inject_clock,
+		 "Inject SET_CLOCK{48000,Internal} (op 0x6003) before the first CONFIG_PUSH during arm. "
+		 "Default true (data-plane: the device latches the rate while processing the push). FC's "
+		 "2Pre control-only session sends NO 0x6003, so our injection is an init-sequence deviation "
+		 "from FC that is present even during pure control tests. Set 0 to make arm an exact FC "
+		 "replay and A/B whether the injected clock is why control toggles complete (done=1) but "
+		 "never physically manifest.");
+
 static const struct clarett_model clarett_8prex, clarett_2pre;	/* defined below; selected by clarett_pick_model() */
 
 static char *model;
@@ -90,6 +144,36 @@ static const struct clarett_model *clarett_pick_model(const struct pci_device_id
 	return (const struct clarett_model *)ent->driver_data;
 }
 
+/*
+ * Register-access trace. Logs every wrapped BAR0 access in QEMU's vfio_region_* line format so the
+ * driver's OWN wire traffic can be fed straight through tools/fcp_decode.py and byte-diffed against
+ * Focusrite Control's captured trace. Used to settle whether the our-driver-vs-FC gap is on-wire (a
+ * traffic difference we can fix) or off-wire (DMA the MMIO trace can't see). Capture with meter_poll_ms=0.
+ */
+bool clarett_trace_regs;
+module_param_named(trace_regs, clarett_trace_regs, bool, 0444);
+MODULE_PARM_DESC(trace_regs,
+		 "Log every wrapped BAR0 register access in QEMU vfio_region_* format (dmesg), for diffing "
+		 "the driver's wire traffic against Focusrite Control's trace via fcp_decode.py.");
+
+void clarett_wl(struct clarett *c, u32 off, u32 val)
+{
+	if (clarett_trace_regs)
+		dev_info(&c->pci->dev, "vfio_region_write  (%s:region0+0x%x, 0x%x, 4)\n",
+			 pci_name(c->pci), off, val);
+	writel(val, c->bar0 + off);
+}
+
+u32 clarett_rl(struct clarett *c, u32 off)
+{
+	u32 val = readl(c->bar0 + off);
+
+	if (clarett_trace_regs)
+		dev_info(&c->pci->dev, "vfio_region_read   (%s:region0+0x%x, 4) = 0x%x\n",
+			 pci_name(c->pci), off, val);
+	return val;
+}
+
 static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
@@ -106,8 +190,8 @@ static void clarett_hw_init(struct clarett *c)
 	 * regs), so every prior approach missed them. The engine raised period 0 but the period counter never
 	 * advanced (audio clock not running) without this; suspected global clock/converter-subsystem enable.
 	 */
-	writel(0x8, bar + 0x510);
-	writel(0x8, bar + 0x500);
+	clarett_wl(c, 0x510, 0x8);
+	clarett_wl(c, 0x500, 0x8);
 	/* (0x500 reads back 0x00ff0000 == the VM's value — converter/clock status reports ready.) */
 
 	/*
@@ -117,15 +201,15 @@ static void clarett_hw_init(struct clarett *c)
 	 * IO_PAGE_FAULT at 0x2_xxxxxxxx (that 0x2 was the Windows buffer's high
 	 * bits, not a flag).
 	 */
-	writel(lower_32_bits(c->resp_dma), bar + REG_DMA_ADDR_LO);
-	writel(upper_32_bits(c->resp_dma), bar + REG_DMA_ADDR_HI);
+	clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
+	clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
 
 	/* Latch interrupt causes (observed init value). Mailbox completion is still
 	 * polled (clarett_mailbox.c); MSI is used only for async notifications on
 	 * vec0 (clarett_setup_irq). Enabling causes here only latches status — the
 	 * device cannot raise MSI until pci_alloc_irq_vectors() configures it.
 	 */
-	writel(0xf000003f, bar + REG_IRQ0_ENABLE);
+	clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);
 
 	memset(c->shadow, 0, sizeof(c->shadow));
 
@@ -164,7 +248,7 @@ static int clarett_arm_device(struct clarett *c)
 		 * processing that push, so a SET_CLOCK sent only later (engine_start) never engages period
 		 * generation (0x300 stays flat). Inject it just before the first 0x5000, matching the order.
 		 */
-		if (!clk_sent && s->opcode == 0x005000) {
+		if (inject_clock && !clk_sent && s->opcode == 0x005000) {
 			u8 clk[8];
 
 			clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
@@ -659,6 +743,34 @@ static void clarett_notify_work(struct work_struct *work)
 	dev_dbg(&c->pci->dev, "async notification handled: 0x%x\n", ev);
 }
 
+/*
+ * GET_METER heartbeat. Focusrite Control polls GET_METER continuously while connected, and that poll
+ * turns out to be the device's required host heartbeat: without it, control writes complete (done=1,
+ * fcperr=0) but never reach hardware (front-panel state frozen). We replay FC's exact 8-byte payload
+ * and re-arm ourselves every meter_poll_ms. The response (DMAed meter levels) is ignored — only the
+ * periodic transaction matters. Self-requeuing delayed_work; cancelled at remove.
+ */
+static void clarett_meter_work(struct work_struct *work)
+{
+	struct clarett *c = container_of(work, struct clarett, meter_work.work);
+	static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
+	int delay = meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS;
+
+	if (meter_poll_ms > 0)
+		clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
+
+	/* Mimic FC's status loop: it reads all five cause blocks in lockstep. We already drain 0x100
+	 * (mailbox poll) and 0x400 (notify); 0x200/0x300/0x500 are otherwise untouched control-side. */
+	if (drain_causes) {
+		readl(c->bar0 + STREAM_BLK0);		/* 0x200 (read-to-clear) */
+		readl(c->bar0 + STREAM_BLK1);		/* 0x300 */
+		readl(c->bar0 + 0x500);			/* 0x500 converter status */
+	}
+
+	if (meter_poll_ms > 0 || drain_causes)
+		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
+}
+
 /* Enable MSI and hook the notification vector. Best-effort: on failure the driver
  * still works (control plane, polled mailbox) but without async notifications. */
 static void clarett_setup_irq(struct clarett *c)
@@ -724,6 +836,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	dev_info(&pci->dev, "model: %s\n", c->model->name);
 	mutex_init(&c->mbox_lock);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
+	INIT_DELAYED_WORK(&c->meter_work, clarett_meter_work);
 	atomic_set(&c->notify_bits, 0);
 	INIT_DELAYED_WORK(&c->stream_report, clarett_stream_report);
 	atomic_set(&c->period_irqs[1], 0);
@@ -740,7 +853,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	pci_set_master(pci);
 
-	err = dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(32));
+	if (dma_bits < 28 || dma_bits > 64)
+		dma_bits = 32;
+	err = dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(dma_bits));
 	if (err)
 		goto err_free;
 
@@ -758,6 +873,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled. */
 	clarett_arm_device(c);
 
+	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
+	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the
+	 * monitor-enable writes below take effect like a real session. */
+	if (meter_poll_ms > 0 || drain_causes)
+		schedule_delayed_work(&c->meter_work,
+				      msecs_to_jiffies(meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS));
+
 	/* Seed the shadow from the device so mixer "get" reflects real state at load and the
 	 * enable-byte RMW below is safe. Best-effort: if it fails we skip the enable writes. */
 	seeded = clarett_seed_shadow(c);
@@ -772,7 +894,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	/* Make the global Mute/Dim controls actually affect Monitor Out 1-2. Needs the seeded
 	 * shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
-	if (!seeded) {
+	if (!seeded && monitor_enables) {
 		err = clarett_enable_monitor_hw_controls(c);
 		if (err)
 			dev_warn(&pci->dev,
@@ -817,6 +939,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	return 0;
 
 err_free:
+	cancel_delayed_work_sync(&c->meter_work);	/* stop the heartbeat before teardown */
 	clarett_engine_stop(c);			/* halt DMA before the ring buffer is freed */
 	clarett_teardown_irq(c);		/* no-op unless setup_irq() succeeded */
 	cancel_work_sync(&c->notify_work);
@@ -829,6 +952,7 @@ static void clarett_remove(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct clarett *c = card->private_data;
 
+	cancel_delayed_work_sync(&c->meter_work);	/* stop the heartbeat poll */
 	clarett_engine_stop(c);			/* halt streaming DMA before the buffer is freed */
 	writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
 	clarett_teardown_irq(c);		/* free MSI vectors / IRQ handlers */

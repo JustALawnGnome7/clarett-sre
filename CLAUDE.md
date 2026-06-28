@@ -94,6 +94,8 @@ spec/clarett-8prex-control-plane.md   Authored control-plane spec (offsets, opco
                                       enums, pins, mixer, routing). Provenance-tagged.
 spec/clarett-8prex-fcp-transport.md   Mailbox/transport framing; confirmed reg map.
 spec/clarett-8prex-data-plane.md      PCM-DMA capture PLAN (not yet traced): method, phases, risks.
+spec/clarett-8prex-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
+                                      every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md
@@ -152,11 +154,19 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   from `clarett_full_init_mute.log`): `CONFIG_PUSH`×122, subsystem enables `0x000001`, count queries,
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA`. Transport spec §8.
-- **Control plane is complete but its effects don't physically manifest yet.** After a correct
-  bring-up, monitor `Mute`/`Dim` writes complete (`done=1, fcperr=0`) but the front-panel LED doesn't
-  move; we match the vendor app byte-for-byte. The gap is the **data plane** — the audio engine must be
-  streaming (DMA/clocking via non-mailbox registers) for control changes to take effect. This is the
-  next milestone (`spec/clarett-8prex-data-plane.md`), not a control-plane bug.
+- **Control plane is complete but its effects don't physically manifest — BLOCKED at a proven boundary
+  (`spec/clarett-8prex-manifestation-wall.md`).** After a correct bring-up, control writes complete
+  (`done=1, fcperr=0`) but the front-panel state doesn't move. The earlier guess that this needs the
+  **data plane** (streaming) is **DISPROVEN**: FC moves the same LEDs at idle, no stream/engine. This
+  session eliminated *every traceable surface*: our FCP command stream is a faithful **subset** of FC's
+  (init, 8 KB writeback content, per-toggle bytes, control regs all byte-identical), MSI is ruled out
+  (FC polls all five cause blocks in lockstep, like us), and PCI config space matches (standard
+  enumeration + MSI + bus-master). Disabling our only extras (`inject_clock=0 monitor_enables=0`,
+  `drain_causes` A/B) changed nothing. **The sole remaining differentiator is bus-master DMA
+  payload/timing, invisible to both the `vfio_region` and `vfio_pci_config` traces** — the same off-wire
+  wall the data plane hit. Only remaining path: capture FC's DMA via guest-RAM dump (`pmemsave`), with a
+  clean-room caveat that an FPGA/firmware blob may not be legally sourceable. Not a control-plane
+  protocol bug — the encodings are confirmed correct.
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
 
 ## Clean-room discipline

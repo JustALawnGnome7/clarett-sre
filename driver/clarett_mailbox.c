@@ -16,7 +16,6 @@
 
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 {
-	void __iomem *mb = c->bar0 + REG_MBOX;
 	unsigned long deadline;
 	u32 cause = 0, first_cause = 0, fcperr = 0;
 	int i, ret = 0, polls = 0;
@@ -26,12 +25,12 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 
 	mutex_lock(&c->mbox_lock);
 
-	writel(DOORBELL_ACK, c->bar0 + REG_DOORBELL);
+	clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
 
-	writel(CMD_EXEC_FLAG | opcode, mb + MBOX_CMD);
-	writel(((u32)c->seq << 16) | len, mb + MBOX_SIZESEQ);
-	writel(0, mb + MBOX_ERROR);
-	writel(0, mb + MBOX_PAD);
+	clarett_wl(c, REG_MBOX + MBOX_CMD, CMD_EXEC_FLAG | opcode);
+	clarett_wl(c, REG_MBOX + MBOX_SIZESEQ, ((u32)c->seq << 16) | len);
+	clarett_wl(c, REG_MBOX + MBOX_ERROR, 0);
+	clarett_wl(c, REG_MBOX + MBOX_PAD, 0);
 
 	/* payload, written as little-endian 32-bit words (last word zero-padded) */
 	for (i = 0; i < len; i += 4) {
@@ -40,14 +39,14 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 
 		for (j = 0; j < 4 && i + j < len; j++)
 			w |= (u32)data[i + j] << (8 * j);
-		writel(w, mb + MBOX_DATA + i);
+		clarett_wl(c, REG_MBOX + MBOX_DATA + i, w);
 	}
 
-	writel(DOORBELL_SUBMIT, c->bar0 + REG_DOORBELL);
+	clarett_wl(c, REG_DOORBELL, DOORBELL_SUBMIT);
 
 	deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
 	do {
-		cause = readl(c->bar0 + REG_IRQ0_CAUSE);   /* read-to-clear */
+		cause = clarett_rl(c, REG_IRQ0_CAUSE);   /* read-to-clear */
 		if (!polls)
 			first_cause = cause;
 		polls++;
@@ -56,12 +55,13 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		cpu_relax();
 	} while (time_before(jiffies, deadline));
 
-	fcperr = readl(mb + MBOX_ERROR);
+	fcperr = clarett_rl(c, REG_MBOX + MBOX_ERROR);
 
-	/* TODO(debug): remove once mailbox completion is trusted on hardware. */
-	dev_info(&c->pci->dev,
-		 "FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x\n",
-		 opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr);
+	/* Per-transaction trace. dev_dbg (not dev_info): the GET_METER heartbeat runs at ~24 Hz, so
+	 * info-level here would flood the log. Enable via dynamic debug when diagnosing the mailbox. */
+	dev_dbg(&c->pci->dev,
+		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x\n",
+		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr);
 
 	if (!(cause & IRQ_DONE_BIT))
 		ret = -ETIMEDOUT;
@@ -128,6 +128,40 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 
 	c->shadow[offset] = val;
 	return 0;
+}
+
+/*
+ * Diagnostic: after a control write, GET_DATA the same offset and log whether the device's own
+ * config RAM now reflects the value we wrote. Splits "device discards our write" (stale read) from
+ * "device accepts it but never physically applies" (matching read, LED still frozen). Run with
+ * meter_poll_ms=0 so the GET_METER heartbeat can't overwrite resp_buf between the GET and the read.
+ */
+void clarett_verify_write(struct clarett *c, u32 offset, u8 expected)
+{
+	const u8 *r = c->resp_buf;
+	u32 echo;
+	int err;
+	u8 got;
+	bool dmaed;
+
+	/* Read a 16-byte window starting at `offset` (single-byte GETs may behave differently from
+	 * the region reads the device expects); the target byte is the first data byte. */
+	err = clarett_get_data(c, offset, 16);
+	if (err) {
+		dev_info(&c->pci->dev, "verify off=%u: GET_DATA failed (%d)\n", offset, err);
+		return;
+	}
+	dma_rmb();
+	echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
+	       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
+	dmaed = (echo == (CMD_EXEC_FLAG | FCP_GET_DATA));
+	got = r[FCP_RESP_DATA_OFF];
+
+	dev_info(&c->pci->dev,
+		 "verify off=%u: wrote=0x%02x device-reads=0x%02x echo=0x%08x (%s)\n",
+		 offset, expected, got, echo,
+		 !dmaed ? "NO GET RESPONSE (read untrustworthy)" :
+		 got == expected ? "ACCEPTED into config RAM" : "DISCARDED / stale");
 }
 
 /* Read-modify-write the `mask` bits of a shared config byte to the value in `val`, then commit.
