@@ -85,29 +85,43 @@ not any control encoding.
 
 ---
 
-## 5. The one remaining path (not yet taken)
+## 5. Off-wire candidate #1 (firmware upload) — TESTED AND DISPROVEN
 
-Capture FC's DMA directly: dump guest RAM (`pmemsave`, see `clarett-mmio-trace-setup` memo) during FC's
-boot around FC's response buffer (GPA `0x277913000`, programmed at `0x410/0x414`) and scan for a
-region/blob the device reads or writes beyond the mailbox response buffer.
+The leading off-wire hypothesis was that FC DMA-uploads an FPGA/App firmware blob the device needs and
+our driver never sends. **Tested June 28 2026 and disproven for normal operation.**
 
-**Reference targets for the capture (local only, never committed).** Focusrite Control's firmware bundle
-is available locally at `FCP Server Resources/Firmware/` (git-ignored via `.gitignore`'s
-`FCP Server Resources/` rule — it must **never** be committed). The files relevant to the Clarett
-Thunderbolt are `ClarettThunderbolt.tca` (App segment) and `fp001005_tb_top.bit` / `fp001054_tb_top.bit`
-(~1.48 MB Thunderbolt FPGA bitstreams, two versions); the other `*.bin`/`*.bit`/`*.tca` files are for
-other products in the line. These make the **FPGA-upload hypothesis testable**: in the DMA capture, look
-for a ~1.48 MB region or a recognizable `.bit` header matching one of the `tb_top` bitstreams being
-DMA'd to the device. A match would explain *both* dead planes at once — the FPGA datapath stays dark
-because our driver never uploads it.
+Method: with FC running and the 2Pre active in the Windows VM (`Windows10-custom`, 8 GiB), took a
+memory-only guest dump (`virsh dump --memory-only --format elf`) and scanned it for the firmware
+signatures. Reference files (local only, **never committed** — `FCP Server Resources/Firmware/`,
+git-ignored): `ClarettThunderbolt.tca` (App), `fp001005_tb_top.bit` / `fp001054_tb_top.bit` (Xilinx
+Spartan-6 bitstreams, magic `00 09 0f f0`, design name `fpNNNNNN_tb_top`, part `6slx45tcsg324`).
 
-**Clean-room caveat.** Reverse-engineering the *upload protocol* from observation, and using the local
-bundle only to *recognize* the payload in a capture, stays within the project's clean-room discipline.
-For a working driver the standard Linux pattern is `request_firmware()`: the driver carries only the
-upload *logic* and the user supplies the blob from their own FCP install — the bitstream is **not**
-shipped in-tree (as dozens of mainline drivers do). The remaining blocker is narrower than first stated:
-not "can we get the blob" (the user has it) but whether that file's license permits redistribution,
-which only affects **mainline** acceptance, not a personal/out-of-tree build.
+Result `[TEST]`: **neither blob's content is resident in guest RAM** — zero `.bit` magic, zero
+`6slx45tcsg324`, zero `.tca` header (`10 07 12 20 6f a5`). The only reference is FC's device-descriptor
+XML, which lists both as version-gated **upgrade** segments:
+
+```xml
+<segment name="App_Upgrade"  nickname="App"  version="1016" file="ClarettThunderbolt.tca">
+<segment name="FPGA_Upgrade" nickname="FPGA" version="1021" file="fp001005_tb_top.bit">
+```
+
+So FC loads firmware only to *upgrade* on a version mismatch; the device self-boots App + FPGA from
+flash (it reports an FPGA version at boot). No firmware crosses the bus in a normal session.
+`[CONCLUSION]` **The off-wire differentiator is not a firmware/bitstream upload** — and the clean-room
+"can we source the blob" concern is moot (no blob is needed at runtime).
+
+## 5b. What remains
+
+The off-wire difference is something subtler than a blob upload. Note we already matched **every
+DMA-address-programming register** (only `0x410/0x414`, the GET-response buffer — no extra DMA region is
+set up by FC), so it is not an additional DMA buffer we failed to allocate. Remaining angles, untested:
+- Inspect what the device actually DMAs into FC's `0x410` response buffer for a control-region GET in a
+  *working* session, vs the `0x00` our `verify_writes` sees — requires re-tracing the live Windows
+  session to learn the current buffer GPA (it is re-allocated per boot; the old `0x277913000` is stale),
+  then dumping that region.
+- Re-examine device-state/arming: bring-up is order- and freshness-sensitive
+  (`[[clarett-control-manifestation]]`); FC's working device may reach an internal state our replay does
+  not, despite byte-identical init.
 
 ---
 

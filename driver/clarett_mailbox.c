@@ -11,6 +11,7 @@
  */
 #include <linux/io.h>
 #include <linux/jiffies.h>
+#include <linux/delay.h>
 #include <linux/string.h>
 #include "clarett.h"
 
@@ -69,6 +70,13 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		ret = -EIO;
 
 	c->seq++;
+
+	/* Optional post-command settle delay (cmd_delay_us): mimic FC's x-no-mmap pacing to test whether
+	 * arming/manifestation needs time to latch between commands. Process context under mbox_lock, so
+	 * sleeping is fine; small slack lets the scheduler coalesce the timer. */
+	if (clarett_cmd_delay_us > 0)
+		usleep_range(clarett_cmd_delay_us, clarett_cmd_delay_us + (clarett_cmd_delay_us >> 2) + 1);
+
 	mutex_unlock(&c->mbox_lock);
 	return ret;
 }

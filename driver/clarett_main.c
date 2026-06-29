@@ -93,6 +93,25 @@ MODULE_PARM_DESC(dma_bits,
  * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
  * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
  */
+static bool log_responses;
+module_param(log_responses, bool, 0444);
+MODULE_PARM_DESC(log_responses,
+		 "Log the device's DMAed response (first 24 bytes of resp_buf) after each arm command. "
+		 "Our arm replays a fixed sequence and ignores replies; FC's bring-up branches on them. Use "
+		 "this to spot a response the device gives US that differs from FC's captured session (a zero "
+		 "enumeration count, an error/not-ready status) — which would make our static replay land "
+		 "control writes on nothing. Default false.");
+
+int clarett_cmd_delay_us;
+module_param_named(cmd_delay_us, clarett_cmd_delay_us, int, 0444);
+MODULE_PARM_DESC(cmd_delay_us,
+		 "Microseconds to sleep after every completed FCP command (arm + control writes). Default 0 "
+		 "(native back-to-back). The FC traffic we byte-matched was captured under x-no-mmap, where "
+		 "every register access traps to QEMU, so the device saw those commands with ms-scale gaps. "
+		 "This re-introduces settle time to test the device-state/arming hypothesis: that control "
+		 "changes complete (done=1) but don't physically manifest because the FPGA datapath needs "
+		 "time to latch between commands that our µs-apart replay never gives it. Try 1000-10000.");
+
 static bool drain_causes;
 module_param(drain_causes, bool, 0444);
 MODULE_PARM_DESC(drain_causes,
@@ -259,16 +278,65 @@ static int clarett_arm_device(struct clarett *c)
 			clk_sent = true;
 		}
 
+		/*
+		 * Response logging (log_responses): our arm is a static replay that ignores every device
+		 * reply. FC's bring-up is response-driven. Pre-fill resp_buf with 0xAA so untouched bytes are
+		 * obvious, then dump header(16)+data(32). A command that DMAs a reply overwrites the 0xAA;
+		 * bytes left 0xAA were never written. This disambiguates real device output from stale buffer
+		 * and shows whether GET_DATA returns this device's real config (vs the static blob we write
+		 * back) — a per-device mismatch would mean our writeback corrupts config.
+		 */
+		if (log_responses)
+			memset(c->resp_buf, 0xAA, 64);
+
 		err = clarett_fcp(c, s->opcode, c->model->init_blob + s->off, s->len);
 		if (err) {
 			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
 				 i, s->opcode, err);
 			fails++;
 		}
+
+		if (log_responses) {
+			dma_rmb();
+			dev_info(&c->pci->dev, "arm[%d] op=0x%06x err=%d resp: %*ph\n",
+				 i, s->opcode, err, 48, c->resp_buf);
+		}
 	}
 	if (fails)
 		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
 			 fails, c->model->n_init_steps);
+
+	/*
+	 * Post-arm config-access probe (log_responses). Mid-init GET_DATA returns a header-only reply
+	 * (size=0, no payload). Does config access come alive once the FULL bring-up has run? GET a few
+	 * offsets with a 0xAA marker: 0x00 (config base), 0xc8 (writeback region), 0xa6 (Mode), 0x18
+	 * (monitor). If DATA (offset 16+) is still 0xAA, the device never returns its config to us — so
+	 * our static writeback runs blind. If real bytes appear, config access works and the empties were
+	 * just mid-init timing.
+	 */
+	if (log_responses) {
+		static const u32 probe_offs[] = { 0x00, 0xc8, 0xa6, 0x18 };
+		const u8 *r = c->resp_buf;
+		int k, w;
+
+		for (k = 0; k < ARRAY_SIZE(probe_offs); k++) {
+			memset(c->resp_buf, 0xAA, 64);
+			err = clarett_get_data(c, probe_offs[k], 32);
+			/* Wait for a possibly-late payload DMA: poll the first data byte (offset 16) for up
+			 * to ~30 ms. If it leaves 0xAA, the device wrote payload after done — a late-DMA/read
+			 * race (FC reads slowly under x-no-mmap and never hits it). If it stays 0xAA the whole
+			 * time, the device truly returns no config to us. */
+			for (w = 0; w < 30; w++) {
+				dma_rmb();
+				if (r[FCP_RESP_DATA_OFF] != 0xAA)
+					break;
+				usleep_range(1000, 1100);
+			}
+			dma_rmb();
+			dev_info(&c->pci->dev, "postarm GET off=0x%02x err=%d waited=%dms resp: %*ph\n",
+				 probe_offs[k], err, w, 48, c->resp_buf);
+		}
+	}
 	return 0;
 }
 
@@ -778,15 +846,23 @@ static void clarett_setup_irq(struct clarett *c)
 	struct pci_dev *pci = c->pci;
 	int i, nvec, err;
 
-	nvec = pci_alloc_irq_vectors(pci, CLARETT_NUM_VECTORS, CLARETT_NUM_VECTORS,
-				     PCI_IRQ_MSI);
+	/* Request up to CLARETT_NUM_VECTORS but accept as few as 1: under vfio passthrough the guest
+	 * often cannot grant all 4 (seen: -ENOSPC for min=max=4), and hard-failing left us with ZERO
+	 * interrupts — a real divergence from FC, which always has MSI up. With MSI collapsed to fewer
+	 * vectors the device funnels all causes to the lower vector(s); clarett_irq reads the cause regs
+	 * regardless, so notifications still work. */
+	nvec = pci_alloc_irq_vectors(pci, 1, CLARETT_NUM_VECTORS, PCI_IRQ_MSI);
 	if (nvec < 0) {
 		dev_warn(&pci->dev,
 			 "MSI alloc failed (%d); async notifications disabled\n", nvec);
 		return;
 	}
+	c->n_vec = nvec;
+	if (nvec < CLARETT_NUM_VECTORS)
+		dev_info(&pci->dev, "MSI: got %d/%d vectors (causes funnel to the allocated ones)\n",
+			 nvec, CLARETT_NUM_VECTORS);
 
-	for (i = 0; i < CLARETT_NUM_VECTORS; i++) {
+	for (i = 0; i < nvec; i++) {
 		c->irq_ctx[i].c = c;
 		c->irq_ctx[i].idx = i;
 		err = request_irq(pci_irq_vector(pci, i), clarett_irq, 0,
@@ -810,7 +886,7 @@ static void clarett_teardown_irq(struct clarett *c)
 
 	if (!c->irq_ready)
 		return;
-	for (i = 0; i < CLARETT_NUM_VECTORS; i++)
+	for (i = 0; i < c->n_vec; i++)
 		free_irq(pci_irq_vector(c->pci, i), &c->irq_ctx[i]);
 	pci_free_irq_vectors(c->pci);
 	c->irq_ready = false;

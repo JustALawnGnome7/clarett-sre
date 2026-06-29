@@ -320,6 +320,7 @@ struct clarett {
 	/* MSI / async notifications (vec0). The mailbox stays polled — the ISR
 	 * deliberately does not touch the 0x100 mailbox cause (see clarett_main.c). */
 	bool irq_ready;
+	int n_vec;				/* MSI vectors actually allocated (<= CLARETT_NUM_VECTORS) */
 	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
 	struct work_struct notify_work;
 	atomic_t notify_bits;
@@ -469,6 +470,11 @@ extern bool clarett_verify_writes;
 void clarett_wl(struct clarett *c, u32 off, u32 val);
 u32 clarett_rl(struct clarett *c, u32 off);
 extern bool clarett_trace_regs;
+
+/* Settle delay (microseconds) inserted after every completed FCP command. 0 = native back-to-back
+ * speed. Mimics FC's x-no-mmap pacing (ms-apart commands) to test the device-state/arming timing
+ * hypothesis: does manifestation need settle time between arm/toggle commands? */
+extern int clarett_cmd_delay_us;
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
 
 /* mixer.c */

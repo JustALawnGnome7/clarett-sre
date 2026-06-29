@@ -1,0 +1,5 @@
+[   74.860582] snd_clarett 0000:05:00.0: postarm GET off=0x00 err=0 waited=30ms resp: 00 00 80 80 00 00 00 00 03 00 00 00 00 00 00 00 aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+[   74.894213] snd_clarett 0000:05:00.0: postarm GET off=0xc8 err=0 waited=30ms resp: 00 00 80 80 00 00 00 00 03 00 00 00 00 00 00 00 aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+[   74.927852] snd_clarett 0000:05:00.0: postarm GET off=0xa6 err=0 waited=30ms resp: 00 00 80 80 00 00 00 00 03 00 00 00 00 00 00 00 aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+[   74.961444] snd_clarett 0000:05:00.0: postarm GET off=0x18 err=0 waited=30ms resp: 00 00 80 80 00 00 00 00 03 00 00 00 00 00 00 00 aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+[   74.963140] snd_clarett 0000:05:00.0: MSI: got 1/4 vectors (causes funnel to the allocated ones)
