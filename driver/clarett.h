@@ -272,11 +272,17 @@ struct clarett_model {
  * GET-response DMA layout (confirmed on hardware). The device DMAs the response
  * into resp_buf as a 16-byte FCP header followed by the requested bytes:
  *   resp[0..3]  = echoed cmd (CMD_EXEC_FLAG | opcode) — guard on this
+ *   resp[4..5]  = size: # of payload bytes the device actually returned
  *   resp[16+i]  = config[offset + i]  for a GET_DATA{offset, len}
  * A failed/absent DMA leaves the echo word 0, so checking it avoids consuming a
- * stale buffer (seen on the first GET at load, which DMAs all zeroes).
+ * stale buffer (seen on the first GET at load, which DMAs all zeroes). But the echo
+ * word alone is NOT sufficient: our device answers GET_DATA with the header present
+ * (echo + 0x03 success) yet size=0 and NO payload — the config backend is dormant for
+ * our driver (spec/clarett-8prex-manifestation-wall.md §5a). So a reader must ALSO
+ * require size > 0 before consuming resp[16+]; otherwise it copies stale buffer bytes.
  */
 #define FCP_RESP_ECHO_OFF        0
+#define FCP_RESP_SIZE_OFF        4
 #define FCP_RESP_DATA_OFF        16
 
 #define CLARETT_MBOX_TIMEOUT_MS  100

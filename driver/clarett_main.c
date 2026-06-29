@@ -415,11 +415,15 @@ static int clarett_arm_device(struct clarett *c)
  * bits needs the real current bytes for a safe read-modify-write. GET the monitoring region
  * (offset 24, 92 bytes — covers 24/28/52/72-74/112) and copy the DMAed response in. The first
  * GET after programming the DMA address can come back empty (echo word 0), so retry briefly.
+ * Guard on BOTH the echo word AND the response size: our device returns the header with size=0
+ * and no payload (config backend dormant — see manifestation wall), and copying that would seed
+ * the shadow with stale buffer bytes. Require size >= the bytes we read.
  */
 static int clarett_seed_shadow(struct clarett *c)
 {
 	const u8 *r = c->resp_buf;
 	u32 echo;
+	u16 size;
 	int err, attempt, i;
 
 	for (attempt = 0; attempt < 3; attempt++) {
@@ -430,7 +434,8 @@ static int clarett_seed_shadow(struct clarett *c)
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
 		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
 		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
-		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA)) {
+		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= MONITOR_CFG_LEN) {
 			for (i = 0; i < MONITOR_CFG_LEN; i++)
 				c->shadow[MONITOR_CFG_OFFSET + i] = r[FCP_RESP_DATA_OFF + i];
 			return 0;
@@ -866,6 +871,7 @@ static void clarett_notify_work(struct work_struct *work)
 	} else {
 		const u8 *r = c->resp_buf;
 		u32 echo;
+		u16 size;
 
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
 		if (log_responses) {
@@ -884,8 +890,12 @@ static void clarett_notify_work(struct work_struct *work)
 		}
 		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
 		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
+		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
 
-		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA)) {
+		/* Guard on echo AND size: our device returns echo+0x03 success with size=0 and no
+		 * payload (config backend dormant), so consuming resp[16+] would copy stale buffer
+		 * bytes into the monitor shadow. Require the full region before refreshing. */
+		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= MONITOR_CFG_LEN) {
 			const u8 *data = r + FCP_RESP_DATA_OFF;
 
 			/* data[i] == config[MONITOR_CFG_OFFSET + i] */
@@ -893,9 +903,12 @@ static void clarett_notify_work(struct work_struct *work)
 			c->shadow[28]  = data[28  - MONITOR_CFG_OFFSET];
 			c->shadow[112] = data[112 - MONITOR_CFG_OFFSET];
 		} else {
-			/* No response DMAed (e.g. the first GET at load) — keep the shadow. */
+			/* Empty/absent payload — keep the write-through shadow. On our device this is
+			 * the normal case (echo present, size=0: config backend dormant); echo=0 is the
+			 * older first-GET-at-load case. Either way, don't seed the shadow with stale bytes. */
 			dev_dbg(&c->pci->dev,
-				"notify 0x%x: no GET response (echo=0x%08x)\n", ev, echo);
+				"notify 0x%x: empty GET response (echo=0x%08x size=%u) — shadow kept\n",
+				ev, echo, size);
 		}
 	}
 
