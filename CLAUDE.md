@@ -23,13 +23,19 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
   sustain past one ring pass** (flags period 0, the `0x300` counter never advances). Same
-  below-BAR/environmental wall. Details: `spec/clarett-8prex-data-plane.md`.
-- **Method caveat:** the `x-no-mmap` BAR trace is **blind to sample DMA** and to bus-master
-  DMA generally — both planes were RE'd by triangulating BAR setup registers
-  (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
-  --async`). That same blindness is where both walls hide: the differentiator is off the
-  traceable BAR0/FCP/config surface. Going further needs bus-level RE (TB/PCIe analyzer) or
-  host-vs-VM environment work — **not more driver edits** (every observable surface matches FC).
+  off-wire/below-BAR wall. Details: `spec/clarett-8prex-data-plane.md`.
+- **Environment is RULED OUT, not a remaining path.** Our driver was run in a Fedora guest with
+  the device vfio-passed-through — the *same* path FC uses (Windows guest + passthrough) — and it
+  **still fails** (control writes don't manifest). FC-in-passthrough works, our-driver-in-the-same-
+  passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
+  vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
+  replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
+- **Method caveat:** the `x-no-mmap` BAR trace is **blind to sample DMA** and to bus-master DMA
+  generally — both planes were RE'd by triangulating BAR setup registers (`tools/bar_profile.py`) +
+  guest-RAM dumps + period-IRQ correlation (`fcp_decode.py --async`). That same blindness is where both
+  walls hide. The black-box MMIO+FCP+config method is exhausted; the only way to *see* the off-wire DMA
+  difference is **bus-level RE — a Thunderbolt/PCIe protocol analyzer on the live link** — **not** more
+  driver edits and **not** host-env work (every observable surface, and the environment itself, matches FC).
 
 ## Method (how the RE is done)
 

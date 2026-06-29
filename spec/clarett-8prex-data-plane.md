@@ -7,10 +7,13 @@ descriptors valid (no IOMMU faults), the DMA PTR advances. **But it will not sus
 it flags "period 0 ready" and the `0x300` counter never advances, universal across both models. Every
 observable host→device surface (BAR0 setup regs, FCP handshake, PCI config, `0x500`/`0x510` enables,
 converter-ready status, **and** the DMA-buffer address via `dma_bits=30/31`) has been matched/eliminated.
-The black-box MMIO+FCP+config method is **exhausted**; the sustain blocker is environmental / below the
-BAR surface — the **same off-wire wall the control plane hits** (`spec/clarett-8prex-manifestation-wall.md`,
-memo `clarett-dataplane-pcm-findings`). Going further needs bus-level RE or host-vs-VM env work, not driver
-edits. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` = confirmed from a
+The black-box MMIO+FCP+config method is **exhausted**; the sustain blocker is below the BAR surface — the
+**same off-wire wall the control plane hits** (`spec/clarett-8prex-manifestation-wall.md`, memo
+`clarett-dataplane-pcm-findings`). **Environment is ruled out:** the control plane was retested with our
+driver in a Fedora guest under the *same* vfio passthrough FC uses and still failed, so it is our-driver-
+vs-FC (off-wire bus-master DMA), not host/IOMMU/VM context. (Earlier data-plane notes called this
+"environmental" — superseded; both planes share the off-wire/driver-vs-FC root.) Going further needs
+bus-level RE (a TB/PCIe protocol analyzer on the live link), **not** host-env work and **not** driver edits. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` = confirmed from a
 capture; `[ANCHOR]` = a control-plane fact we build on.
 
 The control plane (mixer/routing/gain/mute/clock/notifications) is reverse-engineered and documented in
