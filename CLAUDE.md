@@ -7,15 +7,29 @@ session (or contributor) can continue without the original chat history.
 
 ## Goal & status
 
-Build an in-kernel ALSA driver for the Clarett 8PreX. Two planes:
-- **Control plane** (mixer/routing/preamp/clock/notifications) — **fully
-  reverse-engineered** (every encoding confirmed against live traffic); a working
-  mixer-only driver exists (`driver/`). Loads and probes on real hardware.
-- **Data plane** (PCM DMA streaming) — **not yet traced; capture plan written**
-  (`spec/clarett-8prex-data-plane.md`). This is the main remaining work. Key point:
-  the `x-no-mmap` BAR trace is **blind to sample DMA** — the data plane is RE'd by
-  triangulating BAR setup registers (`tools/bar_profile.py`) + guest-RAM dumps +
-  period-IRQ correlation (`fcp_decode.py --async`).
+Build an in-kernel ALSA driver for the Clarett 8PreX. Both planes are blocked at the
+**same off-wire/below-BAR wall** — our driver's observable traffic matches Focusrite
+Control byte-for-byte, yet neither plane functions. This is the central unsolved problem
+(`spec/clarett-8prex-manifestation-wall.md`).
+- **Control plane** (mixer/routing/preamp/clock/notifications) — **protocol fully
+  reverse-engineered**; every encoding confirmed against live FC traffic. The driver
+  (`driver/`) is **structurally complete**: loads and probes on real hardware, registers
+  ALSA mixer controls, the FCP mailbox transport round-trips (`done=1`), and async
+  notifications fire. **But it does NOT functionally control the device** — control writes
+  complete yet don't manifest (front-panel state frozen), and `GET_DATA` comes back empty
+  (`size=0`), so the mixer "get" is an in-memory **shadow**, not hardware state. The config
+  backend is dormant for our driver despite a correct, FC-identical command stream.
+- **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
+  (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
+  cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
+  sustain past one ring pass** (flags period 0, the `0x300` counter never advances). Same
+  below-BAR/environmental wall. Details: `spec/clarett-8prex-data-plane.md`.
+- **Method caveat:** the `x-no-mmap` BAR trace is **blind to sample DMA** and to bus-master
+  DMA generally — both planes were RE'd by triangulating BAR setup registers
+  (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
+  --async`). That same blindness is where both walls hide: the differentiator is off the
+  traceable BAR0/FCP/config surface. Going further needs bus-level RE (TB/PCIe analyzer) or
+  host-vs-VM environment work — **not more driver edits** (every observable surface matches FC).
 
 ## Method (how the RE is done)
 
@@ -79,8 +93,11 @@ models.** The 8PreX's own numbers come from `FCP Server Resources/Clarett 8PreX.
 ### The control-plane model (the key result)
 A config write = `SET_DATA{offset, len, value}` then `DATA_CMD{activate}`, where
 `offset`/`len`/`value` and `activate` come straight from the XML per control
-(`offset-bytes`, `bits`, and `command`). Verified end-to-end on master mute
-(offset 24, activate 2) and master volume (stereo, offsets 32/33, activate 1).
+(`offset-bytes`, `bits`, and `command`). The **encoding** is confirmed against FC's
+live traffic on master mute (offset 24, activate 2) and master volume (stereo,
+offsets 32/33, activate 1) — i.e. our bytes match FC's byte-for-byte. **Not** verified
+end-to-end: replayed by our driver these writes complete (`done=1`) but do not manifest
+(the manifestation wall), so the encoding is proven correct, the physical effect is not.
 
 ### Output gain encoding (confirmed)
 7-bit **attenuation** code = |dB| exactly, linear 1 dB/step: `0x00`=0 dB (unity)
