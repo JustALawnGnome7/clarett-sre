@@ -11,6 +11,13 @@ transport — expect the 8PreX to reuse the packet/opcodes, confirm the values);
 > transfers; only the carrier changes — USB control msg → **BAR mailbox + doorbell + MSI**. The
 > packet structure and command opcodes should port over; the mailbox plumbing is what we RE.
 
+> **⚠ Correction (June 28 2026).** The transport framing in §8 is solid (mailbox, doorbell, header
+> layout, cause regs all confirmed). But three §8 conclusions are now **disproven** and corrected
+> inline: (a) "control changes don't manifest *without the data plane*" — the data-plane requirement is
+> FALSE (FC moves the LEDs at idle, no stream); (b) "GET-response returns `config[off+i]`, CONFIRMED" —
+> our driver's `GET_DATA` returns an **empty** payload (`size=0`) in every tested state; (c) the
+> notification mask is `0x3`, not `0x200000`/`0x400000`. See `spec/clarett-8prex-manifestation-wall.md`.
+
 ---
 
 ## 1. The FCP packet (request/response envelope) `[S2]`
@@ -145,7 +152,7 @@ The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRME
 | `0x00` | caps/version = `0x032003fd` | read at init |
 | `0x04`,`0x08` | `0x80`, `0x2000` | read at init |
 | `0x10`,`0x14` | **device serial** = `0x5678abcd`, `0x1234` | matches lspci DSN `…12-34-56-78-ab-cd` |
-| `0x100`/`0x200`/`0x300`/`0x400` | **interrupt cause registers** (functional blocks, stride `0x100`), read-to-clear. `0x100` = **mailbox-done** (`0x20000000`); `0x400` = **async notifications** — high bits carry the §11 mask (`0x200000` dim-mute confirmed), low nibble a status value. NB **not** one-per-MSI-vector: bare metal fires only vec0 (below) | `0x100`=`0x20000000` then `0x0`; `0x400`=`0x200000` on front-panel Mute |
+| `0x100`/`0x200`/`0x300`/`0x400` | **interrupt cause registers** (functional blocks, stride `0x100`), read-to-clear. `0x100` = **mailbox-done** (`0x20000000`); `0x400` = **async notifications** — a Mute/Dim press raises `0x3` (+ intermittent `0x200000`), NOT the XML `0x200000`/`0x400000` mask `[CORRECTED June 28 2026]`. NB **not** one-per-MSI-vector: bare metal fires only vec0 (below) | `0x100`=`0x20000000` then `0x0`; `0x400`=`0x3` on front-panel Mute/Dim |
 | `0x104` | IRQ enable mask = `0xf000003f` (written once) | |
 | `0x410`/`0x414` | GET-response DMA buffer bus address: low32 / **high32** | init wrote `0x521ff000`/`0x2`; `0x414`=addr-high confirmed (hardcoding `0x2` → IOMMU fault at `0x2_xxxxxxxx`) |
 | `0x408` | **doorbell**: write `0x1` = submit, `0x2` = ack/clear prior completion | 58×`0x1`, 57×`0x2`, strictly alternating |
@@ -233,16 +240,21 @@ New opcodes (not in the original control-plane map; names provisional `[INF]`): 
 enable, `0x001000`/`0x002000`/`0x003000`/`0x004000` count queries, `0x004001`/`0x004005` subsystem-4
 setup, `0x006004`/`0x006005` queries.
 
-### Control-plane changes ACK but don't physically manifest without the data plane `[HW]`
+### Control-plane changes ACK but don't physically manifest `[HW]` `[data-plane theory DISPROVEN June 28 2026]`
 Even after a correct bring-up, a monitor `Mute`/`Dim` write (`SET_DATA{24|28}` + `DATA_CMD{2}`)
 **completes genuinely** (`done=1, fcperr=0`) yet produces **no physical change** — the front-panel
 Monitor Mute/Dim LED does not move, where the vendor app's *identical* write does. We matched the
 vendor's entire control-plane behaviour byte-for-byte (full init, config read/writeback, per-write
-`DATA_CMD{5}` commit); the only remaining difference is that the vendor app **starts the audio engine**
-via the **data plane** (DMA-ring / clocking register writes, outside the `0x8020` mailbox and invisible
-to the MMIO trace). **Conclusion: the control plane is complete and correct, but its effects stay inert
-until the audio engine is streaming — the remaining work is the data plane**
-(`spec/clarett-8prex-data-plane.md`), not any further control-plane command.
+`DATA_CMD{5}` commit).
+
+**The earlier conclusion here — "effects stay inert until the audio engine is streaming; the remaining
+work is the data plane" — is WRONG and has been disproven.** FC moves the same LEDs **at idle with no
+stream and no engine armed** (`clarett_monitor_mutedim.log` touches only the mailbox/cause regs). So
+manifestation does not require the data plane. This session added a second, cleaner symptom of the same
+root: `GET_DATA` returns an **empty** payload too (below). Both the control plane and the data plane fail
+the same way — our observable traffic (BAR0 + FCP + PCI config) is byte-identical to FC's, yet neither
+functions — so the differentiator is **off-wire / below the BAR surface**, not a missing control-plane
+command and not the data plane. Full elimination chain: `spec/clarett-8prex-manifestation-wall.md`.
 
 ### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.txt`)
 | opcode | name | payload | proof |
@@ -253,8 +265,10 @@ until the audio engine is streaming — the remaining work is the data plane**
 | `0x800002` | DATA_CMD | `{u32 activate}` | mute commit → `activate=2` = XML `<mute command="2">` |
 
 These equal scarlett2's USB opcode values. **A config write is therefore: `SET_DATA{offset, len,
-value}` then `DATA_CMD{activate = the XML control's `command`}`** — the entire control-plane spec is
-directly executable. E.g. master-volume-up (stereo) = two pairs `SET_DATA{offset=0x20/0x21, len=1,
+value}` then `DATA_CMD{activate = the XML control's `command`}`** — the control-plane *encoding* is
+directly executable and byte-matches FC. (The bytes are correct; whether the write physically
+manifests is the separate, unsolved manifestation problem — see the disproven-data-plane note above and
+`manifestation-wall.md`.) E.g. master-volume-up (stereo) = two pairs `SET_DATA{offset=0x20/0x21, len=1,
 val=0x22}` + `DATA_CMD{activate=1}`, confirming Monitor Out 1/2 gain @ offsets 32/33, command 1,
 8-bit (spec §5).
 
@@ -266,9 +280,10 @@ cannot see GET payloads; to capture them, dump that DMA buffer in guest RAM. Opc
 sample-rate band; the routing data comes back via DMA. (This is the `{u16, 0x02, index}` triple first
 seen at init after the monitor `GET_DATA`.)
 
-#### GET-response buffer layout — CONFIRMED `[HW]`
-Decoded by dumping the driver's own coherent response buffer after a `GET_DATA`. The response is the
-**same 16-byte FCP header as a request, then the requested bytes**:
+#### GET-response buffer layout — header CONFIRMED, payload EMPTY for our driver `[CORRECTED June 28 2026]`
+Decoded by dumping the driver's own coherent response buffer after a `GET_DATA`. The 16-byte **header**
+is confirmed (echo/status/size/pad land via DMA every time); the **data region does NOT** — see the
+correction below the table:
 
 | resp offset | field | notes |
 |---|---|---|
@@ -276,23 +291,33 @@ Decoded by dumping the driver's own coherent response buffer after a `GET_DATA`.
 | `+4` | `size | seq` | echoed |
 | `+8` | status/error | observed `0x3` on success (low-nibble status, mirrors `0x400`) |
 | `+12` | pad | |
-| `+16 + i` | **`config[offset + i]`** | the requested config bytes, 1:1 |
+| `+16 + i` | (`config[offset + i]` for a *working* device) | **for our driver this region stays empty** — see below |
 
-So for `GET_DATA{offset, len}`, `resp[16 + i] == config[offset + i]`. Confirmed against a monitor
-`GET_DATA{24, 92}` taken on a Mute notification: `resp[16]=config[24]=0x01` (master mute on),
-`resp[24..27]=0x7f` (Monitor 1/2 gains = full attenuation), `resp[28..29]=0x28` (=−40 dB). A
-failed/absent DMA leaves the echo word `0` (seen on the very first GET at load, which read all
-zeroes), so a reader **must check `resp[+0]` before consuming the buffer**. The driver's notification
-handler uses exactly this to refresh its monitor-control shadow (`clarett_notify_work`).
+**⚠ For our driver, `GET_DATA` returns an EMPTY payload `[CORRECTED June 28 2026]`.** The header DMAs in
+fine (`resp[+0]=0x80800000` echo, `resp[+8]=0x03` success) but `size@+4 = 0` and the data region (`+16`
+onward) is never written — exhaustively confirmed on **both** 8PreX and 2Pre, at every offset, every
+length (4 / 0x3f8 / 92 / 32), with a 3 s settle, in FC's exact read window, and even in a genuine Mute
+notification context. So `resp[16+i] == config[off+i]` does **not** hold for us; the device's config
+backend is dormant and returns zero bytes (`spec/clarett-8prex-manifestation-wall.md` §5a).
 
-### Async notification path — CONFIRMED (physical Mute button)
-The notification **bitmask** lives in **cause register `0x400`** (read-to-clear); observed
-`0x400 = 0x00200000` (`dim-mute`) on Mute. The MSI itself is invisible to `vfio_region_*` (KVM
-irqfd), but the ISR's register read is not — that's how we mapped it. **Which MSI vector delivers it
-was corrected on bare metal** (see below). Notes:
-- `0x400` low nibble doubles as a general mailbox-status value (`0x3` appears on completions); the
-  **notification is the high bits** (`0x200000`/`0x400000`). `0x500` is the IRQ summary/mask reg
-  (constant `0xff0000`) — *not* a notification source.
+The single non-empty read this section originally cited — `GET_DATA{24,92}` → `resp[16]=0x01`, "on a Mute
+notification" — **could not be reproduced** and must have been a different historical state. A reader
+**must guard on `resp[+0]` (echo) AND `resp[+4]` (size) before consuming the buffer** — echo-present with
+`size=0` is the empty case the old code mistook for valid (it only checked the echo word), which let
+`clarett_notify_work`/`seed_shadow` copy stale `0xAA`/zero into the monitor shadow.
+
+### Async notification path — CONFIRMED (physical Mute button) `[mask CORRECTED June 28 2026]`
+The notification **bitmask** lives in **cause register `0x400`** (read-to-clear). The MSI itself is
+invisible to `vfio_region_*` (KVM irqfd), but the ISR's register read is not — that's how we mapped it.
+**Which MSI vector delivers it was corrected on bare metal** (see below). Notes:
+- **Live 8PreX:** a Mute/Dim press raises `0x400 = 0x00000003` (bits 0|1) on every press, with
+  `0x00200003` intermittently. The earlier reading "`0x400 = 0x00200000` on Mute, `0x3` is just
+  mailbox-status noise" was **wrong**; the real notification bits are `0x3` (+ aux `0x200000`). The
+  driver masks `NOTIFY_MONITOR_MASK = 0x3 | 0x00200000`. `0x500` is the IRQ summary/mask reg (constant
+  `0xff0000`) — *not* a notification source.
+- The device **re-asserts** an unsatisfied notification (it retries `0x3` periodically). FC clears it by
+  reading the config the event points at (its GET returns data); our GET returns empty, so the device
+  keeps re-firing — a downstream symptom of the empty-GET, not a separate signal.
 - **Delivery vector — corrected `[HW]`:** bare-metal `/proc/interrupts` shows the device fires **only
   MSI vector 0** for *all* control-plane events (mailbox-done and notifications alike); vectors 1–3
   never increment. So the cause-register index is **not** the MSI vector index — they are independent.

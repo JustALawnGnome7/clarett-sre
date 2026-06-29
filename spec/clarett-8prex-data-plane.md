@@ -1,14 +1,21 @@
-# Clarett 8PreX — Data-Plane Capture Plan (PCM DMA streaming)
+# Clarett 8PreX — Data-Plane RE (PCM DMA streaming)
 
-**Status:** Phase 1 (streaming register map) **recovered** from `clarett_full_init_mute.log` — see §3b;
-Phase 2 (descriptor format + sample layout) **recovered** from live guest-RAM dumps — see §3c. The
-rest (IRQ cadence, implementation) is still open. This scopes how to reverse-engineer
-the audio **data plane** (bus-master DMA streaming): the methodology shift it needs, the tooling, and
-the phased sequence. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` =
-confirmed from a capture; `[ANCHOR]` = a control-plane fact we build on.
+**Status (June 28 2026):** far past a "plan". Phase 1 (streaming register map) **recovered** from
+`clarett_full_init_mute.log` (§3b); Phase 2 (descriptor format + sample layout) **recovered** from live
+guest-RAM dumps (§3c); the engine is **implemented and validated** — arms cleanly, DMAs a burst,
+descriptors valid (no IOMMU faults), the DMA PTR advances. **But it will not sustain past one ring pass**:
+it flags "period 0 ready" and the `0x300` counter never advances, universal across both models. Every
+observable host→device surface (BAR0 setup regs, FCP handshake, PCI config, `0x500`/`0x510` enables,
+converter-ready status, **and** the DMA-buffer address via `dma_bits=30/31`) has been matched/eliminated.
+The black-box MMIO+FCP+config method is **exhausted**; the sustain blocker is environmental / below the
+BAR surface — the **same off-wire wall the control plane hits** (`spec/clarett-8prex-manifestation-wall.md`,
+memo `clarett-dataplane-pcm-findings`). Going further needs bus-level RE or host-vs-VM env work, not driver
+edits. Tags: `[PLAN]` = intended approach; `[HYP]` = hypothesis to confirm; `[TRACE]` = confirmed from a
+capture; `[ANCHOR]` = a control-plane fact we build on.
 
-The control plane (mixer/routing/gain/mute/clock/notifications) is reverse-engineered and documented
-in `clarett-8prex-control-plane.md` + `clarett-8prex-fcp-transport.md`. This is the remaining work.
+The control plane (mixer/routing/gain/mute/clock/notifications) is reverse-engineered and documented in
+`clarett-8prex-control-plane.md` + `clarett-8prex-fcp-transport.md`. **Both planes are now blocked at the
+same below-BAR wall** — neither functions despite traffic byte-identical to FC.
 
 ---
 

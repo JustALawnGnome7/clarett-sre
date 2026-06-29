@@ -5,6 +5,14 @@
 `[INF]` = inferred/derived by us (needs confirmation);
 `[TRACE]` = to be confirmed against the live MMIO/FCP capture.
 
+> **⚠ Correction (June 28 2026).** Parts of this spec predate the manifestation-wall finding and
+> overstate confirmation. Reality: control writes complete (`done=1, fcperr=0`) but **do NOT physically
+> manifest** from our driver, and `GET_DATA` returns an **empty** payload (`size=0`) — the device's
+> config backend is dormant for us despite an FC-identical command stream
+> (`spec/clarett-8prex-manifestation-wall.md`). The encodings below are still correct (verified against
+> FC's live traffic); what is wrong is any claim that our driver *effected* a change. §7 (clock as the
+> "cause" of no streaming) and §11 (notification mask) are corrected inline.
+
 This document describes the **control plane** (mixer/routing/preamp/clock/monitor). The data
 plane (PCIe DMA streaming) is separate and not covered here except for channel counts.
 
@@ -188,10 +196,12 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
   FC issues it at stream start and on every rate/source change; on a rate change it is followed by a
   full `CONFIG_PUSH` (`0x5000`) re-init burst, the routing re-setup (`0x6004/0x6002/0x6005`), and a
   `DATA_CMD 0x800002 {activate=5}`.
-- **Not yet replayed by the driver** — the `clarett_full_init_mute.log` bring-up capture happened to omit
-  `0x6003`, so `clarett_init_seq` never sets the clock. This is the leading cause of the data-plane engine
-  arming but never clocking (no `vec1/vec2` period IRQs); see data-plane spec §9. Next: send `SET_CLOCK`
-  in `clarett_engine_start` before arming.
+- **Now replayed by the driver — and it is NOT the streaming blocker `[CORRECTED June 28 2026]`.** The
+  driver issues `SET_CLOCK` (via the prepare-time stream-config handshake / `inject_clock`), byte-identical
+  to FC's `{48000, 24}`. It did **not** make the engine clock: the engine arms, DMAs a brief burst, then
+  stalls after one ring pass regardless. So the omitted `0x6003` was a red herring, not "the leading cause."
+  The real data-plane blocker is the environmental/below-BAR sustain wall (data-plane spec §9 + memo
+  `clarett-dataplane-pcm-findings`); both planes hit the same off-wire wall.
 
 ## 8. Routing matrix `[XML]`
 
@@ -270,17 +280,24 @@ Record pin → default hardware-input index, with per-band remap (`input-m`/`inp
 
 Bitmask values the device raises when state changes (e.g. front-panel button):
 
-| name | value |
+The XML lists these names/values (identical to the USB 8Pre — shared FCP framing):
+
+| name | XML value |
 |---|---|
 | dim-mute | `0x00200000` |
 | monitor | `0x00400000` |
 
-(Identical to the USB 8Pre — strong evidence of shared FCP framing.)
+**⚠ The XML mask is NOT what the device actually raises `[CORRECTED June 28 2026, live 8PreX]`.**
+Pressing the front-panel **Mute** or **Dim** button raises cause `0x400 = 0x00000003` (bits 0|1) on
+**every** press, with `0x00200003` (adds bit 21) appearing intermittently. The earlier claim that Mute
+produced `0x00200000` "exactly" and that `0x3` was mere mailbox-status noise was **wrong** — the driver
+masked `0x00200000|0x00400000`, saw `masked=0x0`, and never fired the notify handler. The driver now uses
+`NOTIFY_MONITOR_MASK = 0x3 | 0x00200000` (`clarett.h`), verified `masked=0x3` on every press. Per-bit
+semantics (which bit = mute vs dim vs the `0x200000` aux) are not yet pinned down; `notify_work` re-reads
+the whole monitor region on any of them.
 
-**Delivery mechanism — CONFIRMED `[TRACE/HW]`:** a front-panel event sets the bitmask above in cause
-register **`0x400`** (read-to-clear); pressing the physical **Mute** button produced
-`0x400 = 0x00200000` (`dim-mute`) exactly. (`0x400`'s low nibble also carries a general mailbox-status
-value — e.g. `0x3` on completions — so notifications are the *high* bits.) **The MSI is delivered on
+**Delivery mechanism — `[TRACE/HW]`:** a front-panel event sets the cause bits above in cause register
+**`0x400`** (read-to-clear; the device re-asserts while it has an unsatisfied event). **The MSI is delivered on
 vector 0** — bare-metal `/proc/interrupts` shows only vec0 ever fires (mailbox-done *and*
 notifications); the cause-register index is independent of the MSI vector index. The host then
 **re-syncs state**: `GET_DATA{offset=24, len=92}` to re-read this monitor region (§9), followed by

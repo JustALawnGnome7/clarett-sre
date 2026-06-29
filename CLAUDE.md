@@ -110,7 +110,8 @@ end-to-end: replayed by our driver these writes complete (`done=1`) but do not m
 spec/clarett-8prex-control-plane.md   Authored control-plane spec (offsets, opcodes,
                                       enums, pins, mixer, routing). Provenance-tagged.
 spec/clarett-8prex-fcp-transport.md   Mailbox/transport framing; confirmed reg map.
-spec/clarett-8prex-data-plane.md      PCM-DMA capture PLAN (not yet traced): method, phases, risks.
+spec/clarett-8prex-data-plane.md      PCM-DMA RE: method, recovered register/descriptor maps, and the
+                                      validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
 spec/clarett-8prex-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
                                       every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
