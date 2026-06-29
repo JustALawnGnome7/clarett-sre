@@ -110,13 +110,54 @@ flash (it reports an FPGA version at boot). No firmware crosses the bus in a nor
 `[CONCLUSION]` **The off-wire differentiator is not a firmware/bitstream upload** — and the clean-room
 "can we source the blob" concern is moot (no blob is needed at runtime).
 
+## 5a. Second-angle confirmation — GET_DATA returns empty `[TEST]` (June 28 2026)
+
+A cleaner, machine-readable instrument than "the LED didn't move": after a full bring-up, every
+`GET_DATA` our driver issues comes back **header-only** — the device DMAs the 16-byte FCP header
+(`echo=0x80800000`, `status=0x03` success) into `resp_buf` but writes **`size=0` and no payload** (the
+data region past offset 16 stays at our `0xAA` pre-fill). Exhaustively eliminated as the cause of the
+empty payload (`log_responses=1` post-arm + in-window probes):
+
+| Variable | Tested | Result |
+|---|---|---|
+| Model | 8PreX vs 2Pre | byte-identical empty |
+| Read length | 4 / 0x3f8 / 92 / 32 | all empty |
+| Settle time | immediate vs +3 s | empty |
+| Sequence position | mid-arm in FC's exact window (right after `0x004005`, #167→#168) vs post-arm | empty |
+| Prologue commands | `0x800005 / 0x6004 / 0x6002 / 0x6005 / 0x004005` all replayed byte-identical | empty |
+
+So config-**read** is dead under every on-wire-controllable condition, with traffic byte-identical to
+FC's. This **ties the two dead symptoms to one root**: writes don't manifest ↔ reads return empty ⇒ the
+device's **config engine is dormant for our driver**. Two facts the probe also nails down: the
+DMA-response path itself **works** (header lands every time — not a buffer-programming bug), and the
+device **deliberately** returns a well-formed zero-length response (it parsed the request).
+
+**The one positive datum** (transport spec §8): our *own* driver once read real config —
+`GET_DATA{24,92}` returned `resp[16]=config[24]=0x01` — **"on a Mute notification."**
+
+**Notification-trigger test — DISPROVEN `[TEST]` (June 28 2026).** Loaded the driver, pressed the
+front-panel Mute/Dim buttons. The device **does** notify us (`notify ISR cause=0x00000003`, sometimes
+`0x200003`), and `notify_work`'s `GET_DATA{24,92}` — the *exact* §8 params — fires right after. It still
+returns **empty** (header lands, payload all `0xAA`). So config-read is dead even in genuine
+device-notification context; §8 does not reproduce and must have been a different historical state. Two
+bonus findings: (1) the notification cause bits are `0x3` / `0x200003`, which **do not match** our
+`NOTIFY_DIM_MUTE | NOTIFY_MONITOR` mask (`masked=0x0`) — a real control-plane bug (our monitor controls
+would never be notified in normal operation), fix independent of the wall; (2) the front-panel
+Mute/Dim LEDs move on a *physical* press (hardware-direct) — only *software*-commanded changes fail,
+consistent with a dormant config backend.
+
+**CONFIG_PUSH is not DMA-backed.** The `0x5000 ×122` payloads are 2-byte item IDs (`03 00`, `2b 00`,
+…), not host pointers — so config is not read through a host DMA buffer we failed to populate. The
+mailbox is the entire config channel.
+
 ## 5b. What remains
 
 The off-wire difference is something subtler than a blob upload. Note we already matched **every
 DMA-address-programming register** (only `0x410/0x414`, the GET-response buffer — no extra DMA region is
 set up by FC), so it is not an additional DMA buffer we failed to allocate. Remaining angles, untested:
+- **Notification-trigger test** (above) — cheapest, targets the §8 positive datum directly.
 - Inspect what the device actually DMAs into FC's `0x410` response buffer for a control-region GET in a
-  *working* session, vs the `0x00` our `verify_writes` sees — requires re-tracing the live Windows
+  *working* session, vs the empty our probe sees — requires re-tracing the live Windows
   session to learn the current buffer GPA (it is re-allocated per boot; the old `0x277913000` is stale),
   then dumping that region.
 - Re-examine device-state/arming: bring-up is order- and freshness-sensitive

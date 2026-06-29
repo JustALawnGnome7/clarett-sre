@@ -301,6 +301,36 @@ static int clarett_arm_device(struct clarett *c)
 			dev_info(&c->pci->dev, "arm[%d] op=0x%06x err=%d resp: %*ph\n",
 				 i, s->opcode, err, 48, c->resp_buf);
 		}
+
+		/*
+		 * In-window config-read probe. FC reads config IMMEDIATELY after the 0x004005 prologue
+		 * (capture #167->#168), before the trailing write-back + persist DATA_CMD{5}. Our normal
+		 * postarm probe reads ~57 commands later, in a different state, and comes back empty. Replay
+		 * FC's exact opening reads (#168-172: {8,4}{c,4}{8,4}{c,4}{0,0x3f8}) right here. Real bytes
+		 * ⇒ config-read is only open in this window and our later commands close it; still empty
+		 * ⇒ even FC's own read position is dead for us → the difference is off-wire, not ordering.
+		 */
+		if (log_responses && s->opcode == 0x004005) {
+			static const struct { u32 off, len; } iw[] = {
+				{ 0x8, 0x4 }, { 0xc, 0x4 }, { 0x8, 0x4 }, { 0xc, 0x4 }, { 0x0, 0x3f8 },
+			};
+			const u8 *ir = c->resp_buf;
+			int m, mw;
+
+			for (m = 0; m < ARRAY_SIZE(iw); m++) {
+				memset(c->resp_buf, 0xAA, 16 + iw[m].len + 8);
+				err = clarett_get_data(c, iw[m].off, iw[m].len);
+				for (mw = 0; mw < 30; mw++) {
+					dma_rmb();
+					if (ir[FCP_RESP_DATA_OFF] != 0xAA)
+						break;
+					usleep_range(1000, 1100);
+				}
+				dma_rmb();
+				dev_info(&c->pci->dev, "inwindow GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
+					 iw[m].off, iw[m].len, err, mw, 48, c->resp_buf);
+			}
+		}
 	}
 	if (fails)
 		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
@@ -315,13 +345,26 @@ static int clarett_arm_device(struct clarett *c)
 	 * just mid-init timing.
 	 */
 	if (log_responses) {
-		static const u32 probe_offs[] = { 0x00, 0xc8, 0xa6, 0x18 };
-		const u8 *r = c->resp_buf;
+		/*
+		 * Replicate FC's exact opening GET sequence (from 8prex_boot_to_stream_with_config.log
+		 * #168-180): two len=4 field reads at 0x8/0xc, then the bulk config walk in 0x3f8 chunks.
+		 * Plus {24,92} (the params that returned real data in transport-spec §8) and {24,32} (the
+		 * post-arm probe that came back empty) so we A/B length at one offset. If the 0x3f8 / len=92
+		 * reads return payload where len=32 did not, the device returns size=0 for short/non-region
+		 * reads — a length-encoding bug, not a state wall.
+		 */
+		static const struct { u32 off, len; } probe[] = {
+			{ 0x8,  0x4   }, { 0xc,  0x4   },	/* FC's two preliminary field reads */
+			{ 0x0,  0x3f8 },			/* FC's bulk chunk (1016 bytes) */
+			{ 0x18, 92    },			/* known-good params (spec §8) */
+			{ 0x18, 0x20  },			/* the failing post-arm params */
+		};
+		u8 *r = c->resp_buf;
 		int k, w;
 
-		for (k = 0; k < ARRAY_SIZE(probe_offs); k++) {
-			memset(c->resp_buf, 0xAA, 64);
-			err = clarett_get_data(c, probe_offs[k], 32);
+		for (k = 0; k < ARRAY_SIZE(probe); k++) {
+			memset(c->resp_buf, 0xAA, 16 + probe[k].len + 8);
+			err = clarett_get_data(c, probe[k].off, probe[k].len);
 			/* Wait for a possibly-late payload DMA: poll the first data byte (offset 16) for up
 			 * to ~30 ms. If it leaves 0xAA, the device wrote payload after done — a late-DMA/read
 			 * race (FC reads slowly under x-no-mmap and never hits it). If it stays 0xAA the whole
@@ -333,8 +376,34 @@ static int clarett_arm_device(struct clarett *c)
 				usleep_range(1000, 1100);
 			}
 			dma_rmb();
-			dev_info(&c->pci->dev, "postarm GET off=0x%02x err=%d waited=%dms resp: %*ph\n",
-				 probe_offs[k], err, w, 48, c->resp_buf);
+			dev_info(&c->pci->dev, "postarm GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
+				 probe[k].off, probe[k].len, err, w, 48, c->resp_buf);
+		}
+
+		/*
+		 * Settle-then-retry: our arm+probe ran in ~150 ms, but FC reads config seconds into the
+		 * session (after ms-paced x-no-mmap commands) and the one confirmed non-empty GET (§8) came
+		 * later still, on a notification. If the device's config engine comes alive asynchronously,
+		 * a GET after a few seconds should return real bytes where the immediate ones did not. Re-run
+		 * FC's bulk chunk and the known-good {24,92} after a 3 s sleep. Data here ⇒ config-read is
+		 * time/async-gated (settle delay fixes it); still empty ⇒ it needs an event/handshake we miss.
+		 */
+		msleep(3000);
+		for (k = 0; k < 2; k++) {
+			u32 off = k ? 0x18 : 0x0;
+			u32 len = k ? 92 : 0x3f8;
+
+			memset(c->resp_buf, 0xAA, 16 + len + 8);
+			err = clarett_get_data(c, off, len);
+			for (w = 0; w < 30; w++) {
+				dma_rmb();
+				if (r[FCP_RESP_DATA_OFF] != 0xAA)
+					break;
+				usleep_range(1000, 1100);
+			}
+			dma_rmb();
+			dev_info(&c->pci->dev, "postarm-late GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
+				 off, len, err, w, 48, c->resp_buf);
 		}
 	}
 	return 0;
@@ -751,7 +820,12 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 
 	if (ic->idx == CLARETT_VEC_EVENT) {
 		u32 cause = readl(c->bar0 + REG_NOTIFY_CAUSE);	/* 0x400, read-to-clear */
-		u32 ev = cause & (NOTIFY_DIM_MUTE | NOTIFY_MONITOR);
+		u32 ev = cause & NOTIFY_MONITOR_MASK;
+
+		/* Diagnostic (log_responses): surface every 0x400 event and which bits matched the mask.
+		 * dev_info from hardirq is printk-safe. */
+		if (log_responses && cause)
+			dev_info_ratelimited(&c->pci->dev, "notify ISR cause=0x%08x masked=0x%x\n", cause, ev);
 
 		if (ev) {
 			atomic_or(ev, &c->notify_bits);
@@ -777,6 +851,14 @@ static void clarett_notify_work(struct work_struct *work)
 	if (!ev)
 		return;
 
+	/* Notification-trigger test: pre-fill so an empty GET is visible, then dump the response this
+	 * notification's GET{24,92} brings back. This is the exact {offset,len} that returned REAL config
+	 * in transport-spec §8 ("on a Mute notification"). Real bytes here ⇒ an async event wakes config-
+	 * read where our cold post-arm replay could not — the engine is live, just un-triggered. Run with
+	 * meter_poll_ms=0 so the GET_METER heartbeat can't clobber resp_buf between the GET and this read. */
+	if (log_responses)
+		memset(c->resp_buf, 0xAA, 16 + MONITOR_CFG_LEN + 8);
+
 	err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
 	if (err) {
 		dev_warn(&c->pci->dev, "notify 0x%x: monitor re-read failed (%d)\n",
@@ -786,6 +868,20 @@ static void clarett_notify_work(struct work_struct *work)
 		u32 echo;
 
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
+		if (log_responses) {
+			int nw;
+
+			for (nw = 0; nw < 30; nw++) {
+				dma_rmb();
+				if (r[FCP_RESP_DATA_OFF] != 0xAA)
+					break;
+				usleep_range(1000, 1100);
+			}
+			dma_rmb();
+			dev_info(&c->pci->dev,
+				 "notify GET off=%u len=%u ev=0x%x waited=%dms resp: %*ph\n",
+				 MONITOR_CFG_OFFSET, MONITOR_CFG_LEN, ev, nw, 48, c->resp_buf);
+		}
 		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
 		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
 

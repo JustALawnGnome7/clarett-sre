@@ -98,8 +98,18 @@ struct snd_pcm_substream;
  */
 #define CLARETT_NUM_VECTORS      4
 #define CLARETT_VEC_EVENT        0       /* the device signals control events on vec0 */
-#define NOTIFY_DIM_MUTE          0x00200000u
-#define NOTIFY_MONITOR           0x00400000u
+
+/*
+ * Notification cause bits in REG_NOTIFY_CAUSE (0x400). Confirmed live on the 8PreX (log_responses=1,
+ * pressing the front-panel Mute/Dim buttons): every event raises bit0|bit1 (0x3), and bit21
+ * (0x00200000) appears intermittently alongside. The earlier 0x00200000/0x00400000 pair was an
+ * unverified §11 guess that never matched real traffic (the ISR logged masked=0x0), so monitor
+ * controls were never re-read on a real device event. Per-bit semantics are not yet pinned down and
+ * clarett_notify_work re-reads the whole monitor region on any of them, so they fold into one mask.
+ */
+#define NOTIFY_MON_PRIMARY       0x00000003u  /* bit0|bit1 — raised on every monitor (mute/dim) event */
+#define NOTIFY_MON_AUX           0x00200000u  /* bit21 — co-occurs intermittently */
+#define NOTIFY_MONITOR_MASK      (NOTIFY_MON_PRIMARY | NOTIFY_MON_AUX)
 
 /* Monitoring config region re-read on a notification (control-plane §9). */
 #define MONITOR_CFG_OFFSET       24
