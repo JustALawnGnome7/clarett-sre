@@ -150,6 +150,19 @@ consistent with a dormant config backend.
 …), not host pointers — so config is not read through a host DMA buffer we failed to populate. The
 mailbox is the entire config channel.
 
+**Keepalive-ack hypothesis — DISPROVEN `[TEST]` (June 28 2026).** With our driver the device emitted a
+periodic ~5 s `0x3` (cause `0x400`) in bursts of ~10; theory was the config backend gates on FC acking
+a heartbeat we don't send. Checked against `8prex_boot_to_stream_with_config.log` (boot→idle→30 s
+stream): (1) at true idle (04:55:16→04:55:53, 37 s) FC receives **zero** notifications — there is no
+periodic device keepalive; (2) `0x400` is read-to-clear but the device **re-asserts** while it has an
+unsatisfied event (toggles `0x3`/`0x0` on alternate poll passes); (3) FC's response to a `0x3` is a
+**full config re-sync** (enables + count queries + `0x6004/0x6002/0x6005/0x004005` prologue + 13×
+`GET_DATA` + 9× `SET_DATA` writeback) — **no novel opcode**; every command is already in our arm
+sequence. So the periodic `0x3` is **not** a separate gate but a **downstream symptom of the empty-GET**:
+the device retries the config-change notification because our read comes back blank and never satisfies
+it, where FC's read returns real config and the device goes quiet. Reinforces the dormant-backend root;
+adds no new on-wire lever.
+
 ## 5b. What remains
 
 The off-wire difference is something subtler than a blob upload. Note we already matched **every
