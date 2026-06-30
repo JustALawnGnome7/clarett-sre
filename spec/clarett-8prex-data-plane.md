@@ -98,6 +98,26 @@ values, rest 0). `0x1c` reads at `0x1c`/`0x202910` = a status word.
 The base pairs are the exact `0x410`/`0x414` GET-response DMA pattern at new offsets; both bases are
 guest-physical (VM RAM), 16 KB apart (`0x589b9000` → `0x589bd000`).
 
+**Third-model confirmation — Clarett 4Pre `[TRACE]`** (`4pre_boot_to_stream_end.log`, FC streaming):
+the same two ring blocks appear with the 4Pre's asymmetric geometry, and they independently confirm
+two things — that `+0x04` is the **per-direction channel count**, and the **universal frag invariant**
+(`stream_frag = channels × 16 B`, i.e. 4 B/sample × 4 frames/descriptor):
+
+| Reg | block 0x200 (TX/playback) | block 0x300 (RX/record) |
+|---|---|---|
+| `+0x04` channel count | `0x08` (8) — matches `GET_7.2=0x08` | `0x14` (20) — matches `GET_7.3=0x14` |
+| `+0x08` frag | `0x80` (128 = 8×16 ✓) | `0x140` (320 = 20×16 ✓) |
+| `+0x10`/`+0x14` base | `0x79998000` / `0x2` | `0x799ac000` / `0x2` (0x14000 = 80 KB apart) |
+| `+0x14` mode | `0x2` | `0x2` |
+
+`0x108=0x10`, `0x10c=0x1e70700`, `0x110=0x7`→`0x0` are byte-identical to the 8PreX arm sequence. So the
+4Pre is the **third model** validating the invariant (8PreX 28→`0x1c0`, 2Pre TX 4→`0x40`/RX 14→`0xe0`,
+4Pre TX 8→`0x80`/RX 20→`0x140`) and, like the 2Pre, is **asymmetric** (needs per-direction frag derived
+from channel count, not a single `clarett_model.stream_frag`). The `0x300` cause was observed advancing
+`0x8000000c → …18 → …24` (step `0xc`) — FC sustaining the stream, the behaviour our driver cannot hold
+past one ring pass; this is FC's traffic, so it confirms the engine map but not why ours stalls (that
+difference is off-wire, §the manifestation/below-BAR wall).
+
 **The DMA engine is DESCRIPTOR-based `[TRACE — engine-start probe]`.** The active probe (driver
 `stream_probe=1`) replayed this exact sequence with a zeroed driver ring and the device immediately
 faulted: **`AMD-Vi IO_PAGE_FAULT address=0x0`** — it dereferenced a *null pointer read from inside the

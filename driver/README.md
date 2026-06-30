@@ -1,6 +1,7 @@
 # snd-clarett — Focusrite Clarett (Thunderbolt) ALSA driver
 
-Supported: **Clarett 8PreX** and **Clarett 2Pre** (one module, per-model descriptor).
+Supported: **Clarett 8PreX**, **Clarett 8Pre**, **Clarett 4Pre**, and **Clarett 2Pre** (one module,
+per-model descriptor).
 
 Status: **control plane only** (mixer-only sound card). PCM/streaming is not yet
 implemented (and is gated off for the 2Pre until its stream geometry is captured).
@@ -47,8 +48,19 @@ read, and even the dummy serial is the same across models (verified on real 8Pre
 2Pre hardware). So the driver **cannot auto-detect the model** and takes a parameter:
 
 ```sh
-sudo insmod snd-clarett.ko model=2pre     # or model=8prex (default)
+sudo insmod snd-clarett.ko model=2pre     # or model=4pre / model=8pre / model=8prex (default)
 ```
+
+The **4Pre** descriptor is built from the device XML and cross-checked against a live capture:
+the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-only, 5-8 none;
+six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the
+bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
+
+The **8Pre** (distinct from the 8PreX) is **control-plane only** — built from the XML, but with no
+8Pre capture available it has no bring-up replay or stream ids, so it registers its mixer but will
+not arm config access or stream PCM until an 8Pre boot is captured. It uses combo XLR/TRS jacks (Mic
+is auto-detected by the jack, so the software mode is Line/Inst only, on inputs 1-2; 3-8 are air-only),
+unlike the 8PreX's separate ports; outputs match the 8PreX (10 gains).
 
 There is no auto-detect of any kind. The model name *does* live in the Thunderbolt
 DROM, but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3

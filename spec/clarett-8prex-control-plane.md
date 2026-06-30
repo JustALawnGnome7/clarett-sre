@@ -101,6 +101,39 @@ So: **8 mic pres, 2× ADAT (16 ch), S/PDIF stereo, 10 analogue outs, 28 PCM play
 
 (Only inputs 1–2 have the Inst mode.)
 
+**`[TRACE-CONFIRMED on Clarett 4Pre]`** — this input-control block, previously `[XML]`-only, is now
+confirmed byte-for-byte against a live FC capture (`4pre_boot_to_stream_end.log`). Toggling Analogue 1
+in FC produced exactly the predicted FCP writes:
+- **Line In 1 Level** (mode): `SET_DATA{off=166, len=1, val}` + `DATA_CMD{activate=6}`, Inst=`0x02`→Line=`0x01`.
+- **Line In 1 Air**: `SET_DATA{off=174, len=1, val}` + `DATA_CMD{activate=7}`, on=`0x01`→off=`0x00`.
+
+So mode@166/opcode 6 and air@174/opcode 7 (with the Mic/Line/Inst = 0/1/2 enum) are confirmed live, and
+the encoding **ports across the Clarett TB line** (the 4Pre shares the 8PreX's input-control offsets and
+opcodes). Note: like every other control, these are FC's *own* writes — they manifest because FC drives
+the device; our driver replaying the identical bytes still hits the manifestation wall
+(`clarett-8prex-manifestation-wall.md`).
+
+**Model variants of the input block `[XML]`** — the offset/opcode *bases* are shared line-wide, but
+*which* inputs expose mode (and whether Mic is an option) differs per model. The table above is the
+**8PreX**. The other captured descriptors:
+
+| Model | Jacks | Air inputs | Mode inputs | Mode enum |
+|---|---|---|---|---|
+| 8PreX | **separate XLR + ¼″** | 1–8 @ 174–181 | 1–8 @ 166–173 | 1–2: Mic/Line/Inst; 3–8: Mic/Line |
+| **8Pre** | combo XLR/TRS | 1–8 @ 174–181 | **1–2 only** @ 166/167 | **Line/Inst** (Mic auto) |
+| **4Pre** | combo XLR/TRS | **1–4** @ 174–177 | **1–2 only** @ 166/167 | **Line/Inst** (Mic auto) |
+| 2Pre | combo XLR/TRS | 1–2 @ 174/175 | 1–2 @ 166/167 | Line/Inst (Mic auto) |
+
+**Why the mode enum differs — it's physical, not a feature gap.** All these units have mic preamps. The
+8PreX has **separate XLR and ¼″ ports** per input, so software must explicitly pick Mic/Line/Inst (and
+the mode control carries Mic=0). The 8Pre/4Pre/2Pre use a **single combo XLR/TRS jack** per input that
+*cannot* take an XLR and a ¼″ plug at once, so the hardware **auto-selects Mic when an XLR is inserted**;
+the software mode therefore only chooses **Line vs Inst** for the ¼″ path — Mic is not a software option
+(enum `{Line=1, Inst=2}`, no Mic=0). Beyond inputs 1–2, the combo-jack models' remaining preamps are
+**air-only** (no mode control at all). The driver encodes this with a per-input `n_modes` (0 = air-only).
+Output gains are **identical** between the 8Pre and 8PreX (§5, offsets 32/33/36/37/40/41/44/45/48/49);
+the 4Pre/2Pre are subsets.
+
 **Per-input phantom (48 V), phase invert, and high-pass filter are hardware-switched `[HW]`** — each
 has a dedicated front-panel push button per XLR input. Their *live state* is not in the config space
 and has no FCP opcode (absent from both the XML and the live trace); a driver cannot read or toggle

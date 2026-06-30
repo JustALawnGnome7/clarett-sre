@@ -133,7 +133,9 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 int clarett_create_controls(struct clarett *c)
 {
 	const struct clarett_model *m = c->model;
-	const int total = 3 + m->n_out_gains + 2 * m->n_analogue;	/* monitor + gains + air + mode */
+	/* monitor + gains + air(per input) + mode(per input). Upper bound: some inputs are air-only
+	 * (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so the actual count <= total. */
+	const int total = 3 + m->n_out_gains + 2 * m->n_analogue;
 	struct clarett_ctl *d;
 	int i, n = 0, err;
 
@@ -174,6 +176,8 @@ int clarett_create_controls(struct clarett *c)
 	}
 
 	for (i = 0; i < m->n_analogue; i++) {
+		if (m->analogue[i].n_modes == 0)	/* air-only input (no Line/Inst switch) — e.g. 4Pre 3-4 */
+			continue;
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = 166 + i, .activate = 6,
 			.texts = m->analogue[i].mode_texts, .n_texts = m->analogue[i].n_modes,

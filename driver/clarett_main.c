@@ -142,20 +142,24 @@ MODULE_PARM_DESC(inject_clock,
 		 "replay and A/B whether the injected clock is why control toggles complete (done=1) but "
 		 "never physically manifest.");
 
-static const struct clarett_model clarett_8prex, clarett_2pre;	/* defined below; selected by clarett_pick_model() */
+static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; selected by clarett_pick_model() */
 
 static char *model;
 module_param(model, charp, 0444);
 MODULE_PARM_DESC(model,
-		 "Force interface model: \"8prex\" (default) or \"2pre\". All Clarett Thunderbolt units share "
-		 "PCI id 1cb5:0002 and are indistinguishable from the PCIe side, so the model must be specified "
-		 "explicitly (e.g. via /etc/modprobe.d/).");
+		 "Force interface model: \"8prex\" (default), \"8pre\", \"4pre\", or \"2pre\". All Clarett "
+		 "Thunderbolt units share PCI id 1cb5:0002 and are indistinguishable from the PCIe side, so the "
+		 "model must be specified explicitly (e.g. via /etc/modprobe.d/).");
 
 static const struct clarett_model *clarett_pick_model(const struct pci_device_id *ent)
 {
 	if (model) {
 		if (sysfs_streq(model, "2pre"))
 			return &clarett_2pre;
+		if (sysfs_streq(model, "4pre"))
+			return &clarett_4pre;
+		if (sysfs_streq(model, "8pre"))		/* distinct from 8prex — fewer streams, combo-jack inputs */
+			return &clarett_8pre;
 		if (sysfs_streq(model, "8prex"))
 			return &clarett_8prex;
 		pr_warn("snd_clarett: unknown model=\"%s\"; falling back to default\n", model);
@@ -244,6 +248,8 @@ static void clarett_hw_init(struct clarett *c)
 #include "clarett_init_seq.h"
 /* clarett_init_blob_2pre[] / clarett_init_seq_2pre[] (fcp_decode.py --emit-init --init-model 2pre). */
 #include "clarett_init_2pre.h"
+/* clarett_init_blob_4pre[] / clarett_init_seq_4pre[] (fcp_decode.py --emit-init --init-model 4pre). */
+#include "clarett_init_4pre.h"
 
 /*
  * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
@@ -1182,7 +1188,8 @@ static const struct clarett_model clarett_8prex = {
 /*
  * Clarett 2Pre (Thunderbolt). Control-plane values from the XML diff against the 8PreX
  * (FCP Server Resources/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
- * gains, 2 preamps with the no-Mic Line/Inst encoding (Line=1, Inst=2 — clarett_ctl.values handles it).
+ * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
+ * jack, not a software mode; see clarett_mode_li. clarett_ctl.values handles the value mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
  * trace). The bring-up replay is the captured 2Pre attach (clarett_init_2pre.h). Selected via the model=
  * param: the whole Clarett TB line shares PCI id 1cb5:0002 and an identical PCIe interface, so the model
@@ -1198,8 +1205,15 @@ static const struct clarett_out_gain clarett_2pre_gains[] = {
 	{ "Monitor 1", 32 }, { "Monitor 2", 33 }, { "Line 3", 36 }, { "Line 4", 37 },
 };
 
+/*
+ * Combo-jack input mode (shared by 2Pre / 4Pre / 8Pre). These models use a single combined XLR/TRS jack
+ * per input, so the connector auto-selects Mic (XLR inserted) vs the 1/4" path — Mic is NOT a software
+ * option; the mode control only chooses Line vs Inst for the 1/4" path. So the enum is {Line=1, Inst=2}
+ * with no Mic(0). (The 8PreX, by contrast, has SEPARATE XLR and 1/4" ports, so software must pick
+ * Mic/Line/Inst explicitly — see clarett_mode_mli.)
+ */
 static const char * const clarett_mode_li[] = { "Line", "Inst" };
-static const u8 clarett_mode_li_vals[] = { 1, 2 };	/* no Mic(0) on the 2Pre — per-model encoding */
+static const u8 clarett_mode_li_vals[] = { 1, 2 };
 
 static const struct clarett_preamp clarett_2pre_preamps[] = {
 	{ clarett_mode_li, clarett_mode_li_vals, 2 },
@@ -1230,6 +1244,101 @@ static const struct clarett_model clarett_2pre = {
 	.init_blob = clarett_init_blob_2pre,
 	.init_seq = clarett_init_seq_2pre,
 	.n_init_steps = ARRAY_SIZE(clarett_init_seq_2pre),
+};
+
+/*
+ * Clarett 4Pre (Thunderbolt). Control plane from FCP Server Resources/Devices/Clarett 4Pre.xml [XML],
+ * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Selected via model=4pre;
+ * the whole TB line shares PCI id 1cb5:0002 and is not auto-detectable. See
+ * spec/clarett-8prex-control-plane.md §4 and -data-plane.md §3b.
+ *
+ *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
+ *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
+ *   [TRACE] stream-routing CONFIG_PUSH ids — captured verbatim from the in-session rate handshake
+ *           (#674-#702): 8 TX after GET_7.2, 20 RX after GET_7.3, in wire order.
+ *   [XML]   inputs: only Analogue 1-2 have a mode (Line=1/Inst=2; Mic is auto-detected by the combo
+ *           XLR/TRS jack, not a software option — see clarett_mode_li), at mode@166/167 cmd 6;
+ *           Analogue 1-4 each have Air at air@174..177 cmd 7; Analogue 5-8 have no preamp controls.
+ *           So n_analogue=4 (the Air-capable inputs); 3-4 are air-only (n_modes=0). The Analogue-1
+ *           mode/air encoding is additionally [TRACE]-confirmed (the "Line In 1" toggles in this capture).
+ *   [XML]   output gains (cmd 1, 8-bit): Monitor 1-2 @ 32/33, Line 3-4 @ 36/37, Headphone 2 L/R @ 40/41.
+ *           S/PDIF outputs carry no gain. Six gains total (no 44/45 pair on this model).
+ */
+static const struct clarett_out_gain clarett_4pre_gains[] = {		/* [XML] */
+	{ "Monitor 1", 32 }, { "Monitor 2", 33 },
+	{ "Line 3", 36 }, { "Line 4", 37 },
+	{ "Headphone 2 L", 40 }, { "Headphone 2 R", 41 },
+};
+
+/* [XML] Analogue 1-2 Line/Inst (combo jack auto-detects Mic; Analogue-1 also [TRACE]-confirmed); 3-4 air-only (n_modes=0). */
+static const struct clarett_preamp clarett_4pre_preamps[] = {
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+	{ NULL, NULL, 0 },
+	{ NULL, NULL, 0 },
+};
+
+/* [TRACE] per-channel stream-routing CONFIG_PUSH ids, captured from the 4Pre rate handshake
+ * (4pre_boot_to_stream_end.log #674-#702): 8 TX (playback) + 20 RX (record), re-pushed at PCM prepare. */
+static const u8 clarett_4pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32 };
+static const u8 clarett_4pre_stream_rx[] = {
+	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+	0x27, 0x28, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+};
+
+static const struct clarett_model clarett_4pre = {
+	.name = "Clarett 4Pre",
+	.out_gains = clarett_4pre_gains,
+	.n_out_gains = ARRAY_SIZE(clarett_4pre_gains),
+	.n_analogue = 4,
+	.analogue = clarett_4pre_preamps,
+	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
+	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
+	.stream_frag = 0,			/* PCM uses clarett_frag_bytes() per direction (asymmetric) */
+	.stream_tx_ids = clarett_4pre_stream_tx,
+	.n_stream_tx_ids = ARRAY_SIZE(clarett_4pre_stream_tx),
+	.stream_rx_ids = clarett_4pre_stream_rx,
+	.n_stream_rx_ids = ARRAY_SIZE(clarett_4pre_stream_rx),
+	.init_blob = clarett_init_blob_4pre,
+	.init_seq = clarett_init_seq_4pre,
+	.n_init_steps = ARRAY_SIZE(clarett_init_seq_4pre),
+};
+
+/*
+ * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
+ * FCP Server Resources/Devices/Clarett 8Pre.xml [XML]. We have no 8Pre trace capture, so this descriptor
+ * is control-plane only: it registers the mixer but has no bring-up replay or stream-routing ids, so it
+ * will NOT arm config access (GET_DATA wedged) or stream PCM until an 8Pre boot/stream is captured (then
+ * emit clarett_init_8pre.h via fcp_decode.py --emit-init --init-model 8pre and fill the stream id tables).
+ *
+ * Differences from the 8PreX [XML] — these are physical: the 8Pre uses combo XLR/TRS jacks (the jack
+ * auto-detects Mic when an XLR is inserted), whereas the 8PreX has SEPARATE XLR + 1/4" ports per input
+ * (so its mode must be software-selected). Hence:
+ *   - inputs: all 8 carry Air @ 174..181 (cmd 7), but only Analogue 1-2 have a mode (Line=1/Inst=2 for
+ *     the 1/4" path; Mic is jack-auto, not a software option) @ 166/167 (cmd 6); Analogue 3-8 are
+ *     air-only. (The 8PreX, with discrete ports, exposes software Mic/Line[/Inst] on all 8.)
+ *   - streams: 20 playback / 20 record (the 8PreX is 28/28 — the 8Pre has a single ADAT bank).
+ *   - outputs: IDENTICAL 10-gain map to the 8PreX (Monitor 1-2 @ 32/33, Line 3-10 @ 36..49), so the
+ *     clarett_8prex_gains[] table is reused verbatim.
+ */
+static const struct clarett_preamp clarett_8pre_preamps[] = {	/* [XML] 1-2 Line/Inst, 3-8 air-only */
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+	{ clarett_mode_li, clarett_mode_li_vals, 2 },
+	{ NULL, NULL, 0 }, { NULL, NULL, 0 },
+	{ NULL, NULL, 0 }, { NULL, NULL, 0 },
+	{ NULL, NULL, 0 }, { NULL, NULL, 0 },
+};
+
+static const struct clarett_model clarett_8pre = {
+	.name = "Clarett 8Pre",
+	.out_gains = clarett_8prex_gains,	/* [XML] identical 10-output gain map to the 8PreX */
+	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
+	.n_analogue = 8,
+	.analogue = clarett_8pre_preamps,
+	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
+	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
+	.stream_frag = 0,
+	/* no .init_blob / .stream_*_ids: requires an 8Pre capture — see the comment above. */
 };
 
 static const struct pci_device_id clarett_ids[] = {
