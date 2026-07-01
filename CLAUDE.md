@@ -128,7 +128,8 @@ tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction dec
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
                                       outside the control-plane map (data-plane reg discovery).
 FCP Server Resources/*.xml            Focusrite's device descriptors (RE source material).
-*.txt / *.log                         Trace captures and working notes.
+captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
+                                      dumps) + working notes (insmod/session notes; former .txt now .log).
 ```
 
 ## Build & test

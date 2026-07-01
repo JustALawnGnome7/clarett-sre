@@ -46,7 +46,7 @@ control only; GET responses and samples move by DMA]`
 
 ## 3. The elimination (each row independently confirmed)
 
-Our driver's command stream vs FC's (`driver/our_trace.log` decoded vs `2pre_preamp_toggle.log`):
+Our driver's command stream vs FC's (`captures/our_trace.log` decoded vs `2pre_preamp_toggle.log`):
 
 | Surface | Finding | Verdict |
 |---|---|---|

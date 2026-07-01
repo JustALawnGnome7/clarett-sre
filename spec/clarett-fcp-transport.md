@@ -145,7 +145,7 @@ from control-plane spec §11 — likely written to a notification register the I
    Notifications arrive on **MSI vector 0** (bare metal: only vec0 ever fires) with the §11 mask in
    **cause reg `0x400`**; host re-syncs with `GET_DATA{0x18,0x5c}` + per-band `GET_MUX`. See §8.
 
-## 8. CONFIRMED from boot-init trace (`clarett_init_short.txt`, ControlServer NOT running)
+## 8. CONFIRMED from boot-init trace (`clarett_init_short.log`, ControlServer NOT running)
 
 The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRMED]`
 
@@ -194,7 +194,7 @@ version/identity *check*, not code loading. Two independent proofs:
   and front-end FPGA must *already be configured* — that link is the precondition for the PCIe tunnel
   the host driver rides on. The host cannot upload the bitstream over a link that needs that same
   bitstream to exist. So the FPGA loads from local flash at power-on, before any host involvement.
-- **Empirical (`clarett_init_short.txt`).** The boot histogram is **zero `SET_DATA` and zero bulk
+- **Empirical (`clarett_init_short.log`).** The boot histogram is **zero `SET_DATA` and zero bulk
   transfer** — only `0x5000` CONFIG_PUSH (2-byte payloads ×46), small `0x6000`/`0x7000` queries, and
   `0x800005` **READ_SEG ×2** (the host *reading* flash segments). A bitstream upload would be hundreds
   of KB–MB of mailbox writes; nothing of that size exists. And the driver reads back valid
@@ -259,7 +259,7 @@ the same way — our observable traffic (BAR0 + FCP + PCI config) is byte-identi
 functions — so the differentiator is **off-wire / below the BAR surface**, not a missing control-plane
 command and not the data plane. Full elimination chain: `spec/clarett-manifestation-wall.md`.
 
-### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.txt`)
+### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.log`)
 | opcode | name | payload | proof |
 |---|---|---|---|
 | `0x001001` | GET_METER | `{u32 offset, u32 len}` | GUI polls continuously (`offset=0x560000`) |

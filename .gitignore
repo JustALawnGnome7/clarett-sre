@@ -11,6 +11,10 @@ driver/Module.symvers
 driver/.module-common.o
 driver/.tmp_versions/
 
+# Scratch capture/diagnostic dumps captured while iterating in driver/
+# (real captures belong in captures/; see CLAUDE.md repo layout).
+driver/*.log
+
 # Editor/OS noise
 *~
 .DS_Store
