@@ -170,7 +170,9 @@ adds no new on-wire lever.
 The off-wire difference is something subtler than a blob upload. Note we already matched **every
 DMA-address-programming register** (only `0x410/0x414`, the GET-response buffer — no extra DMA region is
 set up by FC), so it is not an additional DMA buffer we failed to allocate. Remaining angles, untested:
-- **Notification-trigger test** (above) — cheapest, targets the §8 positive datum directly.
+- ~~**Notification-trigger test**~~ — **DONE, DISPROVEN (§5a):** config-read stays empty even in a
+  genuine device-notification context (`notify_work`'s `GET_DATA{24,92}` fired right after a real
+  front-panel Mute/Dim press still returned header-only, `size=0`).
 - Inspect what the device actually DMAs into FC's `0x410` response buffer for a control-region GET in a
   *working* session, vs the empty our probe sees — requires re-tracing the live Windows
   session to learn the current buffer GPA (it is re-allocated per boot; the old `0x277913000` is stale),
@@ -178,6 +180,42 @@ set up by FC), so it is not an additional DMA buffer we failed to allocate. Rema
 - Re-examine device-state/arming: bring-up is order- and freshness-sensitive
   (`[[clarett-control-manifestation]]`); FC's working device may reach an internal state our replay does
   not, despite byte-identical init.
+
+## 5c. Init-response audit — dormancy is universal from query #1 `[TEST]` (July 1 2026)
+
+Prompted by reviewing the 4th-gen `scarlett2`/`fcp` source (the reference drivers capture init responses
+and validate every response header), we audited our own init-response handling against the **full**
+bring-up response log (`captures/our_arm_resp.log`, `log_responses=1`, 152 commands).
+
+**1 — the emptiness is universal and immediate, not config-specific.** *Every* one of the 152 bring-up
+commands returned a DMA response with **`status=0x03` (SUCCESS) and `size=0`** — not just the 13
+`GET_DATA` config reads but **every `GET_7.x`/`GET_6.x` device query, from the first command**
+(`READ_SEG 0x800005` doesn't DMA a response at all). The device "succeeds" our entire command stream
+while returning zero response bytes, starting at query #1. This is broader than "config backend dormant":
+the device's whole response/query engine is **inert for our session from attach**.
+
+**2 — our DMA response path is verified working.** The 16-byte echoed FCP header lands correctly every
+time (right echo `cmd`, `status=0x03`) in the buffer we program at `0x410/0x414`. Not a buffer-addressing
+bug — the device deliberately writes well-formed zero-length responses.
+
+**3 — the BAR-mailbox-response alternative is ruled out.** Our driver reads responses **only** from the
+DMA buffer and never reads the BAR mailbox data region (`0x8030+`). Hypothesis: query responses come back
+in the mailbox (trace-visible) and we look in the wrong place. Checked against a real FC capture — FC's
+post-submit reads of the mailbox region (`fcp_decode`'s `resp`) are **empty too**; FC does not read
+responses from the BAR either. Both FC and we take responses via DMA; FC's device produces data, ours
+produces `size=0`. Disproven.
+
+**4 — no init-response token-forwarding is missing.** The reference `scarlett2` seeds `seq` from 0 (as we
+do) and feeds **no** init-response value into later commands; the 4th-gen `fcp` init likewise just sizes
+fixed step0/step2 buffers. So our static replay is not skipping a session-token handshake. (Two real but
+wall-independent robustness gaps surfaced: `clarett_fcp` neither validates the response header — where
+`scarlett2` rejects any `cmd`/`seq`/`size`/`error`/`pad` mismatch — nor ever reads `MBOX_DATA`.)
+
+`[CONCLUSION]` The audit finds **no in-driver parse/replay bug** that unlocks the wall, and pins it one
+step earlier: the device answers our whole command stream with **SUCCESS + empty from the first query,
+over a verified DMA path, at FC's own buffer address** — so the differentiator sits **upstream of the
+mailbox command stream** (an attach-time/off-wire condition FC's session enters and ours never does), not
+in how we form or parse commands. Consistent with, and tighter than, §4/§5a.
 
 ---
 
