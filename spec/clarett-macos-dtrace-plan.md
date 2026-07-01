@@ -1,9 +1,16 @@
-# Clarett — macOS DTrace off-wire capture plan (untried lead)
+# Clarett — macOS DTrace off-wire capture plan
 
 > **Scope:** a method to observe the **off-wire/below-BAR** bus-master DMA that the manifestation wall
 > (`clarett-manifestation-wall.md`) and the data-plane wall (`clarett-data-plane.md`) both hide behind —
-> **without a bus analyzer**. The device is **confirmed working on an Apple-Silicon MacBook (M1)** with
-> Focusrite Control, so the working driver can be instrumented directly. Status: **planned, not yet run.**
+> **without a bus analyzer**. The device runs on an Apple-Silicon MacBook (M1) with Focusrite Control.
+>
+> **Status: RUN — outcome in `clarett-manifestation-wall.md §5d` (July 1 2026).** Summary: the vendor
+> user-space→kext traffic (control + bring-up) is **byte-identical to our RE**, and the working device
+> returns **rich real data** (caps/firmware/serial/config) to `GET_DATA` requests that return **empty** for
+> our Linux driver — confirming the wall from a third platform and localizing it to the **kext's off-wire
+> device-init**. It did **not cross** the wall: the kext is a **stripped, address-redacted release binary**,
+> so DTrace can neither `fbt` its functions nor attribute its stack frames. **This DTrace avenue is
+> exhausted;** the phases below are retained as the method record. Captures: `captures/macos_*`.
 
 ## Why this can cross the wall when the vfio trace can't
 

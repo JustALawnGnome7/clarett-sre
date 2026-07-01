@@ -222,6 +222,49 @@ over a verified DMA path, at FC's own buffer address** — so the differentiator
 mailbox command stream** (an attach-time/off-wire condition FC's session enters and ours never does), not
 in how we form or parse commands. Consistent with, and tighter than, §4/§5a.
 
+## 5d. Third-platform confirmation — macOS DTrace of the working vendor stack `[TEST]` (July 1 2026)
+
+The Clarett runs on an Apple-Silicon MacBook (M1) with the vendor stack: a kernel kext
+(`com.focusrite.driver.FocusritePCIe`, class `com_focusrite_FocusritePCIeDevice` on the `IOPCIDevice`;
+BAR0 = 64 KB @ `0x480000000`, TB-tunnelled behind the `dart-apciec0` DART) + a user-space
+`FocusriteControlServer` + a Core Audio plugin. We DTrace'd the **working** driver (plan:
+`clarett-macos-dtrace-plan.md`; captures in `captures/macos_*`). Two decisive results:
+
+**1. The vendor's user-space→kext traffic is byte-identical to our RE `[TEST]`.** Tracing
+`FocusriteControlServer`'s `IOConnectCallMethod` calls (pid provider) across a device attach and a
+control toggle:
+- Mute toggle → `SET_DATA{off=24,len=1,val=1}` + `DATA_CMD{activate=2}` + `DATA_CMD{activate=5}` — the
+  exact bytes our Linux driver sends (control-plane §9/§2).
+- Bring-up → query phase, the **8 KB config read** (`GET_DATA` in `0x3f8` chunks 0→`0x1fc0` + `0x108`),
+  the **8 KB write-back** whose head is **`90 19 06 30 05 00 00 00 84 19 00 00 01 02 0d 02`** (byte-for-byte
+  the §3 signature), `DATA_CMD{5}`, and `SET_MIX`×16 at `0x2000` unity. So a **third** independent platform
+  (Windows FC, macOS FC, our driver) emits the same stream.
+- The `~122 CONFIG_PUSH` low-level declarations are **not** in the server's traffic → they are issued by
+  the **kext at `start()`**, i.e. the arming lives in the kext's device-init layer.
+
+**2. The device returns RICH real data to the vendor stack for the SAME requests that return empty for us
+`[TEST]`.** Dumping the `IOConnectCallMethod` *output* structs (the GET responses) during bring-up, the
+macOS device answers with:
+- device caps `04 00 00 00 0e 00 00 00` = **4 playback / 14 record** (2Pre, matches RE);
+- firmware build **"Jan 20 2021 09:55:25"** + versions;
+- firmware segment names **App_Gold / App_Upgrade / FPGA_Gold / FPGA_Upgrade / App_Env / App_Settings**;
+- serial string **`SERIAL_NO = 998559`**;
+- the 8 KB config: device name `Clarett2Pre-000f3c9f`, the `7f 7f 7f…` gain-attenuation floor codes, and
+  at config offset **`0xc8`** (= appspace `app-ofs=200`) the same **`90 19 06 30…`** blob it writes back.
+
+Our Linux driver's **identical** `GET_DATA` requests return `size=0`, empty (§5a/§5c). So this is the wall
+stated from the working side: **same bytes on the wire, the device pours real config/firmware/serial back
+to the vendor stack and returns nothing to ours.**
+
+`[CONCLUSION]` macOS **confirms** the boundary from a third platform and **localizes** it precisely — the
+device backend is demonstrably alive; the arming is the **kext's off-wire device-init/DMA setup** (not the
+mailbox command stream, which is identical). It does **not cross** the wall: DTrace can't see inside the
+kext (stripped release binary → no `fbt` probes; Apple redacts its load address → stack frames
+unattributable), and the actual mechanism is the off-wire DMA that only a bus analyzer (ruled out) or
+disassembling the vendor kext (clean-room no-go) could reveal. The macOS/DTrace avenue is **exhausted**.
+Bonus RE facts banked above (firmware build date, segment names, serial format, config layout: header
+0..0xc7, persistent appspace at 0xc8).
+
 ---
 
 ## 6. Reproduction (driver A/B params)
