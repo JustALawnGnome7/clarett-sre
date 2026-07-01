@@ -84,6 +84,22 @@ source, Monitor-Out-1 as a destination). `[INF, from overlapping pins in XML]`
 So: **8 mic pres, 2× ADAT (16 ch), S/PDIF stereo, 10 analogue outs, 28 PCM play / 28 PCM capture,
 30×16 mixer.** `[XML]`
 
+**Per-model pin/inventory divergences `[XML]`** — the pin map above is the **8PreX**; the smaller models
+are *not* simply subsets of it. Confirmed differences (assume the device XMLs are authoritative):
+
+| | 8PreX | 8Pre | 4Pre | 2Pre |
+|---|---|---|---|---|
+| Analogue-in pins | `0x400`–`0x407` | `0x400`–`0x407` | `0x400`–`0x407` | **`0x400`, `0x402`** (Analogue 2 = `0x402`, skips `0x401`) |
+| S/PDIF **input** pins | `0x408`/`0x409` | `0x408`/`0x409` | `0x408`/`0x409` | **`0x186`/`0x187`** (where the 8PreX has S/PDIF *output*) |
+| Loopback record pins | `0x60a`/`0x60b` | `0x60a`/`0x60b` | `0x60a`/`0x60b` | **`0x604`/`0x605`** |
+| PCM play / capture | 28 / 28 | 20 / 20 | 8 / 20 | 4 / 14 |
+| ADAT | 2 banks (16 ch) | 1 bank (8 ch) | 1 bank (8 ch) | 1 bank (8 ch) |
+| routing `num`/`-m`/`-h` | 91/75/67 | 75/67/63 | 75/67/63 | 64/60/58 |
+
+The driver keys controls off config-byte **offsets**, not pins, so these pin remaps do not affect the
+current control plane — but any future per-model routing/mixer-slot work must use the model's own pins,
+not the 8PreX values above.
+
 ## 4. Input controls (analogue 1–8) `[XML]`
 
 `air`: 1 bit, opcode 7, @ `174 + (n−1)`. `mode`: 2 bits, opcode 6, @ `166 + (n−1)`.
@@ -132,7 +148,9 @@ the software mode therefore only chooses **Line vs Inst** for the ¼″ path —
 (enum `{Line=1, Inst=2}`, no Mic=0). Beyond inputs 1–2, the combo-jack models' remaining preamps are
 **air-only** (no mode control at all). The driver encodes this with a per-input `n_modes` (0 = air-only).
 Output gains are **identical** between the 8Pre and 8PreX (§5, offsets 32/33/36/37/40/41/44/45/48/49);
-the 4Pre/2Pre are subsets.
+the 4Pre/2Pre are subsets. This table covers **inputs/outputs only** — other per-model divergences are
+noted at their sections: pin map / channel counts / routing `num` (§3), clock sources (§7), routing
+band counts (§8), and S/PDIF-mode / meters (§10).
 
 **Per-input phantom (48 V), phase invert, and high-pass filter are hardware-switched `[HW]`** — each
 has a dedicated front-panel push button per XLR input. Their *live state* is not in the config space
@@ -219,8 +237,13 @@ earlier −6→`0x08` reading was an outlier.) ALSA: a single linear TLV
 
 ## 7. Clocking `[XML]` + `[TRACE-CONFIRMED]`
 
-- `clock-source`: Internal=24, S/PDIF=3, ADAT 1=0, ADAT 2=1, Wordclock=2.
-- `sample-rate`: 44100, 48000, 88200, 96000, 176400, 192000.
+- `clock-source` (**8PreX**): Internal=24, S/PDIF=3, ADAT 1=0, ADAT 2=1, Wordclock=2.
+- `sample-rate` (all models): 44100, 48000, 88200, 96000, 176400, 192000.
+- **Per-model clock-source divergence `[XML]`:** only the 8PreX has two ADAT banks and Wordclock. The
+  8Pre and 4Pre expose just `{Internal=24, S/PDIF=3, ADAT=0}`; the **2Pre** is `{Internal=24, S/PDIF=4,
+  ADAT=0}` — note **S/PDIF=4 on the 2Pre**, not 3. `Internal=24` is universal, so the driver's
+  `CLARETT_CLOCK_INTERNAL=24` (the only source it ever sends) is correct for every model; only the
+  S/PDIF/ADAT/Wordclock option *values* are model-specific.
 - Neither has a config offset/opcode → set via a **dedicated FCP command**.
 - **`SET_CLOCK = opcode 0x006003`**, payload = two u32 words `{sample_rate, clock_source}`, size=8.
   Completes on vec0 `0x20000000` (DONE) like any mailbox command. **`[TRACE-CONFIRMED]`** — captured
@@ -246,6 +269,9 @@ A table of *destination ← source* assignments. Size depends on the sample-rate
 | Medium | 88.2 / 96 kHz | `num-m` = 75 | **70** | +16 words |
 | High | 176.4 / 192 kHz | `num-h` = 67 | **62** | +16 words |
 
+- **These `num` values are the 8PreX's.** Per-model `[XML]`: 8Pre & 4Pre = `75/67/63`, 2Pre = `64/60/58`
+  (see the §3 divergence table). The `−5` live-wire delta was only measured on the 8PreX; the
+  enumerated-destination count (hence the real per-band entry total) must be recomputed per model.
 - Channels with `pin-m="0x0"` drop at the medium band; `pin-h="0x0"` drop at the high band —
   dominated by **ADAT S/MUX** (8 → 4 → 2 ch per port) plus reduced high-rate PCM channels. `[XML/INF]`
 - **The device writes exactly the enumerated destinations, not the XML `num`.** Band 0's traced table
@@ -299,10 +325,17 @@ Record pin → default hardware-input index, with per-band remap (`input-m`/`inp
 
 ## 10. Settings `[XML]`
 
-- **S/PDIF source**: input 2-bit @ 132, output 2-bit @ 124, opcode 4 (RCA=2, Optical=1).
-- **Meter source**: 8-bit @ 184, opcode 8 (Analogue=1, S/PDIF=2, ADAT 1=4, ADAT 2=8).
+- **S/PDIF source**: input 2-bit @ 132, output 2-bit @ 124, opcode 4 (RCA=2, Optical=1). *Per-model
+  `[XML]`:* the **2Pre exposes Optical only** (no RCA; `default="Optical"`) — its S/PDIF-mode enum has
+  the single `Optical=1` option. 8PreX/8Pre/4Pre offer both RCA + Optical.
+- **Meter source**: 8-bit @ 184, opcode 8 — enum is **model-specific `[XML]`**: 8PreX = Analogue=1,
+  S/PDIF=2, ADAT 1=4, ADAT 2=8; **8Pre/4Pre = Analogue=1 only**; **2Pre has no `<meter-source>` element
+  at all**.
 - **Hardware meters**: tables `meters-l`@136 / `meters-m`@146 / `meters-h`@156 (10 bytes each),
-  per-source channel-index tables (255 = unused) for the low/med/high bands.
+  per-source channel-index tables (255 = unused) for the low/med/high bands. *Per-model `[XML]`:* the
+  8PreX carries all four source tables per band; the **4Pre/8Pre carry only the Analogue table**, and the
+  **2Pre has no `<hardware-meters>` block** (channel-index values naturally differ with each model's
+  smaller channel count).
 - **Standalone**: 1 bit @ 188 (no opcode listed → persisted setting). `[INF]`
 - **Phantom-power persistence** `[HW]`: the device exposes a software toggle for whether per-input
   48 V state is retained across a power cycle (the 48 V on/off itself is a front-panel hardware button,
@@ -328,6 +361,18 @@ masked `0x00200000|0x00400000`, saw `masked=0x0`, and never fired the notify han
 `NOTIFY_MONITOR_MASK = 0x3 | 0x00200000` (`clarett.h`), verified `masked=0x3` on every press. Per-bit
 semantics (which bit = mute vs dim vs the `0x200000` aux) are not yet pinned down; `notify_work` re-reads
 the whole monitor region on any of them.
+
+**Reconciling the XML vs. the wire `[XML/TRACE]`.** All four device XMLs (8PreX/8Pre/4Pre/2Pre) agree on
+`dim-mute=0x00200000` / `monitor=0x00400000`, so the XML values are consistent and — taking the XML as
+authoritative — presumed correct *for whatever field they describe*. The most likely reconciliation is
+that the XML `value` masks a **notification-message/event word** (the abstract event identity), whereas
+what the driver samples is the **interrupt cause register `0x400`**, a different field whose bit layout
+(`0x3`, sometimes `+0x200000`) need not match the XML's event mask. So this is probably not a true
+contradiction but two different registers; only a capture that reads the notification *payload* (not just
+the cause reg) would confirm the mapping. **Concrete gap:** regardless of the mapping, the driver never
+tests the XML `monitor` bit `0x00400000` — if some monitor-class event is signalled only there (and not
+via the `0x3` cause bits), the driver would miss it. Left as-is because every observed front-panel event
+did raise the `0x3` cause bits; revisit if an event is ever seen that does not.
 
 **Delivery mechanism — `[TRACE/HW]`:** a front-panel event sets the cause bits above in cause register
 **`0x400`** (read-to-clear; the device re-asserts while it has an unsatisfied event). **The MSI is delivered on
