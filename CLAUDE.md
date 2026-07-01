@@ -33,9 +33,13 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
 - **Method caveat:** the `x-no-mmap` BAR trace is **blind to sample DMA** and to bus-master DMA
   generally — both planes were RE'd by triangulating BAR setup registers (`tools/bar_profile.py`) +
   guest-RAM dumps + period-IRQ correlation (`fcp_decode.py --async`). That same blindness is where both
-  walls hide. The black-box MMIO+FCP+config method is exhausted; the only way to *see* the off-wire DMA
-  difference is **bus-level RE — a Thunderbolt/PCIe protocol analyzer on the live link** — **not** more
-  driver edits and **not** host-env work (every observable surface, and the environment itself, matches FC).
+  walls hide. The black-box MMIO+FCP+config method is exhausted **on the Windows/vfio side**. Two ways
+  remain to *see* the off-wire DMA difference: (1) bus-level RE — a Thunderbolt/PCIe protocol analyzer on
+  the live link (**ruled out by the user**); (2) **DTrace/instrumentation of the working macOS driver** —
+  the Clarett runs on the user's M1 Mac, so the working driver can be watched **constructing the DMA
+  payload in host RAM**, an untried surface that sidesteps the analyzer
+  (`spec/clarett-macos-dtrace-plan.md`). Neither is more Windows/vfio driver edits nor host-env work
+  (every observable surface there, and the environment itself, matches FC).
 
 ## Method (how the RE is done)
 
@@ -120,6 +124,8 @@ spec/clarett-data-plane.md          PCM-DMA RE: method, recovered register/descr
                                     validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
 spec/clarett-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
                                     every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
+spec/clarett-macos-dtrace-plan.md   Untried lead: DTrace the working macOS driver (device runs on the M1)
+                                    to capture the off-wire DMA payload in host RAM. Not a bus analyzer.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md

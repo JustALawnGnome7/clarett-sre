@@ -170,6 +170,11 @@ adds no new on-wire lever.
 The off-wire difference is something subtler than a blob upload. Note we already matched **every
 DMA-address-programming register** (only `0x410/0x414`, the GET-response buffer — no extra DMA region is
 set up by FC), so it is not an additional DMA buffer we failed to allocate. Remaining angles, untested:
+- **★ macOS DTrace of the working driver — leading lead `[PLAN]`.** The Clarett runs on the user's
+  Apple-Silicon MacBook (M1), so the working Focusrite driver can be instrumented to capture the **DMA
+  payload it builds in host RAM** — the exact off-wire content the vfio trace cannot see, **without a bus
+  analyzer**. Full plan: `spec/clarett-macos-dtrace-plan.md`. This **reopens actionable RE**: the earlier
+  "method exhausted / bus-analyzer-only" stance was scoped to the Windows/vfio surface, not this one.
 - ~~**Notification-trigger test**~~ — **DONE, DISPROVEN (§5a):** config-read stays empty even in a
   genuine device-notification context (`notify_work`'s `GET_DATA{24,92}` fired right after a real
   front-panel Mute/Dim press still returned header-only, `size=0`).
