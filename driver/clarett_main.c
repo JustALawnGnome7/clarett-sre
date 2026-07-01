@@ -1187,7 +1187,7 @@ static const struct clarett_model clarett_8prex = {
 
 /*
  * Clarett 2Pre (Thunderbolt). Control-plane values from the XML diff against the 8PreX
- * (FCP Server Resources/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
+ * (vendor-reference/Devices/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
  * jack, not a software mode; see clarett_mode_li. clarett_ctl.values handles the value mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
@@ -1247,7 +1247,7 @@ static const struct clarett_model clarett_2pre = {
 };
 
 /*
- * Clarett 4Pre (Thunderbolt). Control plane from FCP Server Resources/Devices/Clarett 4Pre.xml [XML],
+ * Clarett 4Pre (Thunderbolt). Control plane from vendor-reference/Devices/Clarett 4Pre.xml [XML],
  * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Selected via model=4pre;
  * the whole TB line shares PCI id 1cb5:0002 and is not auto-detectable. See
  * spec/clarett-control-plane.md §4 and -data-plane.md §3b.
@@ -1306,7 +1306,7 @@ static const struct clarett_model clarett_4pre = {
 
 /*
  * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
- * FCP Server Resources/Devices/Clarett 8Pre.xml [XML]. We have no 8Pre trace capture, so this descriptor
+ * vendor-reference/Devices/Clarett 8Pre.xml [XML]. We have no 8Pre trace capture, so this descriptor
  * is control-plane only: it registers the mixer but has no bring-up replay or stream-routing ids, so it
  * will NOT arm config access (GET_DATA wedged) or stream PCM until an 8Pre boot/stream is captured (then
  * emit clarett_init_8pre.h via fcp_decode.py --emit-init --init-model 8pre and fill the stream id tables).

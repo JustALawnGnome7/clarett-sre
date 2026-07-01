@@ -474,7 +474,7 @@ a path past the wall.
 ## Provenance
 
 Control semantics, offsets, opcodes, enum values, and channel maps are interface facts taken from
-Focusrite's device XML descriptors (`FCP Server Resources/Devices/`) — the `Clarett 8PreX.xml` baseline
+Focusrite's device XML descriptors (`vendor-reference/Devices/`) — the `Clarett 8PreX.xml` baseline
 plus the per-model 2Pre/4Pre/8Pre descriptors (and the Red range in §14) where cited — cross-referenced
 for meaning against the in-tree `scarlett2` driver via the USB Clarett descriptor. No driver code was copied.
 `[TRACE]`-tagged items are to be independently confirmed by observing the live device, which also

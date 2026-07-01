@@ -73,7 +73,7 @@ Same protocol family as the in-kernel `scarlett2`/`fcp` drivers. The USB Clarett
 class is in `scarlett2`; the **Thunderbolt Clarett is not** — but the protocol
 ports, so `scarlett2` + the USB Clarett XML are a verified interpretation
 reference. **Encodings are per-model — never copy opcodes/offsets/enums across
-models.** The 8PreX's own numbers come from `FCP Server Resources/Clarett 8PreX.xml`.
+models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8PreX.xml`.
 
 ### Transport (confirmed from boot-init trace)
 - **FCP request mailbox @ BAR0 `0x8020`**: header = `cmd`@+0 (bit31 = execute
@@ -127,7 +127,7 @@ tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction dec
                                       (--brief, --mix-diff, --async, --show-appspace, --classify).
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
                                       outside the control-plane map (data-plane reg discovery).
-FCP Server Resources/*.xml            Focusrite's device descriptors (RE source material).
+vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).
 ```

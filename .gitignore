@@ -21,4 +21,4 @@ driver/*.log
 
 # Vendor RE source material — keep out of the distributed repo (clean-room).
 # Facts are carried into the authored spec/ instead; see CLAUDE.md.
-FCP Server Resources/
+vendor-reference/

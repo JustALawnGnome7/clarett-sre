@@ -94,7 +94,7 @@ our driver never sends. **Tested June 28 2026 and disproven for normal operation
 
 Method: with FC running and the 2Pre active in the Windows VM (`Windows10-custom`, 8 GiB), took a
 memory-only guest dump (`virsh dump --memory-only --format elf`) and scanned it for the firmware
-signatures. Reference files (local only, **never committed** — `FCP Server Resources/Firmware/`,
+signatures. Reference files (local only, **never committed** — `vendor-reference/Firmware/`,
 git-ignored): `ClarettThunderbolt.tca` (App), `fp001005_tb_top.bit` / `fp001054_tb_top.bit` (Xilinx
 Spartan-6 bitstreams, magic `00 09 0f f0`, design name `fpNNNNNN_tb_top`, part `6slx45tcsg324`).
 
