@@ -283,7 +283,10 @@ struct clarett_model {
  */
 #define FCP_RESP_ECHO_OFF        0
 #define FCP_RESP_SIZE_OFF        4
+#define FCP_RESP_SEQ_OFF         6      /* echoed request seq in the DMAed response header */
+#define FCP_RESP_STATUS_OFF      8      /* status/error word; 0x03 = SUCCESS (fcp-transport spec) */
 #define FCP_RESP_DATA_OFF        16
+#define FCP_RESP_STATUS_SUCCESS  0x03
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
@@ -491,6 +494,12 @@ extern bool clarett_trace_regs;
  * speed. Mimics FC's x-no-mmap pacing (ms-apart commands) to test the device-state/arming timing
  * hypothesis: does manifestation need settle time between arm/toggle commands? */
 extern int clarett_cmd_delay_us;
+
+/* Diagnostic one-shot (resp_probe param): for the first N FCP commands, validate the DMAed response
+ * header and dump the BAR mailbox data region (0x8030+), to check whether any response bytes land
+ * on-chip (BAR) rather than only in the DMA buffer. Counts down to 0. Non-fatal; command path unchanged.
+ * See spec/clarett-manifestation-wall.md §5c. */
+extern int clarett_resp_probe;
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
 
 /* mixer.c */

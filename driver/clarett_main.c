@@ -112,6 +112,15 @@ MODULE_PARM_DESC(cmd_delay_us,
 		 "changes complete (done=1) but don't physically manifest because the FPGA datapath needs "
 		 "time to latch between commands that our µs-apart replay never gives it. Try 1000-10000.");
 
+int clarett_resp_probe;
+module_param_named(resp_probe, clarett_resp_probe, int, 0444);
+MODULE_PARM_DESC(resp_probe,
+		 "Diagnostic one-shot: for the first N FCP commands, validate the DMAed response header (echo/"
+		 "seq/status/size) AND dump the BAR mailbox data region (0x8030+). Closes the last on-chip "
+		 "blind spot — confirms whether the device leaves any response bytes in the BAR (it doesn't; "
+		 "responses come via DMA and are empty, spec §5c). 0 = off. Non-fatal; command path unchanged. "
+		 "Try resp_probe=12.");
+
 static bool drain_causes;
 module_param(drain_causes, bool, 0444);
 MODULE_PARM_DESC(drain_causes,

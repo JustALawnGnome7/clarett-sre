@@ -20,6 +20,7 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	unsigned long deadline;
 	u32 cause = 0, first_cause = 0, fcperr = 0;
 	int i, ret = 0, polls = 0;
+	bool probe = clarett_resp_probe > 0;	/* resp_probe one-shot diagnostic (spec §5c) */
 
 	if (len > CLARETT_MBOX_DATA_MAX)
 		return -EINVAL;
@@ -41,6 +42,11 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		for (j = 0; j < 4 && i + j < len; j++)
 			w |= (u32)data[i + j] << (8 * j);
 		clarett_wl(c, REG_MBOX + MBOX_DATA + i, w);
+	}
+
+	if (probe) {			/* pre-fill so post-completion bytes are demonstrably device-written */
+		memset(c->resp_buf, 0xAA, 64);
+		dma_wmb();
 	}
 
 	clarett_wl(c, REG_DOORBELL, DOORBELL_SUBMIT);
@@ -68,6 +74,57 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		ret = -ETIMEDOUT;
 	else if (fcperr)
 		ret = -EIO;
+
+	/*
+	 * resp_probe one-shot (spec §5c): close the last on-chip blind spot. Validate the DMAed response
+	 * header (echo/seq/status/size) and separately read the BAR mailbox data region (0x8030+), to
+	 * confirm whether the device leaves any response bytes on-chip (BAR) rather than only in the DMA
+	 * buffer. Runs under mbox_lock (serialised vs the meter heartbeat); c->seq is still the request seq
+	 * here (incremented below), so the echoed seq is comparable. Diagnostic only — ret is untouched.
+	 */
+	if (probe) {
+		const u8 *r = c->resp_buf;
+		u32 echo, rstatus, expect = CMD_EXEC_FLAG | opcode, md[12];
+		u16 rsize, rseq;
+		bool dma_data = false, bar_data = false;
+		int k;
+
+		/* the DMAed response can lag the DONE bit — give it a bounded moment to land */
+		for (k = 0; k < 25; k++) {
+			dma_rmb();
+			if (r[FCP_RESP_ECHO_OFF] != 0xAA)
+				break;
+			usleep_range(200, 300);
+		}
+		dma_rmb();
+		echo    = r[0] | r[1] << 8 | r[2] << 16 | r[3] << 24;
+		rsize   = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+		rseq    = r[FCP_RESP_SEQ_OFF]  | r[FCP_RESP_SEQ_OFF + 1] << 8;
+		rstatus = r[FCP_RESP_STATUS_OFF] | r[FCP_RESP_STATUS_OFF + 1] << 8 |
+			  r[FCP_RESP_STATUS_OFF + 2] << 16 | r[FCP_RESP_STATUS_OFF + 3] << 24;
+		for (k = 0; k < rsize && k < 32; k++)
+			if (r[FCP_RESP_DATA_OFF + k] != 0xAA)
+				dma_data = true;
+
+		/* BAR mailbox data region. md[0..1] echo our own request for data-class commands; a
+		 * device-written response would appear past that (or flip md[0] to the echoed cmd). */
+		for (k = 0; k < 12; k++) {
+			md[k] = clarett_rl(c, REG_MBOX + MBOX_DATA + k * 4);
+			if (k >= 2 && md[k])
+				bar_data = true;
+		}
+
+		dev_info(&c->pci->dev,
+			 "resp_probe op=0x%06x DMA{echo=0x%08x %s seq=%u %s status=0x%x size=%u data=%s} "
+			 "BAR@0x30=%08x %08x %08x %08x (%s)\n",
+			 opcode, echo, echo == expect ? "OK" : "MISMATCH",
+			 rseq, rseq == c->seq ? "OK" : "MISMATCH", rstatus, rsize,
+			 dma_data ? "PRESENT" : "empty",
+			 md[0], md[1], md[2], md[3],
+			 bar_data ? "BAR-NONEMPTY-past-req" : "BAR-empty-past-req");
+
+		clarett_resp_probe--;
+	}
 
 	c->seq++;
 
