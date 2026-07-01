@@ -1,7 +1,12 @@
-# Clarett 8PreX — Control-Plane Spec (clean-room, derived)
+# Clarett — Control-Plane Spec (Thunderbolt line; clean-room, derived)
+
+> **Scope:** the Clarett Thunderbolt line (8PreX / 8Pre / 4Pre / 2Pre). The **8PreX is the reference
+> model** — offsets, opcodes, and the numbered section tables below are its values unless a per-model
+> note or the §4 variants table says otherwise. §14 assesses the related Focusrite Red range.
 
 **Status:** working spec, authored from interface facts. Sources are tagged per section:
-`[XML]` = stated in Focusrite's `Clarett 8PreX.xml` device descriptor (interface fact);
+`[XML]` = stated in Focusrite's device XML descriptors (`Clarett 8PreX.xml` baseline; the per-model
+2Pre/4Pre/8Pre XMLs where noted) (interface fact);
 `[INF]` = inferred/derived by us (needs confirmation);
 `[TRACE]` = to be confirmed against the live MMIO/FCP capture.
 
@@ -9,7 +14,7 @@
 > overstate confirmation. Reality: control writes complete (`done=1, fcperr=0`) but **do NOT physically
 > manifest** from our driver, and `GET_DATA` returns an **empty** payload (`size=0`) — the device's
 > config backend is dormant for us despite an FC-identical command stream
-> (`spec/clarett-8prex-manifestation-wall.md`). The encodings below are still correct (verified against
+> (`spec/clarett-manifestation-wall.md`). The encodings below are still correct (verified against
 > FC's live traffic); what is wrong is any claim that our driver *effected* a change. §7 (clock as the
 > "cause" of no streaming) and §11 (notification mask) are corrected inline.
 
@@ -127,7 +132,7 @@ So mode@166/opcode 6 and air@174/opcode 7 (with the Mic/Line/Inst = 0/1/2 enum) 
 the encoding **ports across the Clarett TB line** (the 4Pre shares the 8PreX's input-control offsets and
 opcodes). Note: like every other control, these are FC's *own* writes — they manifest because FC drives
 the device; our driver replaying the identical bytes still hits the manifestation wall
-(`clarett-8prex-manifestation-wall.md`).
+(`clarett-manifestation-wall.md`).
 
 **Model variants of the input block `[XML]`** — the offset/opcode *bases* are shared line-wide, but
 *which* inputs expose mode (and whether Mic is an option) differs per model. The table above is the
@@ -416,10 +421,61 @@ traffic is only the GUI's meter view).
   entry = `(src_pin<<12)|dst_pin`** (§8). Remaining detail: the exact entry ordering / the ~5-entry
   delta vs the enumerated 86 is now directly readable from a full-matrix capture if needed.
 
+## 14. Related family: Focusrite Red range (future-support assessment) `[XML]`
+
+Assessed from the Red device descriptors (`Red 4Pre.xml`, `Red 8Pre.xml`, `Red 8Line.xml`,
+`Red 16Line.xml`). These are **Thunderbolt interfaces of the same FCP-over-FPGA family** as the Clarett —
+supportable to the *same degree* (a descriptor that loads, probes, and registers a mixer), but they
+inherit the same off-wire wall and add a large out-of-scope surface. Verdict: same protocol family, **not**
+a path past the wall.
+
+### Same architecture as the Clarett `[XML]`
+- **Identical mixer**: `<inputs num="30" pin0="0x300"/>`, `<mixes num="16"/>` — the same 30×16 matrix.
+- **Same direction-scoped pin space** (§3): `0x200` ADAT / `0x300` mixer / `0x400` analogue / `0x408`
+  S/PDIF-in / `0x600` PCM — plus a new `0x800` Dante block.
+- **Same config idiom**: every control is `offset-bytes` + `command`(opcode) + `bits`, i.e. our
+  `SET_DATA{offset,len,val}` + `DATA_CMD{activate=command}` model.
+- **Same appspace/flash**: `appstorage-size=8192`, `flash-command=5` (sizes shift: `8508`/`app-ofs=316`
+  vs the Clarett's `8392`/`200`).
+- **Byte-identical clock enums**: `Internal=24, S/PDIF=3, ADAT 1=0, ADAT 2=1, Wordclock=2` (+ `Dante=4`,
+  `Loop Sync=5`); same sample-rate set (44.1–192 kHz).
+- **Same firmware model**: App `.tca` + FPGA `.bit` + `Front` panel blob, version fields @ 8/12/20. The
+  decisive signal: the **Red 4Pre/8Pre ship `fp001054_tb_top.bit` — the same `tb_top.bit` FPGA family as
+  the Clarett's `fp001005_tb_top.bit`** `[XML]`, so the PCIe/mailbox/DMA *transport* is almost certainly the
+  same engine `[INF]`. (Red 8Line/16Line list only a device-specific `RedNLineFPGA.bit`, no `tb_top`.)
+
+### Per-model differences (expected — not blockers) `[XML]`
+- **Renumbered opcodes + remapped config layout**: air cmd 8 (was 7), mode cmd 7 (was 6), monitor gain
+  cmd 6, output mute/dim cmd 15, gain cmd 1; inputs live @130, outputs @24, monitoring @112. The usual
+  "encodings are per-model" rule.
+- **16-bit gains** (`bits=16`, like the USB Clarett), not the 8PreX's 8-bit.
+- **Fully-software preamp**: `phantom`(11), `phase`(12), `hpf`(10), per-mode `mic/line/inst-gain`(9),
+  `stereo-link`(13) — controls the Clarett exposed only as front-panel hardware (§4). More to implement,
+  same idiom. The **8Line/16Line have no mic preamps** (line-only; 0 `<mode>` inputs).
+- Extras: `host-mode` **Thunderbolt vs Pro Tools|HD** (DigiLink), R1 remote `pairable-devices` + heartbeat,
+  `delay-compensation`, a `temperature` notification, richer per-band meter sources.
+- Different notification masks (`input-gain=0x200000`, `output=0x800000`, `global=0x01000000`, …) — and
+  like the Clarett, the wire cause bits are unverified against these XML values (see §11).
+
+### Blockers / caveats for actually supporting one `[INF]`
+1. **Same off-wire wall.** Same `tb_top` FPGA ⇒ a Red would almost certainly reproduce our dead-end
+   (writes ACK but don't manifest, empty `GET_DATA`, data plane won't sustain — see
+   `clarett-manifestation-wall.md` / `-data-plane.md`). A Red descriptor buys "loads, probes,
+   registers controls" and no more, exactly like the 8Pre paper model. Cracking the wall on either line
+   would likely unlock both; the Reds are **not** an independent route around it.
+2. **Dante is out of clean-room scope.** All four Reds carry **32×32 Dante** channels + a `<dante>` block.
+   Dante is Audinate's proprietary/licensed stack with no clean-room implementation. A driver could expose
+   the analogue/ADAT/S/PDIF + Thunderbolt-PCM I/O and omit Dante, but that drops a large part of the device.
+3. **Unverified transport/hardware.** The XML is the config schema, not the PCIe transport. Real hardware
+   is needed to confirm the **PCI vendor/device id** (the Red line is a different product — likely not
+   `1cb5:0002`) and that the BAR mailbox/doorbell/cause-reg/GET-DMA layout matches. No Red captures exist;
+   this whole section is schema inference.
+
 ## Provenance
 
 Control semantics, offsets, opcodes, enum values, and channel maps are interface facts taken from
-Focusrite's `Clarett 8PreX.xml` descriptor (`FCP Server Resources/`), cross-referenced for meaning
-against the in-tree `scarlett2` driver via the USB Clarett descriptor. No driver code was copied.
+Focusrite's device XML descriptors (`FCP Server Resources/Devices/`) — the `Clarett 8PreX.xml` baseline
+plus the per-model 2Pre/4Pre/8Pre descriptors (and the Red range in §14) where cited — cross-referenced
+for meaning against the in-tree `scarlett2` driver via the USB Clarett descriptor. No driver code was copied.
 `[TRACE]`-tagged items are to be independently confirmed by observing the live device, which also
 serves as independent corroboration of the XML-derived facts.

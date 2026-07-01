@@ -1250,7 +1250,7 @@ static const struct clarett_model clarett_2pre = {
  * Clarett 4Pre (Thunderbolt). Control plane from FCP Server Resources/Devices/Clarett 4Pre.xml [XML],
  * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Selected via model=4pre;
  * the whole TB line shares PCI id 1cb5:0002 and is not auto-detectable. See
- * spec/clarett-8prex-control-plane.md §4 and -data-plane.md §3b.
+ * spec/clarett-control-plane.md §4 and -data-plane.md §3b.
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).

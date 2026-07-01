@@ -1,4 +1,7 @@
-# Clarett 8PreX — Data-Plane RE (PCM DMA streaming)
+# Clarett — Data-Plane RE (PCM DMA streaming)
+
+> **Scope:** the Clarett Thunderbolt line — engine and per-direction geometry RE'd on the 8PreX, 2Pre,
+> and 4Pre (the 8PreX is the reference model); per-model geometry is called out inline.
 
 **Status (June 28 2026):** far past a "plan". Phase 1 (streaming register map) **recovered** from
 `clarett_full_init_mute.log` (§3b); Phase 2 (descriptor format + sample layout) **recovered** from live
@@ -8,7 +11,7 @@ it flags "period 0 ready" and the `0x300` counter never advances, universal acro
 observable host→device surface (BAR0 setup regs, FCP handshake, PCI config, `0x500`/`0x510` enables,
 converter-ready status, **and** the DMA-buffer address via `dma_bits=30/31`) has been matched/eliminated.
 The black-box MMIO+FCP+config method is **exhausted**; the sustain blocker is below the BAR surface — the
-**same off-wire wall the control plane hits** (`spec/clarett-8prex-manifestation-wall.md`, memo
+**same off-wire wall the control plane hits** (`spec/clarett-manifestation-wall.md`, memo
 `clarett-dataplane-pcm-findings`). **Environment is ruled out:** the control plane was retested with our
 driver in a Fedora guest under the *same* vfio passthrough FC uses and still failed, so it is our-driver-
 vs-FC (off-wire bus-master DMA), not host/IOMMU/VM context. (Earlier data-plane notes called this
@@ -17,7 +20,7 @@ bus-level RE (a TB/PCIe protocol analyzer on the live link), **not** host-env wo
 capture; `[ANCHOR]` = a control-plane fact we build on.
 
 The control plane (mixer/routing/gain/mute/clock/notifications) is reverse-engineered and documented in
-`clarett-8prex-control-plane.md` + `clarett-8prex-fcp-transport.md`. **Both planes are now blocked at the
+`clarett-control-plane.md` + `clarett-fcp-transport.md`. **Both planes are now blocked at the
 same below-BAR wall** — neither functions despite traffic byte-identical to FC.
 
 ---

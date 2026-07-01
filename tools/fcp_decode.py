@@ -11,7 +11,7 @@ Output: one block per mailbox command (delimited by the doorbell), showing the d
 FCP header (opcode / seq / size / error), the request payload, any response bytes the
 guest read back, and which IRQ cause register signalled completion.
 
-Register map is from spec/clarett-8prex-fcp-transport.md §8 (boot-init trace). Offsets are
+Register map is from spec/clarett-fcp-transport.md §8 (boot-init trace). Offsets are
 constants below — tweak if later captures refine them.
 
 Usage:

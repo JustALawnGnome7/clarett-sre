@@ -1,4 +1,7 @@
-# Clarett 8PreX — Expected FCP Mailbox Framing (trace targets)
+# Clarett — FCP Mailbox Framing (trace targets)
+
+> **Scope:** the FCP mailbox transport is shared across the Clarett Thunderbolt line; the register map
+> was confirmed on the 8PreX (the reference model).
 
 **Purpose:** predict the transport-layer framing of FCP messages in the 64 KB MMIO BAR, so the
 `x-no-mmap` trace (see memory `clarett-mmio-trace-setup`) has concrete byte patterns to hunt for.
@@ -16,7 +19,7 @@ transport — expect the 8PreX to reuse the packet/opcodes, confirm the values);
 > inline: (a) "control changes don't manifest *without the data plane*" — the data-plane requirement is
 > FALSE (FC moves the LEDs at idle, no stream); (b) "GET-response returns `config[off+i]`, CONFIRMED" —
 > our driver's `GET_DATA` returns an **empty** payload (`size=0`) in every tested state; (c) the
-> notification mask is `0x3`, not `0x200000`/`0x400000`. See `spec/clarett-8prex-manifestation-wall.md`.
+> notification mask is `0x3`, not `0x200000`/`0x400000`. See `spec/clarett-manifestation-wall.md`.
 
 ---
 
@@ -254,7 +257,7 @@ manifestation does not require the data plane. This session added a second, clea
 root: `GET_DATA` returns an **empty** payload too (below). Both the control plane and the data plane fail
 the same way — our observable traffic (BAR0 + FCP + PCI config) is byte-identical to FC's, yet neither
 functions — so the differentiator is **off-wire / below the BAR surface**, not a missing control-plane
-command and not the data plane. Full elimination chain: `spec/clarett-8prex-manifestation-wall.md`.
+command and not the data plane. Full elimination chain: `spec/clarett-manifestation-wall.md`.
 
 ### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.txt`)
 | opcode | name | payload | proof |
@@ -298,7 +301,7 @@ fine (`resp[+0]=0x80800000` echo, `resp[+8]=0x03` success) but `size@+4 = 0` and
 onward) is never written — exhaustively confirmed on **both** 8PreX and 2Pre, at every offset, every
 length (4 / 0x3f8 / 92 / 32), with a 3 s settle, in FC's exact read window, and even in a genuine Mute
 notification context. So `resp[16+i] == config[off+i]` does **not** hold for us; the device's config
-backend is dormant and returns zero bytes (`spec/clarett-8prex-manifestation-wall.md` §5a).
+backend is dormant and returns zero bytes (`spec/clarett-manifestation-wall.md` §5a).
 
 The single non-empty read this section originally cited — `GET_DATA{24,92}` → `resp[16]=0x01`, "on a Mute
 notification" — **could not be reproduced** and must have been a different historical state. A reader

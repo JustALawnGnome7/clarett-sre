@@ -10,7 +10,7 @@ session (or contributor) can continue without the original chat history.
 Build an in-kernel ALSA driver for the Clarett 8PreX. Both planes are blocked at the
 **same off-wire/below-BAR wall** — our driver's observable traffic matches Focusrite
 Control byte-for-byte, yet neither plane functions. This is the central unsolved problem
-(`spec/clarett-8prex-manifestation-wall.md`).
+(`spec/clarett-manifestation-wall.md`).
 - **Control plane** (mixer/routing/preamp/clock/notifications) — **protocol fully
   reverse-engineered**; every encoding confirmed against live FC traffic. The driver
   (`driver/`) is **structurally complete**: loads and probes on real hardware, registers
@@ -23,7 +23,7 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
   sustain past one ring pass** (flags period 0, the `0x300` counter never advances). Same
-  off-wire/below-BAR wall. Details: `spec/clarett-8prex-data-plane.md`.
+  off-wire/below-BAR wall. Details: `spec/clarett-data-plane.md`.
 - **Environment is RULED OUT, not a remaining path.** Our driver was run in a Fedora guest with
   the device vfio-passed-through — the *same* path FC uses (Windows guest + passthrough) — and it
   **still fails** (control writes don't manifest). FC-in-passthrough works, our-driver-in-the-same-
@@ -113,13 +113,13 @@ end-to-end: replayed by our driver these writes complete (`done=1`) but do not m
 ## Repository layout
 
 ```
-spec/clarett-8prex-control-plane.md   Authored control-plane spec (offsets, opcodes,
-                                      enums, pins, mixer, routing). Provenance-tagged.
-spec/clarett-8prex-fcp-transport.md   Mailbox/transport framing; confirmed reg map.
-spec/clarett-8prex-data-plane.md      PCM-DMA RE: method, recovered register/descriptor maps, and the
-                                      validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
-spec/clarett-8prex-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
-                                      every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
+spec/clarett-control-plane.md       Authored control-plane spec (offsets, opcodes,
+                                    enums, pins, mixer, routing). Provenance-tagged.
+spec/clarett-fcp-transport.md       Mailbox/transport framing; confirmed reg map.
+spec/clarett-data-plane.md          PCM-DMA RE: method, recovered register/descriptor maps, and the
+                                    validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
+spec/clarett-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
+                                    every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md
@@ -162,7 +162,7 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     revive works — rewrite `0x110`/bases, full cause-block `pollall`, re-`activate=5` all fail. Our
     descriptor table already matches the VM's, so the wrap is an unobserved runtime behaviour → next is a
     fresh VM capture of a long capture session. Debug params: `rekick`/`rekick_ms`/`pollall`/`pcm_selftest`.
-  - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-8prex-data-plane.md` §9 step 5.
+  - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP
@@ -179,7 +179,7 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA`. Transport spec §8.
 - **Control plane is complete but its effects don't physically manifest — BLOCKED at a proven boundary
-  (`spec/clarett-8prex-manifestation-wall.md`).** After a correct bring-up, control writes complete
+  (`spec/clarett-manifestation-wall.md`).** After a correct bring-up, control writes complete
   (`done=1, fcperr=0`) but the front-panel state doesn't move. The earlier guess that this needs the
   **data plane** (streaming) is **DISPROVEN**: FC moves the same LEDs at idle, no stream/engine. This
   session eliminated *every traceable surface*: our FCP command stream is a faithful **subset** of FC's

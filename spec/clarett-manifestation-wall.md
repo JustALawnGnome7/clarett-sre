@@ -1,5 +1,7 @@
 # Clarett — Control-Plane Manifestation Wall (proven boundary)
 
+> **Scope:** applies to the whole Clarett Thunderbolt line; established on the 8PreX and 2Pre.
+
 **Status:** **Blocked at a proven boundary.** The control plane is fully reverse-engineered and our
 driver reproduces Focusrite Control's (FC) wire traffic on *every traceable surface*, yet control
 changes that physically manifest for FC do **not** manifest for our driver. This document records the
@@ -79,8 +81,8 @@ hit (engine bursts then stalls with all host→device surfaces matched). Both pl
 off-wire reason — consistent with the device's FPGA datapath staying dark until the host does something
 over DMA that our driver never does.
 
-The control-plane *protocol* RE stands and is complete (`clarett-8prex-control-plane.md`,
-`clarett-8prex-fcp-transport.md`). What is unresolved is a **device-enable step that happens over DMA**,
+The control-plane *protocol* RE stands and is complete (`clarett-control-plane.md`,
+`clarett-fcp-transport.md`). What is unresolved is a **device-enable step that happens over DMA**,
 not any control encoding.
 
 ---

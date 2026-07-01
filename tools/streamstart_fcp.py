@@ -7,7 +7,7 @@ each stream-engine ARM (write of 0x7 to 0x110, or the 0x210/0x310 base writes) a
 lists every FCP mailbox command issued in the window BEFORE the first arm, EXCLUDING
 the GET_METER (0x001001) GUI-polling noise.
 
-Rationale (clarett-8prex-data-plane.md): the 8PreX arms with only GET_METER beforehand
+Rationale (clarett-data-plane.md): the 8PreX arms with only GET_METER beforehand
 (descriptor mode == hardware default). So on the 2Pre, any NON-meter FCP before the arm
 is the candidate flat-mode switch. If this prints nothing but meter noise, the selector
 is a guest-RAM seed, not an FCP -> pivot to pmemsave-before-arm.
