@@ -30,16 +30,23 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
   vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
   replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
-- **Method caveat:** the `x-no-mmap` BAR trace is **blind to sample DMA** and to bus-master DMA
-  generally — both planes were RE'd by triangulating BAR setup registers (`tools/bar_profile.py`) +
-  guest-RAM dumps + period-IRQ correlation (`fcp_decode.py --async`). That same blindness is where both
-  walls hide. The black-box MMIO+FCP+config method is exhausted **on the Windows/vfio side**. Two ways
-  remain to *see* the off-wire DMA difference: (1) bus-level RE — a Thunderbolt/PCIe protocol analyzer on
-  the live link (**ruled out by the user**); (2) **DTrace/instrumentation of the working macOS driver** —
-  the Clarett runs on the user's M1 Mac, so the working driver can be watched **constructing the DMA
-  payload in host RAM**, an untried surface that sidesteps the analyzer
-  (`spec/clarett-macos-dtrace-plan.md`). Neither is more Windows/vfio driver edits nor host-env work
-  (every observable surface there, and the environment itself, matches FC).
+- **Method caveat + final status (RE phase closed at a proven terminus):** the `x-no-mmap` BAR trace is
+  **blind to sample DMA** and to bus-master DMA generally — both planes were RE'd by triangulating BAR
+  setup registers (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
+  --async`). That same blindness is where both walls hide. **Every reachable observation method is now
+  exhausted and the wall is confirmed on THREE platforms** (Windows/vfio, macOS, our Linux driver):
+  - the black-box MMIO+FCP+config method (Windows/vfio) matches FC byte-for-byte on every surface;
+  - **DTrace of the working macOS vendor stack** (the Clarett runs on the user's M1) showed the vendor's
+    user-space→kext commands are **byte-identical to ours** AND the device returns **rich real data**
+    (caps/firmware/serial/config) to the *same* `GET_DATA` requests that return empty for us — but DTrace
+    **could not see inside the kext** (stripped, address-redacted release binary → no `fbt`, unattributable
+    stack frames), and its user-space, runtime-DMA, and boot-time captures are all exhausted
+    (`spec/clarett-manifestation-wall.md §5d`, `spec/clarett-macos-dtrace-plan.md`).
+  The differentiator sits **below the driver**, in off-wire transport/DART semantics no software trace on
+  either OS can reach. The only ways left to cross it — a Thunderbolt/PCIe **bus analyzer** (**ruled out by
+  the user**) or **disassembling the vendor driver** (**clean-room no-go**) — are both excluded. So this is
+  a **proven, well-documented terminus, not a remaining path.** Do NOT re-propose analyzers, host-env work,
+  more captures, or more driver-revive experiments — all done/negative/out of scope.
 
 ## Method (how the RE is done)
 
@@ -124,8 +131,8 @@ spec/clarett-data-plane.md          PCM-DMA RE: method, recovered register/descr
                                     validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
 spec/clarett-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
                                     every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
-spec/clarett-macos-dtrace-plan.md   Untried lead: DTrace the working macOS driver (device runs on the M1)
-                                    to capture the off-wire DMA payload in host RAM. Not a bus analyzer.
+spec/clarett-macos-dtrace-plan.md   DTrace of the working macOS driver (device runs on the M1): RUN and
+                                    exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md
@@ -151,8 +158,10 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   (and PipeWire/WirePlumber if they hold `/dev/snd/controlC*`), then `rmmod`.
 - Bare-metal test box: handle Thunderbolt auth (`boltctl authorize`) and Secure
   Boot (unsigned module needs SB off or a signed MOK).
-- Mailbox is currently instrumented with a per-command `dev_info` (op/seq/cause/
-  done/fcperr) — useful for confirming round-trips; remove once trusted.
+- Mailbox has a per-command trace (op/seq/cause/done/fcperr) at **`dev_dbg`** — off by default;
+  enable via dynamic debug when diagnosing the mailbox (info-level would flood at the ~24 Hz meter
+  poll). The notify re-read failure log is `dev_warn_ratelimited` (a walled device retries the
+  config-change notification indefinitely, so an un-limited warn would flood).
 
 ## Driver limitations / TODO
 

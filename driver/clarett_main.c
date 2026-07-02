@@ -881,8 +881,10 @@ static void clarett_notify_work(struct work_struct *work)
 
 	err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
 	if (err) {
-		dev_warn(&c->pci->dev, "notify 0x%x: monitor re-read failed (%d)\n",
-			 ev, err);
+		/* Rate-limited: on a walled device the periodic unsatisfied config-change notification
+		 * (cause 0x3 ~every few s) makes this GET time out repeatedly; dev_warn would flood dmesg. */
+		dev_warn_ratelimited(&c->pci->dev, "notify 0x%x: monitor re-read failed (%d)\n",
+				     ev, err);
 	} else {
 		const u8 *r = c->resp_buf;
 		u32 echo;
