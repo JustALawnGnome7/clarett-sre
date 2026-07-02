@@ -265,6 +265,15 @@ disassembling the vendor kext (clean-room no-go) could reveal. The macOS/DTrace 
 Bonus RE facts banked above (firmware build date, segment names, serial format, config layout: header
 0..0xc7, persistent appspace at 0xc8).
 
+**Boot-time capture — RUN and empty; the last DTrace card `[TEST]`.** A LaunchDaemon started `dtrace` at
+boot (DMA-alloc / `appendBytes` / `iovmMapMemory` probes) to catch the kext's cold `start()` DMA by timing
+(`captures/focus-boot.log`). Result: **zero** Clarett/`apciec`/focusrite frames and no unsymbolicated
+(bare-`0x`) frames in the 120 s window — only unrelated boot DMA (GPU/ANE/biometric/IOReport). The daemon
+**lost the timing race**: a boot-attached PCIe device matches and runs `start()` during early IOKit init,
+*before* user-space dtrace can attach; and cold-attach can't be beaten from user space, while the warm
+cable-replug (the only fallback) already produced nothing attributable. **Both cold and warm attach are
+exhausted → the DTrace avenue is definitively closed.**
+
 ---
 
 ## 6. Reproduction (driver A/B params)
