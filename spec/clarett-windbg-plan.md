@@ -30,6 +30,33 @@ the driver level. WinDbg got the timing/symbols/module-ranges the raced-out, str
 never could, and **definitively** closes the "vendor sets up DMA we don't" hypothesis. Differentiator is
 below the driver (transport/link/device-init handshake), invisible to all host-side software tracing.
 
+## Follow-up (planned, NOT yet done) — audit the three sibling drivers
+
+The July 2 run was **scoped to `FocusritePCIe.sys`** (broke at *its* image load; MDL breakpoint filtered to
+*its* module range). The three siblings — **`FocusritePCIeSwRoot.sys`**, **`FocusritePcieAudio.sys`**,
+**`FocusritePcieMidi.sys`** — were **not** independently examined; their roles are inferred from names only.
+`SwRoot` in particular, as a likely *root/parent enumerator*, may load and run **before** `FocusritePCIe`,
+so anything it does would be outside the window we captured. This doesn't threaten the below-driver
+conclusion (the vfio trace is driver-agnostic and bounds all device-facing MMIO/mailbox), but it's the one
+open completeness thread. To exhaust it next session, for **each** sibling:
+
+1. **Imports** — `lm m <sib>` for the range, then dump its IAT (`dps <sib>+<ImportAddressTable rva> L<n>`,
+   RVA/size from `!dh <sib> -f`). Flag any of `MmMapIoSpace`, `MmAllocatePagesForMdlEx`,
+   `Mm*ContiguousMemory*`, `Io/HalGetDmaAdapter`, `WdfDmaEnabler*` → does it touch hardware/DMA at all, or
+   is it pure PnP/IOCTL?
+2. **Topology** — `!devnode 0 1 <sib>` and `!devstack` on the Clarett devnode: parent / sibling / unrelated
+   software device? (Confirms load order vs `FocusritePCIe`.)
+3. **Its DMA, if any** — reboot; `sxe ld:<sib>.sys` to break at *its* load **before** `FocusritePCIe` if it
+   precedes it; re-read its KASLR range; arm the same MDL / `WdfCommonBufferCreateWithConfig` /
+   `HalAllocateCommonBuffer` breakpoints **filtered to its range**; enumerate. Note `SwRoot` may need
+   catching very early (root enumerator) — arm at the earliest boot break and widen if it loads pre-PnP.
+4. **Cross-check** any buffer it programs against the vfio `0x2xx/0x3xx/0x410` writes; if a sibling
+   programs a device address our driver doesn't, that reopens the "extra surface" branch for that plane.
+
+Expected outcome (to be confirmed, not assumed): `SwRoot` is a software-root anchor / control-app IOCTL
+endpoint with no hardware DMA; `Audio`/`Midi` are upper function drivers that broker through `FocusritePCIe`
+(the Audio WaveRT buffer, if any, is data-plane). If confirmed, §5e stands as written; if not, revise.
+
 ---
 
 ## Original plan (as executed below)

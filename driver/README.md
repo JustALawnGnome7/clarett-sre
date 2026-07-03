@@ -7,11 +7,15 @@ Status: **control plane only** (mixer-only sound card). PCM/streaming is not yet
 implemented (and is gated off for the 2Pre until its stream geometry is captured).
 Built from the clean-room notes in `../spec/`.
 
-> **⚠️ Control changes do not physically take effect yet.** The driver brings up the
+> **⚠️ Control changes do not physically take effect.** The driver brings up the
 > device and every mixer write completes without error, but the hardware does not act
-> on them (e.g. the front-panel Mute LED does not move) — this needs the **data plane**
-> (audio engine streaming), which is not implemented. See "Known limitations". Also:
-> the device-arming init replay only works on a **freshly power-cycled** device.
+> on them (e.g. the front-panel Mute LED does not move) and `GET_DATA` reads come back
+> empty — the device backend stays **dormant for our driver**. This is **not** a
+> control-plane protocol bug (our FCP traffic matches the vendor byte-for-byte) and
+> **not** a missing data plane (the vendor moves the same LEDs at idle with no stream):
+> it is a proven **off-wire / below-the-driver** boundary — see "Known limitations" and
+> `../spec/clarett-manifestation-wall.md`. Also: the device-arming init replay only
+> works on a **freshly power-cycled** device.
 
 ## What works
 
@@ -97,7 +101,10 @@ Never load this while the VM is using the device.
 
 ## Known limitations / TODO
 
-- **No PCM** — data-plane DMA streaming is not reverse-engineered yet.
+- **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
+  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass at the
+  **same off-wire/below-driver wall** as the control plane (`../spec/clarett-data-plane.md`).
+  Experimental capture PCM is opt-in (`enable_pcm=1`); see the 2Pre note below.
 - **Mixer "get" returns a shadow**: write-through on put, and the **monitor bytes
   are refreshed from the DMAed GET response on a front-panel notification**, so
   those reflect live hardware. Other bytes stay write-through and default to
@@ -111,12 +118,21 @@ Never load this while the VM is using the device.
 - The GET-response DMA buffer address is programmed at `0x410` (low32) / `0x414`
   (high32) — `0x414` = address-high confirmed (hardcoding the trace's `0x2` faulted
   the IOMMU; the driver uses `upper_32_bits(resp_dma)`).
-- **Control changes don't physically manifest** — the headline gap. After a correct
-  bring-up, monitor `Mute`/`Dim` writes complete (`done=1, fcperr=0`) but nothing
-  changes on the hardware; we match the vendor app byte-for-byte on the control plane.
-  The missing piece is the **data plane**: the audio engine must be streaming (DMA-ring /
-  clocking via non-mailbox registers) for control changes to take effect. This is the
-  next milestone, not a control-plane bug.
+- **Control changes don't physically manifest — a proven below-driver boundary** (the
+  headline gap). After a correct bring-up, monitor `Mute`/`Dim` writes complete
+  (`done=1, fcperr=0`) and `GET_DATA` returns empty (`size=0`) — the device backend is
+  dormant for our driver even though our FCP traffic matches the vendor app byte-for-byte.
+  The earlier "needs the **data plane** (streaming)" theory is **disproven** (the vendor
+  moves the same LEDs at idle, no stream). The differentiator has been localized to
+  **off-wire bus-master DMA / transport below the driver**, invisible to every host-side
+  software trace, and confirmed by **four independent methods**: Windows/vfio MMIO
+  (byte-identical on every surface), macOS DTrace of the working kext (device returns rich
+  real data to identical `GET_DATA` requests that return empty for us), our Linux replay,
+  and WinDbg kernel-debug of the working Windows driver (its entire init DMA footprint is
+  attribute-equivalent to ours — cached-coherent, 64-bit, nothing extra programmed to the
+  device at init). It is **not** a control-plane protocol bug and **not** fixable from the
+  driver's observable surface; the remaining leads (TB/PCIe bus analyzer, vendor-binary
+  disassembly) are excluded. Full analysis: `../spec/clarett-manifestation-wall.md`.
 - **Device bring-up replay is fresh-device-only.** `clarett_arm_device` arms a
   power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
   (double-init). TODO: probe with a `GET` and skip the replay when already armed.

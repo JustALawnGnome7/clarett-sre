@@ -284,9 +284,16 @@ KDNET failed on QEMU's e1000e, `0xC0000182`). **Clean-room discipline held**: br
 `nt!HalAllocateCommonBuffer`), attributed to Focusrite by **module range** and **caller frame**; the
 `FocusritePCIe.sys` code was never disassembled or stepped — only the interface data it hands the OS.
 
-**Driver identity + DMA surface.** `FocusritePCIe.sys` (the hardware/PCIe function driver; siblings
-`FocusritePcieAudio/Midi/SwRoot` are upper/enumerator drivers with no bearing on the control wall) is
-**KMDF**. Its IAT imports the DMA-relevant `nt!MmAllocatePagesForMdlEx`, `nt!MmMapLockedPagesSpecifyCache`,
+**Driver identity + DMA surface.** `FocusritePCIe.sys` — the driver that **owns BAR0 and does the
+bus-master DMA** (it maps `MmMapIoSpace` for BAR0 and did every DMA allocation below) — is **KMDF**. Its
+three siblings `FocusritePCIeSwRoot.sys`, `FocusritePcieAudio.sys`, `FocusritePcieMidi.sys` were **not
+independently audited** this pass (roles inferred from names as root-enumerator / upper audio / upper MIDI,
+**unverified**); the capture was scoped to `FocusritePCIe`'s load + module range, so any allocations a
+sibling makes outside that window were not observed. **Completeness caveat / follow-up:** see "Follow-up
+(planned)" — the sibling audit is the one open thread. It does **not** loosen the below-driver conclusion,
+because the vfio MMIO trace is **driver-agnostic** (it traps *every* BAR0 access + mailbox write by *any*
+driver) and matches FC byte-for-byte, so no sibling can be doing hidden **device-facing** programming — only
+the same off-wire bus-master DMA blind spot remains. Its IAT imports the DMA-relevant `nt!MmAllocatePagesForMdlEx`, `nt!MmMapLockedPagesSpecifyCache`,
 `nt!HalPutDmaAdapter` (it holds a WDF DMA adapter), and `nt!MmMapIoSpace` (BAR0). Common-buffer allocs go
 through the WDF function table (invisible in the IAT), caught one level down at the HAL.
 
