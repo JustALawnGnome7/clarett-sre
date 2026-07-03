@@ -280,7 +280,7 @@ exhausted → the DTrace avenue is definitively closed.**
 ## 5e. Fourth-platform capture — WinDbg of the working Windows driver's init DMA `[TEST]` (July 2 2026)
 
 The one lead DTrace couldn't reach (`clarett-windbg-plan.md`): kernel-debug the **working** Windows driver and
-watch the DMA it builds at init. Setup: the FC guest (`Windows10`) with Secure Boot off + serial KD
+watch the DMA it builds at init. **Device under debug: the 2Pre (warm).** Setup: the FC guest (`Windows10`) with Secure Boot off + serial KD
 (`bcdedit /dbgsettings serial`, COM2 bridged to a second `Windows10-WinDbg` VM over a host TCP socket —
 KDNET failed on QEMU's e1000e, `0xC0000182`). **Clean-room discipline held**: breakpoints only on
 **symbolicated Microsoft APIs** (`nt!MmAllocatePagesForMdlEx`, `Wdf01000!imp_WdfCommonBufferCreateWithConfig`,
@@ -357,16 +357,36 @@ sharpens this into two concrete, still-untested cold-boot suspects:
 sequence **by construction** (INIT_1-less, upload-less). If either is the true cold bring-up, our driver is
 missing it. → the cold-boot capture plan (§5f) is the next test, ahead of the sibling audit.
 
-## 5f. Open thread — cold-boot (physically power-cycled) capture `[PLANNED]`
+## 5f. Cold-boot (physically power-cycled) capture — RUN (July 3 2026), negative on two of three surfaces `[TEST]`
 
-The one software-only, non-excluded lead the warm-device caveat opens: capture the vendor's init from a
-**genuinely cold** device (physical TB replug — there is no function-level reset to fake it, config space
-reports `FLReset-`), and diff against the warm baseline. Run it with **both** instruments at once: the vfio
-MMIO trace (device-facing FCP: catches INIT_1 `0x0` / REBOOT `0x3`) **and** WinDbg with the §5e DMA
-breakpoints now dumping buffer **contents** (`db`) — because a firmware/FPGA stage would land in a DMA
-buffer the vfio trace is blind to, and on a warm device those buffers read back zero. Full procedure:
-`clarett-windbg-plan.md` → "Cold-boot capture". If a cold-only INIT_1 or firmware push appears, prepend it
-in `clarett_arm_device` and re-test the manifestation wall on a freshly power-cycled device.
+The warm-device caveat's lead, pursued: power-cycle the **2Pre** (physical TB replug — no function-level
+reset to fake it, config space `FLReset-`; a VM reboot stays warm) and diff cold vs warm on both instruments.
+**Note: the §5e WinDbg device was also the 2Pre** (warm) — so this is a same-device cold-vs-warm comparison,
+not cross-model.
+
+- **vfio mailbox trace `[TEST]` — NEGATIVE.** `captures/2pre_cold_boot.log` (cold) vs `captures/2pre_boot.log`
+  (warm): **no `INIT_1` (`0x0`), no `REBOOT` (`0x3`), no firmware-sized SET_DATA burst** — and identical
+  `CONFIG_PUSH` (42), `SET_DATA` (9), `GET_DATA` (13), `SET_MIX` (16), `SET_MUX` (3) counts. The missing
+  `INIT_1` I flagged is absent **cold and warm** → it is *not* a cold-only step we skip; the Clarett TB flow
+  simply doesn't use it. `clarett_arm_device` is **not** missing a cold-only mailbox command. (Only diff: a
+  few lightweight query/enable opcodes appear ~2× cold — an extra enumerate pass, not a new sequence.)
+- **WinDbg DMA-allocation surface `[TEST]` — NEGATIVE.** Cold FocusritePCIe init DMA footprint =
+  **2×{16 KB common buffer + 2 MB MDL} + 1×4 KB common buffer, cached** — **identical to the §5e warm 2Pre**,
+  no extra buffer, no firmware-sized allocation. **Siblings closed:** `SwRoot`/`Audio`/`Midi` were all loaded
+  yet allocated **zero** DMA buffers — only `FocusritePCIe` does DMA (the unverified §5e guess, now verified).
+  Capture method that finally worked: arm the MDL/common-buffer bps at the boot break where **FocusritePCIe
+  is loaded but `FocusritePcieAudio`/`Midi` are not yet** (= before `PrepareHardware`, past the `BgpFw` boot-
+  graphics flood that drowns a bp armed at the uptime-0 break). `sxe ld:` never halted (with or without `.sys`).
+- **WinDbg DMA-*contents* surface — STILL OPEN (one sub-task).** This pass logged allocations, not contents;
+  the two 2 MB MDL `MappedVA`s weren't recorded, so they weren't `db`'d late. §5e's warm `db` showed both
+  zero, but near-allocation timing makes "zero" possibly just "not filled yet." **Next: one more cold pass
+  that records the MDL pointers and `db`s them at the desktop (post-init).** EXACT runbook in
+  `clarett-windbg-plan.md` → "Cold contents pass — EXACT runbook". If both read zero post-init on cold (with
+  §5's RAM scan finding no bitstream resident and this pass's no-extra-buffer result), firmware-over-DMA is
+  closed; if nonzero, first real lead.
+
+**Net:** the cold-boot lead is closed on the mailbox and DMA-allocation surfaces (same-device cold==warm,
+siblings do no DMA); only the late MDL-contents `db` remains, and prior evidence points to it also being null.
 
 ---
 

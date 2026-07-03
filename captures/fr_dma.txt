@@ -1,0 +1,112 @@
+Opened log file 'C:\Users\Public\fr_dma.log'
+kd> bp nt!MmAllocatePagesForMdlEx ".if (@r9 >= 0x10000) { .printf \"\\nMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); } .else {}; gc"
+bp nt!MmAllocatePagesForMdlEx ".if (@r9 >= 0x10000) { .printf \"\\nMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); } .else {}; gc"
+kd> bp Wdf01000!imp_WdfCommonBufferCreateWithConfig ".printf \"\\nCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+bp Wdf01000!imp_WdfCommonBufferCreateWithConfig ".printf \"\\nCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+kd> bl
+bl
+     0 e Disable Clear  fffff803`581547f0     0001 (0001) nt!MmAllocatePagesForMdlEx ".if (@r9 >= 0x10000) { .printf \"\\nMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); } .else {}; gc"
+     1 e Disable Clear  fffff803`5ade0b50  [minkernel\wdf\framework\kmdf\src\dma\base\fxcommonbufferapi.cpp @ 152]     0001 (0001) Wdf01000!imp_WdfCommonBufferCreateWithConfig ".printf \"\\nCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+
+kd> g
+g
+
+CB r8=0000000000001000 r9=ffffce0963f693b8 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=0000000000001000 r9=ffffce0963f693b8 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=0000000000001000 r9=ffffce0963f693b8 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=0000000000001000 r9=ffffce0963f693b8 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=0000000000001000 r9=ffffce0963f693b8 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=Unable to load image FocusritePCIe.sys, Win32 error 0n2
+0000000000004000 r9=ffffce0963eac570 Browse module
+Set bu breakpoint
+
+
+MDL Total=0000000000200000 Cache=1 Browse module
+Set bu breakpoint
+
+
+CB r8=0000000000004000 r9=ffffce0963eac570 Browse module
+Set bu breakpoint
+
+
+MDL Total=0000000000200000 Cache=1 Browse module
+Set bu breakpoint
+
+
+CB r8=0000000000001000 r9=ffffce0963eac2b0 Browse module
+Set bu breakpoint
+
+
+CB r8=0000000000001000 r9=ffffce0963f77218 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+CB r8=0000000000001000 r9=ffffce0963f77218 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+nt!DebugService2+0x5:
+fffff803`58206fd5 cc              int     3
+kd> lm m FocusriteP*
+lm m FocusriteP*
+Browse full module list
+start             end                 module name
+fffff803`5dda0000 fffff803`5ddbb000   FocusritePCIe   (no symbols)           
+fffff803`5ef70000 fffff803`5ef8c000   FocusritePcieAudio   (deferred)             
+fffff803`5ef90000 fffff803`5ef9f000   FocusritePcieMidi   (deferred)             
+fffff803`5f5d0000 fffff803`5f5ef000   FocusritePCIeSwRoot   (deferred)             
+
+Unable to enumerate user-mode unloaded modules, Win32 error 0n30
+kd> g
+g
+
+CB r8=0000000000001000 r9=ffffce0963f7e968 Browse module
+Set bu breakpoint
+
+(fffff803`5dc86b3c)   USBXHCI!DmaEnabler_AllocateCommonBufferPage+0x9f   |  (fffff803`5dc86c88)   USBXHCI!WPP_RECORDER_SF_q_guid_Ld
+
+MDL Total=0000000000033000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff803`5819be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff803`5819bffc)   nt!GxpBitsToBytes
+Break instruction exception - code 80000003 (first chance)
+*******************************************************************************
+*                                                                             *
+*   You are seeing this message because you pressed either                    *
+*       CTRL+C (if you run console kernel debugger) or,                       *
+*       CTRL+BREAK (if you run GUI kernel debugger),                          *
+*   on your debugger machine's keyboard.                                      *
+*                                                                             *
+*                   THIS IS NOT A BUG OR A SYSTEM CRASH                       *
+*                                                                             *
+* If you did not intend to break into the debugger, press the "g" key, then   *
+* press the "Enter" key now.  This message might immediately reappear.  If it *
+* does, press "g" and "Enter" again.                                          *
+*                                                                             *
+*******************************************************************************
+nt!DbgBreakPointWithStatus:
+fffff803`58206f80 cc              int     3
+kd> .logclose
+.logclose
+Closing open log file C:\Users\Public\fr_dma.log

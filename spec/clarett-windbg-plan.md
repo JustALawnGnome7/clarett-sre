@@ -1,4 +1,4 @@
-# Clarett — WinDbg capture of the Windows driver's init DMA (RUN warm — wall confirmed below-driver; cold-boot capture OPEN)
+# Clarett — WinDbg capture of the Windows driver's init DMA (RUN warm + cold; wall below-driver; only the late MDL-contents db remains)
 
 > **Scope:** a method to capture the **off-wire/below-BAR** DMA setup the *working* Windows Focusrite
 > kernel driver does at device init — the one thing the macOS DTrace attempt could never get (it lost the
@@ -105,7 +105,99 @@ gives a cold device.
 **data** (allocations/addresses/attributes/**bytes**). Dumping buffer contents is data observation (what a bus
 analyzer would see); **do not disassemble or step `FocusritePCIe.sys`.**
 
-## Follow-up (planned, NOT yet done) — audit the three sibling drivers
+## Cold contents pass — EXACT runbook (do this next; everything else in this file is context)
+
+Status after July 3 2026: the cold mailbox trace and cold DMA-**allocation** capture are DONE and negative
+(manifestation-wall §5f) — same-device (2Pre) cold==warm, no extra buffer, siblings do no DMA. The **one**
+remaining sub-task: `db` the two 2 MB sample MDLs **post-init** on a cold device (last pass didn't record
+their addresses). This runbook is turnkey — run it verbatim.
+
+**What worked / what didn't (so you don't relearn it):**
+- `sxe ld:FocusritePCIe` **never halts** (tried with and without `.sys`). Do not rely on it.
+- A live `bp nt!MmAllocatePagesForMdlEx` armed at the **uptime-0 break floods** over serial from
+  `nt!BgpFwAllocateMemory` (boot graphics) and never reaches the driver. **Arm late**, past boot graphics.
+- The reliable arming point is the boot break where **`FocusritePCIe` is loaded but `FocusritePcieAudio`/
+  `FocusritePcieMidi` are NOT** — that's after boot graphics and before `PrepareHardware` (Audio/Midi are
+  upper drivers that load only after FocusritePCIe starts its device). If Audio/Midi are already present,
+  `PrepareHardware` already ran — reboot.
+- `MmAllocatePagesForMdlEx` returns a **PMDL** in `rax`; its `MappedSystemVa` (MDL+0x18) may be **null at
+  allocation** (mapped later). So **record the MDL pointer** and read/`db` the VA **at the desktop**.
+
+### 0. Cold device + instruments
+1. VM off. **Physically power-cycle the 2Pre** (unplug TB ~10 s, replug; `boltctl authorize` on the host if
+   it doesn't reattach). Only this is cold; a VM reboot is warm.
+2. Host: `sudo tail -F /var/log/libvirt/qemu/<domain>-custom.log` → save to `captures/2pre_cold_boot2.log`
+   (parallel re-confirm of no `INIT_1`/`REBOOT`).
+3. Debugger VM (`Windows10-WinDbg`) up and listening; then start the target VM.
+
+### 1. At the initial break (`nt!DebugService2`, uptime 0)
+```
+.sympath srv*C:\symbols*https://msdl.microsoft.com/download/symbols
+.reload
+.logopen C:\Users\Public\fr_cold_contents.log
+```
+Do **not** set the MDL bp yet.
+
+### 2. Reach the arming point
+```
+g
+```
+Then Ctrl+Break (or wait for a natural break) and check — repeat until the condition is met:
+```
+lm m Focusrite*
+```
+- `FocusritePCIe` absent → `g`, check again later.
+- `FocusritePCIe` present **and** `FocusritePcieAudio`/`Midi` absent → **arming point**, go to step 3.
+- `FocusritePcieAudio`/`Midi` already present → too late; reboot (or use the fallback below).
+
+### 3. Arm the 2 MB MDL breakpoint (records ptr + VA), then run
+```
+lm m FocusritePCIe
+r @$t0 = <Start>
+r @$t1 = <End>
+bp nt!MmAllocatePagesForMdlEx ".if ((@r9 == 0x200000) & (poi(@rsp) >= @$t0) & (poi(@rsp) < @$t1)) { gu; .printf \"\\n>>> FR 2MB MDL  ptr=%p  MappedVA=%p\\n\", @rax, poi(@rax+0x18); g } .else { gc }"
+bl
+g
+```
+Let it run to the **login screen / desktop**. Two `>>> FR 2MB MDL ptr=… MappedVA=…` lines print. **Record both `ptr=` values.**
+
+### 4. Dump contents LATE (post-init) — the actual test
+Using each recorded MDL pointer (VA may have been null at alloc, so re-read it now):
+```
+dt nt!_MDL <ptr1>            ; note MappedSystemVa
+db <MappedSystemVa1> L200
+dt nt!_MDL <ptr2>
+db <MappedSystemVa2> L200
+```
+Read the bytes: **all-zero → no firmware.** Nonzero → check for Xilinx magic `00 09 0f f0` / design name
+`fpNNNNNN_tb_top` (refs local-only in `vendor-reference/Firmware/`, **never commit**) → firmware-over-DMA
+found.
+
+### 5. Save
+```
+.logclose
+```
+Copy `C:\Users\Public\fr_cold_contents.log` → `captures/`, and keep the host vfio trace. Update §5f with the
+`db` result.
+
+### Fallback if you keep overshooting (Audio/Midi already loaded at every break)
+At the initial break, arm the low-volume PnP dispatcher (past boot graphics, not a hot path):
+```
+bp Wdf01000!FxPnpDevicePrepareHardware::InvokeClient
+g
+```
+It halts at each device's `PrepareHardware`. At each halt, `lm m FocusritePCIe`; once loaded, do step 3
+(`@$t0/@$t1` + the MDL bp), `bc` the InvokeClient bp, `g`.
+
+## Follow-up (superseded July 3 2026) — sibling-driver audit
+
+**Largely CLOSED by the July 3 cold run** (manifestation-wall §5f): with `FocusritePCIeSwRoot`,
+`FocusritePcieAudio`, and `FocusritePcieMidi` all loaded, **none allocated any DMA buffer** — only
+`FocusritePCIe` does DMA. So the sibling "hidden DMA surface" worry is resolved by observation. The only
+thing not done is a formal IAT dump per sibling; optional now, since the behavioural result (zero DMA
+allocations) is stronger than the imports list. Original per-sibling steps retained below for reference.
+
+## Follow-up (original steps, for reference) — audit the three sibling drivers
 
 The July 2 run was **scoped to `FocusritePCIe.sys`** (broke at *its* image load; MDL breakpoint filtered to
 *its* module range). The three siblings — **`FocusritePCIeSwRoot.sys`**, **`FocusritePcieAudio.sys`**,

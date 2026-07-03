@@ -1,0 +1,654 @@
+Opened log file 'C:\Users\Public\fr_cold.log'
+kd> bc *
+bc *
+kd> bp nt!MmAllocatePagesForMdlEx ".printf \"FRMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); gc"
+bp nt!MmAllocatePagesForMdlEx ".printf \"FRMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); gc"
+kd> bu Wdf01000!imp_WdfCommonBufferCreateWithConfig ".printf \"FRCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+bu Wdf01000!imp_WdfCommonBufferCreateWithConfig ".printf \"FRCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+kd> bl
+bl
+     0 e Disable Clear  fffff801`549547f0     0001 (0001) nt!MmAllocatePagesForMdlEx ".printf \"FRMDL Total=%p Cache=%d \", @r9, dwo(@rsp+0x28); ln poi(@rsp); gc"
+     1 e Disable Clear u                      0001 (0001) (Wdf01000!imp_WdfCommonBufferCreateWithConfig ) ".printf \"FRCB r8=%p r9=%p \", @r8, @r9; ln poi(@rsp); gc"
+
+kd> g
+g
+FRMDL Total=000000000001f000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000009000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=000000000000a000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=000000000000d000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=000000000000c000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000003000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000005000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000003000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000006000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000009000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000003000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000005000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000008000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=000000000000a000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=000000000001c000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000033000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000006000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+FRMDL Total=0000000000002000 Cache=1 Browse module
+Set bu breakpoint
+
+(fffff801`5499be84)   nt!BgpFwAllocateMemory+0x12f   |  (fffff801`5499bffc)   nt!GxpBitsToBytes
+Break instruction exception - code 80000003 (first chance)
+*******************************************************************************
+*                                                                             *
+*   You are seeing this message because you pressed either                    *
+*       CTRL+C (if you run console kernel debugger) or,                       *
+*       CTRL+BREAK (if you run GUI kernel debugger),                          *
+*   on your debugger machine's keyboard.                                      *
+*                                                                             *
+*                   THIS IS NOT A BUG OR A SYSTEM CRASH                       *
+*                                                                             *
+* If you did not intend to break into the debugger, press the "g" key, then   *
+* press the "Enter" key now.  This message might immediately reappear.  If it *
+* does, press "g" and "Enter" again.                                          *
+*                                                                             *
+*******************************************************************************
+nt!DbgBreakPointWithStatus:
+fffff801`54a06f80 cc              int     3
+Cannot read thread stack from thread ffffcc87`0729b040, NTSTATUS 0xC000013A
+kd> bc *
+bc *
+kd> g
+g
+Break instruction exception - code 80000003 (first chance)
+*******************************************************************************
+*                                                                             *
+*   You are seeing this message because you pressed either                    *
+*       CTRL+C (if you run console kernel debugger) or,                       *
+*       CTRL+BREAK (if you run GUI kernel debugger),                          *
+*   on your debugger machine's keyboard.                                      *
+*                                                                             *
+*                   THIS IS NOT A BUG OR A SYSTEM CRASH                       *
+*                                                                             *
+* If you did not intend to break into the debugger, press the "g" key, then   *
+* press the "Enter" key now.  This message might immediately reappear.  If it *
+* does, press "g" and "Enter" again.                                          *
+*                                                                             *
+*******************************************************************************
+nt!DbgBreakPointWithStatus:
+fffff801`54a06f80 cc              int     3
+kd> bc *
+bc *
+kd> g
+g
+KDTARGET: Refreshing KD connection
+Break instruction exception - code 80000003 (first chance)
+*******************************************************************************
+*                                                                             *
+*   You are seeing this message because you pressed either                    *
+*       CTRL+C (if you run console kernel debugger) or,                       *
+*       CTRL+BREAK (if you run GUI kernel debugger),                          *
+*   on your debugger machine's keyboard.                                      *
+*                                                                             *
+*                   THIS IS NOT A BUG OR A SYSTEM CRASH                       *
+*                                                                             *
+* If you did not intend to break into the debugger, press the "g" key, then   *
+* press the "Enter" key now.  This message might immediately reappear.  If it *
+* does, press "g" and "Enter" again.                                          *
+*                                                                             *
+*******************************************************************************
+nt!DbgBreakPointWithStatus:
+fffff801`54a06f80 cc              int     3
+kd> .logclose
+.logclose
+Closing open log file C:\Users\Public\fr_cold.log
