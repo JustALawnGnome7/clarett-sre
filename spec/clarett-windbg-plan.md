@@ -1,10 +1,38 @@
-# Clarett — WinDbg capture of the Windows driver's init DMA (untried lead)
+# Clarett — WinDbg capture of the Windows driver's init DMA (RUN — anticlimax, wall confirmed below-driver)
 
 > **Scope:** a method to capture the **off-wire/below-BAR** DMA setup the *working* Windows Focusrite
 > kernel driver does at device init — the one thing the macOS DTrace attempt could never get (it lost the
 > timing race and the kext was stripped). Kernel-debug the Windows guest (which already runs FC under vfio
 > passthrough) and breakpoint the **symbolicated Windows DMA APIs** the driver calls, attributing to the
-> Focusrite `.sys` by module range. **Status: planned, not yet run.**
+> Focusrite `.sys` by module range. **Status: RUN (July 2 2026). Outcome: the vendor's driver-level DMA is
+> equivalent to ours; the wall is confirmed below-driver.** Full write-up: `clarett-manifestation-wall.md` §5e.
+
+## Result (July 2 2026) — RUN, clean-room discipline held
+
+Executed via serial KD (KDNET failed on QEMU's e1000e, `0xC0000182`; fell back to `bcdedit /dbgsettings
+serial`, COM2 over a host TCP socket to a second `Windows10-WinDbg` VM). Breakpoints hit **only symbolicated
+MS APIs**; `FocusritePCIe.sys` was never disassembled/stepped.
+
+- **`FocusritePCIe.sys` is KMDF.** IAT imports `MmAllocatePagesForMdlEx`, `MmMapLockedPagesSpecifyCache`,
+  `HalPutDmaAdapter`, `MmMapIoSpace`; common buffers go through the WDF table (`WdfCommonBufferCreateWithConfig`).
+- **Complete init DMA footprint** (at `EvtDevicePrepareHardware`): two stream blocks, each a **16 KB common
+  buffer (SG descriptor table) + 2 MB scattered MDL (sample buffer)** (`+0x8cac`/`+0x8dac`), plus one
+  standalone **4 KB common buffer** (`+0xa6ea`) = the FCP response buffer. That's the entire footprint.
+- **Attributes match ours.** `MmAllocatePagesForMdlEx`: `Low=0`, `High=0xFFFFFFFFFFFFFFFF` (no ceiling),
+  `Cache=MmCached`; common buffers `CacheEnabled=1`. On x86 a cached common buffer *is* coherent = Linux
+  `dma_alloc_coherent`. Same address range, same cache/coherency, same descriptor-table+scatter strategy.
+- **Nothing extra reaches the device at init.** Cross-checked with the vfio trace: only `0x410/0x414` is
+  programmed at init (`0x210/0x310` engine-arm is stream-start, ~25 s later); no DMA pointer is pushed via
+  the mailbox; our `clarett_init_seq.h` replay carries no baked addresses.
+
+`[CONCLUSION]` The plan's **"anticlimax" branch** (Phase 3): the vendor driver does nothing extra with DMA at
+the driver level. WinDbg got the timing/symbols/module-ranges the raced-out, stripped-kext macOS attempt
+never could, and **definitively** closes the "vendor sets up DMA we don't" hypothesis. Differentiator is
+below the driver (transport/link/device-init handshake), invisible to all host-side software tracing.
+
+---
+
+## Original plan (as executed below)
 
 ## Why this can get what DTrace couldn't
 

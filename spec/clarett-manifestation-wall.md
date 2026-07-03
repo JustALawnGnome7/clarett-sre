@@ -274,6 +274,56 @@ boot (DMA-alloc / `appendBytes` / `iovmMapMemory` probes) to catch the kext's co
 cable-replug (the only fallback) already produced nothing attributable. **Both cold and warm attach are
 exhausted → the DTrace avenue is definitively closed.**
 
+## 5e. Fourth-platform capture — WinDbg of the working Windows driver's init DMA `[TEST]` (July 2 2026)
+
+The one lead DTrace couldn't reach (`clarett-windbg-plan.md`): kernel-debug the **working** Windows driver and
+watch the DMA it builds at init. Setup: the FC guest (`Windows10`) with Secure Boot off + serial KD
+(`bcdedit /dbgsettings serial`, COM2 bridged to a second `Windows10-WinDbg` VM over a host TCP socket —
+KDNET failed on QEMU's e1000e, `0xC0000182`). **Clean-room discipline held**: breakpoints only on
+**symbolicated Microsoft APIs** (`nt!MmAllocatePagesForMdlEx`, `Wdf01000!imp_WdfCommonBufferCreateWithConfig`,
+`nt!HalAllocateCommonBuffer`), attributed to Focusrite by **module range** and **caller frame**; the
+`FocusritePCIe.sys` code was never disassembled or stepped — only the interface data it hands the OS.
+
+**Driver identity + DMA surface.** `FocusritePCIe.sys` (the hardware/PCIe function driver; siblings
+`FocusritePcieAudio/Midi/SwRoot` are upper/enumerator drivers with no bearing on the control wall) is
+**KMDF**. Its IAT imports the DMA-relevant `nt!MmAllocatePagesForMdlEx`, `nt!MmMapLockedPagesSpecifyCache`,
+`nt!HalPutDmaAdapter` (it holds a WDF DMA adapter), and `nt!MmMapIoSpace` (BAR0). Common-buffer allocs go
+through the WDF function table (invisible in the IAT), caught one level down at the HAL.
+
+**Complete init DMA inventory** (breakpointed at `EvtDevicePrepareHardware`, via
+`Wdf01000!FxPnpDevicePrepareHardware::InvokeClient`, filtered to the FocusritePCIe module range):
+
+| Call site | Allocation | Attributes | Role |
+|---|---|---|---|
+| `+0x8cac` | 16 KB common buffer (`WdfCommonBufferCreateWithConfig`) + 2 MB MDL (`MmAllocatePagesForMdlEx`) | cached; MDL scattered | stream block 0 (TX): SG descriptor table + sample buffer |
+| `+0x8dac` | 16 KB common buffer + 2 MB MDL | cached; MDL scattered | stream block 1 (RX): descriptor table + sample buffer |
+| `+0xa6ea` | 4 KB common buffer | cached | standalone → FCP response/mailbox buffer (`0x410`) |
+
+`MmAllocatePagesForMdlEx` args: `Low=0`, **`High=0xFFFFFFFFFFFFFFFF`** (no DMA address ceiling — buffers
+floated to ~10 GB), `SkipBytes=0x1000`, `Total=0x200000`, **`Cache=MmCached`**, `Flags=0x20`; the 2 MB pages
+are physically **scattered** (MDL PFN array) and **zeroed at idle** (empty audio space). Common buffers come
+back `CacheEnabled=1` (cached).
+
+`[KEY]` **None of this differs from our driver.** On x86/x64 PCIe DMA is hardware cache-coherent, so a
+*cached* common buffer **is** a coherent buffer — identical to what Linux `dma_alloc_coherent` returns on
+x86; `High=MAX` = our 64-bit DMA mask. Attribute for attribute (address range, cache/coherency, contiguity
+strategy) the vendor's init DMA equals ours. Cross-checked against the vfio trace, the device-facing init is
+also identical: **only `0x410/0x414` (response buffer) is programmed at init** — the `0x210/0x310` engine
+arm is **stream-start**, ~25 s later (`8prex_boot_to_stream_with_config.log`: `0x410`@`54:30.35`, arm
+@`55:12.91`), *not* device init. And the vendor pushes **no DMA pointer through the mailbox** at init (no
+buffer address appears in the `0x80xx` mailbox-data writes), so our replayed `clarett_init_seq.h` (opcodes
+only, **no baked addresses**) carries nothing stale.
+
+`[CONCLUSION]` WinDbg — with the debugger timing control, Microsoft symbols, and visible module ranges the
+stripped/redacted macOS kext denied DTrace — **directly disproves the "the vendor sets up DMA we don't"
+hypothesis on all three axes**: no extra device-facing buffer at init, no mailbox pointer-push, and
+allocation attributes equivalent to ours. The vendor driver's **driver-level DMA construction is equivalent
+to `snd-clarett`'s.** The differentiator therefore sits **below the driver** — in the Thunderbolt/PCIe
+transport, link layer, or a device-init handshake that **no** host-side software trace (Windows/vfio MMIO,
+macOS DTrace, or now Windows kernel debugging) can observe. This is the strongest closure available by
+software means; the remaining reachable surfaces are all exhausted or excluded (bus analyzer ruled out,
+kext/`.sys` disassembly clean-room no-go).
+
 ---
 
 ## 6. Reproduction (driver A/B params)

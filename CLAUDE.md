@@ -30,7 +30,7 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
   vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
   replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
-- **Method caveat + status (three-platform-confirmed wall; one untried lead open):** the `x-no-mmap` BAR trace is
+- **Method caveat + status (wall confirmed below-driver on four independent methods; all software surfaces exhausted):** the `x-no-mmap` BAR trace is
   **blind to sample DMA** and to bus-master DMA generally — both planes were RE'd by triangulating BAR
   setup registers (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
   --async`). That same blindness is where both walls hide. **Every reachable observation method is now
@@ -43,16 +43,20 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
     stack frames), and its user-space, runtime-DMA, and boot-time captures are all exhausted
     (`spec/clarett-manifestation-wall.md §5d`, `spec/clarett-macos-dtrace-plan.md`).
   The differentiator sits **below the driver**, in off-wire transport/IOMMU-mapping semantics no software
-  trace has yet reached. **One untried lead reopens this:** kernel-debug the *working Windows* driver with
-  **WinDbg** — breakpoint the symbolicated Windows/HAL/WDF DMA APIs it calls (`HalAllocateCommonBuffer`
-  &c.), attributing to the Focusrite `.sys` by **module range**, to enumerate its init DMA allocations +
-  contents. WinDbg could capture what the macOS DTrace attempt couldn't (debugger timing control +
-  symbolicated hooks + visible module ranges), staying clean-room via strict **data observation** — never
-  disassembling/reimplementing the `.sys` (`spec/clarett-windbg-plan.md`). It is **not** one of the
-  excluded paths. Still excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the user**),
-  **disassembling the vendor driver** (**clean-room no-go**), host-env work, more Windows/vfio MMIO
-  captures, and driver-revive experiments — all out of scope or done/negative. (Cheap free precursor to
-  WinDbg: `pmemsave` the buffers whose physical address the vfio trace already shows at `0x410/0x414`.)
+  trace has reached. **The last reachable lead — WinDbg kernel-debug of the working Windows driver — is now
+  RUN (July 2 2026) and confirms the anticlimax** (`spec/clarett-windbg-plan.md`, `manifestation-wall.md`
+  §5e): breakpointing the symbolicated MS DMA APIs `FocusritePCIe.sys` calls (`MmAllocatePagesForMdlEx`,
+  `WdfCommonBufferCreateWithConfig`, `HalAllocateCommonBuffer`), attributed by **module range** (never
+  disassembling the `.sys`), showed its **entire** init DMA footprint = two {16 KB SG-descriptor common
+  buffer + 2 MB scattered sample MDL} stream blocks + one 4 KB response common buffer, all **cached-coherent,
+  64-bit, no address ceiling** — attribute-for-attribute **equivalent to our driver's**
+  `dma_alloc_coherent`/descriptor layout, with **nothing extra programmed to the device at init** (only
+  `0x410`; the `0x210/0x310` engine arm is stream-time) and **no mailbox pointer-push**. So the vendor's
+  driver-level DMA construction equals ours; the wall is **confirmed below the driver** by a fourth
+  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **All reachable software
+  surfaces are now exhausted.** Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the
+  user**), **disassembling the vendor driver/kext** (**clean-room no-go**), host-env work, more Windows/vfio
+  MMIO captures, and driver-revive experiments — all out of scope or done/negative.
 
 ## Method (how the RE is done)
 
@@ -139,8 +143,8 @@ spec/clarett-manifestation-wall.md  Proven boundary: control writes complete but
                                     every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
 spec/clarett-macos-dtrace-plan.md   DTrace of the working macOS driver (device runs on the M1): RUN and
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
-spec/clarett-windbg-plan.md         UNTRIED lead: WinDbg the working Windows driver's init DMA (symbolicated
-                                    Windows APIs, module-range attribution) — could catch what DTrace couldn't.
+spec/clarett-windbg-plan.md         RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
+                                    driver-level DMA is attribute-equivalent to ours; wall confirmed below-driver.
 driver/                               Out-of-tree module `snd-clarett` (control plane + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_mixer.c (kcontrols), clarett_pcm.c (capture PCM, enable_pcm=1), Makefile, README.md
