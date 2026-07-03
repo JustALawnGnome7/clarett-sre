@@ -110,7 +110,10 @@ XML, which lists both as version-gated **upgrade** segments:
 So FC loads firmware only to *upgrade* on a version mismatch; the device self-boots App + FPGA from
 flash (it reports an FPGA version at boot). No firmware crosses the bus in a normal session.
 `[CONCLUSION]` **The off-wire differentiator is not a firmware/bitstream upload** — and the clean-room
-"can we source the blob" concern is moot (no blob is needed at runtime).
+"can we source the blob" concern is moot (no blob is needed at runtime). `[CAVEAT — warm]` this RAM scan
+was taken on a **warm** guest (device never physically power-cycled); a firmware stage that happens **only
+once per physical power cycle** could have been freed from RAM before the dump, and would move by DMA
+(invisible to vfio). The cold-boot capture (§5f) closes this residual hole.
 
 ## 5a. Second-angle confirmation — GET_DATA returns empty `[TEST]` (June 28 2026)
 
@@ -330,6 +333,40 @@ transport, link layer, or a device-init handshake that **no** host-side software
 macOS DTrace, or now Windows kernel debugging) can observe. This is the strongest closure available by
 software means; the remaining reachable surfaces are all exhausted or excluded (bus analyzer ruled out,
 kext/`.sys` disassembly clean-room no-go).
+
+`[CAVEAT — warm device]` **This run, and every vfio capture it cross-checks against, saw a *warm* device.**
+A libvirt/VM reboot does **not** cut Thunderbolt bus power, so unless the TB cable was physically replugged
+the Clarett stayed **continuously armed** across all captures. So the §5e inventory is the vendor
+re-initializing an **already-armed** device — which is state-*independent* for the DMA *allocations*
+(driver-side; the conclusion above holds), but **blind to anything the vendor does only once per physical
+power cycle.** Re-reading the boot captures (`clarett_full_init_mute.log`, `8prex_boot_to_stream_with_config.log`)
+sharpens this into two concrete, still-untested cold-boot suspects:
+- **INIT_1 (opcode `0x0`) never appears.** Both captures show **INIT_2 (`0x000002`) but no INIT_1** — the
+  scarlett2 first-contact handshake's *first* step is absent. The decoder surfaces zero-execute opcodes
+  (e.g. `0x000001` is listed), so this is a real gap, not a parse artifact. Consistent with first-contact
+  having happened at an untraced earlier cold boot.
+- **No REBOOT (`0x3`) and no firmware/FPGA upload.** SET_DATA count is ~10–11, largest = the known 8 KB
+  config write-back; an FPGA bitstream (`fpNNNNNN_tb_top.bit`, hundreds of KB) would be a long chunked-write
+  burst that is nowhere present. If the vendor stages the FPGA once per power cycle (via DMA, not the
+  mailbox — invisible to vfio), a warm capture cannot see it. **This also softens §5's firmware-upload
+  disproof**, whose RAM scan was likewise on a warm guest (a cold-boot upload's bytes may already be freed).
+- **`seq=0` is not a cold marker.** Both captures start at `seq=0`, but `seq` is a *driver*-side counter
+  reset per driver load / VM reboot — it cannot distinguish cold from warm.
+
+`clarett_arm_device` is generated from the warm `clarett_full_init_mute.log`, so it reproduces the warm
+sequence **by construction** (INIT_1-less, upload-less). If either is the true cold bring-up, our driver is
+missing it. → the cold-boot capture plan (§5f) is the next test, ahead of the sibling audit.
+
+## 5f. Open thread — cold-boot (physically power-cycled) capture `[PLANNED]`
+
+The one software-only, non-excluded lead the warm-device caveat opens: capture the vendor's init from a
+**genuinely cold** device (physical TB replug — there is no function-level reset to fake it, config space
+reports `FLReset-`), and diff against the warm baseline. Run it with **both** instruments at once: the vfio
+MMIO trace (device-facing FCP: catches INIT_1 `0x0` / REBOOT `0x3`) **and** WinDbg with the §5e DMA
+breakpoints now dumping buffer **contents** (`db`) — because a firmware/FPGA stage would land in a DMA
+buffer the vfio trace is blind to, and on a warm device those buffers read back zero. Full procedure:
+`clarett-windbg-plan.md` → "Cold-boot capture". If a cold-only INIT_1 or firmware push appears, prepend it
+in `clarett_arm_device` and re-test the manifestation wall on a freshly power-cycled device.
 
 ---
 

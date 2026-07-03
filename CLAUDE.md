@@ -30,7 +30,7 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
   vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
   replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
-- **Method caveat + status (wall confirmed below-driver on four independent methods; all software surfaces exhausted):** the `x-no-mmap` BAR trace is
+- **Method caveat + status (wall confirmed below-driver on four independent methods — all on a WARM device; a cold-boot capture is the one open software lead):** the `x-no-mmap` BAR trace is
   **blind to sample DMA** and to bus-master DMA generally — both planes were RE'd by triangulating BAR
   setup registers (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
   --async`). That same blindness is where both walls hide. **Every reachable observation method is now
@@ -53,10 +53,18 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   `dma_alloc_coherent`/descriptor layout, with **nothing extra programmed to the device at init** (only
   `0x410`; the `0x210/0x310` engine arm is stream-time) and **no mailbox pointer-push**. So the vendor's
   driver-level DMA construction equals ours; the wall is **confirmed below the driver** by a fourth
-  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **All reachable software
-  surfaces are now exhausted.** Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the
-  user**), **disassembling the vendor driver/kext** (**clean-room no-go**), host-env work, more Windows/vfio
-  MMIO captures, and driver-revive experiments — all out of scope or done/negative.
+  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **One state-dependent software
+  lead remains OPEN, though:** the WinDbg run and every vfio capture saw a **warm** device — a VM reboot keeps
+  Thunderbolt power, so unless the TB cable was physically replugged the Clarett stayed armed continuously.
+  Re-reading the boot captures shows **INIT_1 (opcode `0x0`) never appears** (only INIT_2 `0x2`), and there is
+  **no REBOOT (`0x3`) and no firmware/FPGA-sized write burst** — so a **once-per-power-cycle** bring-up (a
+  cold INIT_1, or an FPGA stage moved by DMA, invisible to vfio) could be missing from `clarett_arm_device`,
+  which is generated from the warm capture. Next test: a **cold-boot capture** (physical TB replug — config
+  space `FLReset-`, no software reset) running vfio + WinDbg-with-`db`-contents in parallel
+  (`spec/clarett-windbg-plan.md` "Cold-boot capture", manifestation-wall §5f), **ahead of the sibling audit**.
+  Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the user**), **disassembling the vendor
+  driver/kext** (**clean-room no-go**), host-env work, more *warm* Windows/vfio MMIO captures, and driver-revive
+  experiments — all out of scope or done/negative.
 
 ## Method (how the RE is done)
 

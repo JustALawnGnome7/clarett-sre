@@ -1,4 +1,4 @@
-# Clarett — WinDbg capture of the Windows driver's init DMA (RUN — anticlimax, wall confirmed below-driver)
+# Clarett — WinDbg capture of the Windows driver's init DMA (RUN warm — wall confirmed below-driver; cold-boot capture OPEN)
 
 > **Scope:** a method to capture the **off-wire/below-BAR** DMA setup the *working* Windows Focusrite
 > kernel driver does at device init — the one thing the macOS DTrace attempt could never get (it lost the
@@ -6,6 +6,9 @@
 > passthrough) and breakpoint the **symbolicated Windows DMA APIs** the driver calls, attributing to the
 > Focusrite `.sys` by module range. **Status: RUN (July 2 2026). Outcome: the vendor's driver-level DMA is
 > equivalent to ours; the wall is confirmed below-driver.** Full write-up: `clarett-manifestation-wall.md` §5e.
+> **Caveat found later:** that run saw a **warm** (never power-cycled) device — a VM reboot keeps TB power, so
+> a once-per-power-cycle bring-up (INIT_1 `0x0`, or a DMA firmware stage) would be invisible. The **cold-boot
+> capture** below (§5f) is now the top open lead, ahead of the sibling audit.
 
 ## Result (July 2 2026) — RUN, clean-room discipline held
 
@@ -29,6 +32,78 @@ MS APIs**; `FocusritePCIe.sys` was never disassembled/stepped.
 the driver level. WinDbg got the timing/symbols/module-ranges the raced-out, stripped-kext macOS attempt
 never could, and **definitively** closes the "vendor sets up DMA we don't" hypothesis. Differentiator is
 below the driver (transport/link/device-init handshake), invisible to all host-side software tracing.
+
+## Cold-boot capture (planned, NOT yet done) — the top open lead
+
+**Why this jumped ahead of the sibling audit.** The July 2 run — and *every* vfio capture it cross-checks
+against — saw a **warm** device: a libvirt/VM reboot does not cut Thunderbolt power, so unless the TB cable
+was physically replugged the Clarett stayed armed continuously, and we captured the vendor re-initializing an
+**already-armed** device. Re-reading the boot captures makes the gap concrete (manifestation-wall §5e caveat):
+**INIT_1 (opcode `0x0`) never appears** (we see INIT_2 `0x2` only — the scarlett2 first-contact step 1 is
+missing), and there is **no REBOOT (`0x3`) and no firmware/FPGA-sized write burst**. `seq=0` is a *driver*-side
+reset, not a cold marker. Our `clarett_arm_device` is generated from the warm capture, so it is INIT_1-less
+and upload-less **by construction** — if either is the true cold bring-up, we don't send it.
+
+**Goal:** capture the vendor's init from a *genuinely cold* device and diff against the warm baseline, to
+either surface a cold-only command/firmware stage (→ add it to `clarett_arm_device` and re-test the wall) or
+close the last state-dependent hole. This is software-only and **not** excluded.
+
+**The only true reset is a physical replug.** Config space reports **`FLReset-`** — no function-level reset
+to trigger from software, and a VM reboot keeps the device powered. So: with the target VM shut down, **unplug
+the Thunderbolt cable, wait ~10 s, replug** (and re-authorize if `boltctl` prompts). That, and only that,
+gives a cold device.
+
+**Run both instruments at once** — they cover different blind spots:
+1. **vfio MMIO trace** (device-facing FCP/mailbox) — catches a cold-only **INIT_1 (`0x0`)** or **REBOOT
+   (`0x3`)**, i.e. anything pushed through the `0x8020` mailbox. This is the cheap half; it may be enough.
+2. **WinDbg** (below-BAR DMA) — catches a **firmware/FPGA stage that moves by DMA, not the mailbox**, which
+   the vfio trace is structurally blind to. On the warm run the two 2 MB sample MDLs read back **all zeros**;
+   on a cold boot a staging buffer could contain the bitstream. So this run's new move is **dumping buffer
+   *contents*, not just attributes.**
+
+### Procedure
+0. **Free the device & arm the trace.** Cold-replug per above. Bring up serial KD to `Windows10-WinDbg` exactly
+   as in the §5e "Result" (KDNET fails on QEMU e1000e → `bcdedit /dbgsettings serial`, COM2 over the host TCP
+   socket). Start the vfio `vfio_region_*` trace on the host in parallel (same libvirt `x-no-mmap` setup as
+   `../CLAUDE.md` "Method").
+1. **Break at the driver's *first* load on the cold device:**
+   ```
+   sxe ld:FocusritePCIe.sys
+   g                       ; boot proceeds; breaks when the image loads
+   lm m FocusritePCIe      ; re-read the KASLR range -> FR_LO / FR_HI (changes every boot)
+   ```
+2. **Arm the same three DMA breakpoints as §5e, filtered to the FocusritePCIe range** (see Phase 2 below for
+   the exact `.if (poi(@rsp) >= FR_LO & poi(@rsp) < FR_HI)` conditional form). Keep `MmAllocatePagesForMdlEx`,
+   `WdfCommonBufferCreateWithConfig`, `HalAllocateCommonBuffer`.
+3. **For every allocation, dump attributes *and contents*** (the contents are the new part):
+   ```
+   gu                      ; run to return; @rax = buffer VA (MDL ptr for MmAlloc...)
+   dt nt!_MDL @rax         ; for MDLs: ByteCount, MappedSystemVa
+   db <MappedSystemVa> L200 ; <-- CONTENTS. On warm boot these were 0; a firmware stage would be nonzero
+   dps @rax+0x30 L8        ; MDL PFN array (physical scatter), for the 2 MB sample buffers
+   g
+   ```
+   Watch specifically for: **an allocation the §5e warm inventory did *not* have** (extra buffer = the prize),
+   or **nonzero contents** in any buffer that was zero warm (candidate firmware/bitstream — check the first
+   bytes against the Xilinx magic `00 09 0f f0` / design name `fpNNNNNN_tb_top`, from the local-only
+   `vendor-reference/Firmware/` refs; **do not commit those refs**).
+4. **From the parallel vfio trace, decode the cold init** and diff opcodes vs the warm baseline:
+   ```
+   python3 tools/fcp_decode.py --brief captures/cold_boot.log | sed -n '/opcode histogram/,$p'
+   ```
+   Compare against `clarett_full_init_mute.log`'s histogram (INIT_2 ×6, CONFIG_PUSH ×122, no INIT_1/REBOOT).
+   **A cold-only `0x0` (INIT_1) or `0x3` (REBOOT), or any new chunked-SET_DATA burst, is the find.**
+
+### Decide
+| Cold capture shows | Action |
+|---|---|
+| INIT_1 (`0x0`) / REBOOT (`0x3`) in the vfio trace, absent warm | prepend it in `clarett_arm_device` **before** the CONFIG_PUSH block; re-test manifestation on a freshly power-cycled device |
+| a DMA buffer with **nonzero** (firmware-looking) contents, or an **extra** allocation vs §5e | that's the once-per-power-cycle stage the warm runs missed → replicate the buffer + its programming; revisit §5's firmware-upload disproof (its RAM scan was warm too) |
+| byte-identical to the warm baseline (same opcodes, same DMA footprint, buffers still zero) | the device-init is genuinely state-independent → the warm §5e conclusion is airtight, and the below-driver localization tightens further |
+
+**Clean-room:** same guardrails as §5e — break only on symbolicated MS APIs, attribute by module range, dump
+**data** (allocations/addresses/attributes/**bytes**). Dumping buffer contents is data observation (what a bus
+analyzer would see); **do not disassemble or step `FocusritePCIe.sys`.**
 
 ## Follow-up (planned, NOT yet done) — audit the three sibling drivers
 
