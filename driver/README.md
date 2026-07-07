@@ -52,7 +52,8 @@ read, and even the dummy serial is the same across models (verified on real 8Pre
 2Pre hardware). So the driver **cannot auto-detect the model** and takes a parameter:
 
 ```sh
-sudo insmod snd-clarett.ko model=2pre     # or model=4pre / model=8pre / model=8prex (default)
+sudo insmod snd-clarett.ko                # defaults to model=2pre
+sudo insmod snd-clarett.ko model=8prex    # or model=4pre / model=8pre / model=2pre
 ```
 
 The **4Pre** descriptor is built from the device XML and cross-checked against a live capture:

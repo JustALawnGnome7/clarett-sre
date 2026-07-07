@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 fcp_decode.py — turn QEMU `vfio_region_*` trace lines into structured FCP mailbox
-transactions for the Focusrite Clarett 8PreX.
+transactions for the Focusrite Clarett line (2Pre by default).
 
 Input: a libvirt/QEMU log containing vfio_region_read / vfio_region_write lines, e.g.
   ...Z vfio_region_write  (0000:09:00.0:region0+0x8020, 0x80005000, 4)
@@ -19,7 +19,7 @@ Usage:
   sudo tail -f /var/log/libvirt/qemu/Windows10-custom.log | ./tools/fcp_decode.py -
   ./tools/fcp_decode.py capture.txt --raw       # also echo non-mailbox accesses
   ./tools/fcp_decode.py capture.txt --classify  # is this capture a fader move or a routing change?
-  ./tools/fcp_decode.py attach.log --emit-init --init-model 8prex > driver/clarett_init_8prex.h  # device bring-up replay
+  ./tools/fcp_decode.py attach.log --emit-init > driver/clarett_init_2pre.h  # 2Pre bring-up (default; --init-model 8prex/4pre for others)
 
 The 8192-byte appspace persist write-back (a run of SET_DATA into config offset >=200) fires on
 every control change and is collapsed to a single summary line by default; pass --show-appspace to
@@ -308,9 +308,10 @@ def main():
                     help="emit a C device-bring-up replay table from this capture: every non-meter "
                          "command up to the first monitor-mute write (the bulk config read/writeback "
                          "included). Redirect to driver/clarett_init_<model>.h.")
-    ap.add_argument("--init-model", default="",
-                    help="symbol suffix for --emit-init, e.g. '8prex' -> clarett_init_blob_8prex / "
-                         "clarett_init_seq_8prex (lets per-model headers coexist). Empty = unsuffixed.")
+    ap.add_argument("--init-model", default="2pre",
+                    help="symbol suffix for --emit-init (default '2pre' -> clarett_init_blob_2pre / "
+                         "clarett_init_seq_2pre); e.g. '8prex' for the 8PreX. Per-model headers coexist. "
+                         "Pass '' for an unsuffixed symbol.")
     args = ap.parse_args()
 
     try:

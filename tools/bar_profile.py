@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bar_profile.py — profile Clarett 8PreX BAR0 register activity from QEMU vfio_region_* traces.
+"""bar_profile.py — profile Clarett 2Pre BAR0 register activity from QEMU vfio_region_* traces.
 
 Buckets every region0 access by offset and flags offsets OUTSIDE the known control-plane register
 map (spec/clarett-fcp-transport.md §8). The point: capture a PCM streaming session and see

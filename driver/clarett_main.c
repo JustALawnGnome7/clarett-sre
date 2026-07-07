@@ -93,10 +93,18 @@ MODULE_PARM_DESC(inject_clock,
 
 static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; selected by clarett_pick_model() */
 
+/*
+ * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
+ * byte-identical PCIe interface (MMIO regs, FCP query responses, config-space, even the dummy serial),
+ * so the model is NOT auto-detectable from the device — it must be named. Default 2Pre (the primary
+ * bench/RE unit). There is no userspace shortcut either: the line is entirely Thunderbolt 2 (discontinued
+ * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
+ * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
+ */
 static char *model;
 module_param(model, charp, 0444);
 MODULE_PARM_DESC(model,
-		 "Force interface model: \"8prex\" (default), \"8pre\", \"4pre\", or \"2pre\". All Clarett "
+		 "Force interface model: \"2pre\" (default), \"4pre\", \"8pre\", or \"8prex\". All Clarett "
 		 "Thunderbolt units share PCI id 1cb5:0002 and are indistinguishable from the PCIe side, so the "
 		 "model must be specified explicitly (e.g. via /etc/modprobe.d/).");
 
@@ -804,7 +812,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c->card = card;
 	c->pci = pci;
 	/* Shared PCI id across the line → the match can't pick the model; the model= param does
-	 * (clarett_pick_model), defaulting to the id_table's 8PreX. See clarett_pick_model(). */
+	 * (clarett_pick_model), defaulting to the id_table's 2Pre. See clarett_pick_model(). */
 	c->model = clarett_pick_model(ent);
 	dev_info(&pci->dev, "model: %s\n", c->model->name);
 	mutex_init(&c->mbox_lock);
@@ -1126,7 +1134,7 @@ static const struct clarett_model clarett_8pre = {
 
 static const struct pci_device_id clarett_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_FOCUSRITE, PCI_DEVICE_CLARETT),
-	  .driver_data = (kernel_ulong_t)&clarett_8prex },
+	  .driver_data = (kernel_ulong_t)&clarett_2pre },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, clarett_ids);

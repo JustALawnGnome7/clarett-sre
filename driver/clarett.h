@@ -227,7 +227,7 @@ struct clarett_init_step {
  * assume a value carries across models.
  *
  * NOTE: all Clarett Thunderbolt units reportedly share PCI id 1cb5:0002, so the
- * id_table cannot distinguish models; driver_data carries the default (8PreX)
+ * id_table cannot distinguish models; driver_data carries the default (2Pre)
  * and runtime disambiguation (fw-info / routing-count query) is a later step.
  */
 struct clarett_out_gain {

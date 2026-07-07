@@ -39,7 +39,7 @@ def main():
 
     for tag, lo, hi in (("TX/block0", 0x210, 0x214), ("RX/block1", 0x310, 0x314)):
         gpa = (reg[hi] << 32) | reg[lo]
-        fn = f"/tmp/{'tx' if 'TX' in tag else 'rx'}_8prex.bin"
+        fn = f"/tmp/{'tx' if 'TX' in tag else 'rx'}_2pre.bin"
         print(f"# {tag}: BASEhi=0x{reg[hi]:x} BASElo=0x{reg[lo]:08x} -> GPA 0x{gpa:x} ({gpa} dec)")
         print(f'sudo virsh qemu-monitor-command "{domain}" '
               f'"{{\\"execute\\":\\"pmemsave\\",\\"arguments\\":'
