@@ -49,6 +49,12 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		dma_wmb();
 	}
 
+	/* Mark the command in flight BEFORE submitting: vec0 fires on mailbox-DONE, and the ISR must
+	 * suppress its notify path for our own completion (clarett_irq / the 0x400 note in clarett.h).
+	 * Held until just before mutex_unlock so it still covers a completion MSI delivered after the
+	 * poll below observes DONE. */
+	atomic_set(&c->cmd_inflight, 1);
+
 	clarett_wl(c, REG_DOORBELL, DOORBELL_SUBMIT);
 
 	deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
@@ -133,6 +139,8 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	 * sleeping is fine; small slack lets the scheduler coalesce the timer. */
 	if (clarett_cmd_delay_us > 0)
 		usleep_range(clarett_cmd_delay_us, clarett_cmd_delay_us + (clarett_cmd_delay_us >> 2) + 1);
+
+	atomic_set(&c->cmd_inflight, 0);	/* completion window closed; idle-gap events may resume */
 
 	mutex_unlock(&c->mbox_lock);
 	return ret;

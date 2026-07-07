@@ -841,13 +841,21 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 	if (ic->idx == CLARETT_VEC_EVENT) {
 		u32 cause = readl(c->bar0 + REG_NOTIFY_CAUSE);	/* 0x400, read-to-clear */
 		u32 ev = cause & NOTIFY_MONITOR_MASK;
+		bool inflight = atomic_read(&c->cmd_inflight);
 
 		/* Diagnostic (log_responses): surface every 0x400 event and which bits matched the mask.
 		 * dev_info from hardirq is printk-safe. */
 		if (log_responses && cause)
-			dev_info_ratelimited(&c->pci->dev, "notify ISR cause=0x%08x masked=0x%x\n", cause, ev);
+			dev_info_ratelimited(&c->pci->dev, "notify ISR cause=0x%08x masked=0x%x inflight=%d\n",
+					     cause, ev, inflight);
 
-		if (ev) {
+		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
+		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Suppress the notify path
+		 * while our own command is in flight, or this ISR mistakes the completion for a monitor event
+		 * and reschedules notify_work off notify_work's own GET — a self-sustaining storm that
+		 * manifested as the "config-change notification retried indefinitely" symptom. Real
+		 * front-panel events arrive in the idle gaps between commands, where inflight is clear. */
+		if (ev && !inflight) {
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
 		}
@@ -1040,6 +1048,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	INIT_DELAYED_WORK(&c->meter_work, clarett_meter_work);
 	atomic_set(&c->notify_bits, 0);
+	atomic_set(&c->cmd_inflight, 0);
 	INIT_DELAYED_WORK(&c->stream_report, clarett_stream_report);
 	atomic_set(&c->period_irqs[1], 0);
 	atomic_set(&c->period_irqs[2], 0);

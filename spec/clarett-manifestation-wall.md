@@ -168,6 +168,23 @@ the device retries the config-change notification because our read comes back bl
 it, where FC's read returns real config and the device goes quiet. Reinforces the dormant-backend root;
 adds no new on-wire lever.
 
+> **CORRECTION `[ANALYSIS]` (July 6 2026) — the periodic `0x3` was largely US, not the device.**
+> Prompted by the Universal-Audio *open-apollo* init docs, we re-examined `0x400`. Correlating every FC
+> boot capture (`notify_correlate`, scratch) shows **`0x400` is a 2-bit command-phase register, not an
+> async event queue**: it only ever holds `{0,1,2,3}` (idle/ready = `0x3`, dips to `0x0` while a command
+> is accepted, blips `0x1→0x2` mid-command). FC does **no** per-bit follow-up read — it polls `0x400` as
+> flat status and branches on nothing (the Apollo-style staged per-bit acknowledge-handshake was tested
+> here and **refuted**). Because vec0 also fires on **mailbox-DONE** and `0x400` reads its idle `0x3`
+> (`== NOTIFY_MON_PRIMARY`) at completion, our ISR was scheduling `notify_work` **off its own GET's
+> completion MSI** — a self-sustaining GET storm. So the "device retries the config-change notification
+> indefinitely" framing above (and the `0x3` bursts) is substantially a **driver self-trigger**, not the
+> device pestering us. Fixed with an `atomic_t cmd_inflight` guard (the ISR skips `0x400` while our own
+> command is in flight; real front-panel events land in the idle gaps). **Does not touch the wall** — the
+> GET still returns `size=0` regardless of what triggers it — but it corrects the symptom and stops the
+> flood. Also note: unlike Apollo (whose real state rides a DMA command-ring with a base register), our
+> `bar_profile` shows **no host→device DMA base beyond `0x410/0x414`**, so the mailbox really is the whole
+> control channel — the command-ring model has no MMIO footing here.
+
 ## 5b. What remains
 
 The off-wire difference is something subtler than a blob upload. Note we already matched **every

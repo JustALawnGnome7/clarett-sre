@@ -100,12 +100,18 @@ struct snd_pcm_substream;
 #define CLARETT_VEC_EVENT        0       /* the device signals control events on vec0 */
 
 /*
- * Notification cause bits in REG_NOTIFY_CAUSE (0x400). Confirmed live on the 8PreX (log_responses=1,
- * pressing the front-panel Mute/Dim buttons): every event raises bit0|bit1 (0x3), and bit21
- * (0x00200000) appears intermittently alongside. The earlier 0x00200000/0x00400000 pair was an
- * unverified §11 guess that never matched real traffic (the ISR logged masked=0x0), so monitor
- * controls were never re-read on a real device event. Per-bit semantics are not yet pinned down and
- * clarett_notify_work re-reads the whole monitor region on any of them, so they fold into one mask.
+ * REG_NOTIFY_CAUSE (0x400) is NOT an async event queue — it is a 2-bit command-phase/status
+ * register. Correlating every FC boot capture (tools scratch: notify_correlate) shows it only ever
+ * holds {0,1,2,3}: idle/ready = 0x3, then it dips 0x3->0x0 while a mailbox command is accepted and
+ * blips 0x1->0x2 mid-command, returning to 0x3 at completion. FC POLLS it as flat status and
+ * branches on nothing — it performs NO per-bit follow-up read (the Apollo-style "each notification
+ * bit points to a descriptor block you must read" model was tested here and refuted). One capture
+ * (4pre, at stream time) is the sole place bit3 (0x8) ever appears.
+ *
+ * Consequence for our ISR: vec0 fires on mailbox-DONE too, and at completion 0x400 reads its idle
+ * 0x3 (== NOTIFY_MON_PRIMARY) — so treating 0x3 as a monitor event self-triggers. The ISR guards on
+ * cmd_inflight; genuine front-panel events are still caught in the idle gaps between commands.
+ * (The earlier 0x00200000/0x00400000 pair was an unverified §11 guess that never matched traffic.)
  */
 #define NOTIFY_MON_PRIMARY       0x00000003u  /* bit0|bit1 — raised on every monitor (mute/dim) event */
 #define NOTIFY_MON_AUX           0x00200000u  /* bit21 — co-occurs intermittently */
@@ -343,6 +349,15 @@ struct clarett {
 	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
 	struct work_struct notify_work;
 	atomic_t notify_bits;
+	/*
+	 * Set while a mailbox command is in flight (clarett_fcp submit->complete). vec0 fires on
+	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1
+	 * = 0x3) at completion time — so without this guard the ISR mistakes its own completion for a
+	 * monitor event and reschedules notify_work off notify_work's own GET (self-sustaining storm).
+	 * The ISR skips 0x400 handling when this is set; real events land in the idle gaps between
+	 * commands. See clarett_irq() and the 0x400 note above REG_NOTIFY_CAUSE.
+	 */
+	atomic_t cmd_inflight;
 
 	/* Periodic GET_METER heartbeat — the device requires it to apply control writes to
 	 * hardware (and to sustain streaming). See FCP_GET_METER / clarett_meter_work(). */

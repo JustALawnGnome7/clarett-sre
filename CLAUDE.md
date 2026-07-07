@@ -160,6 +160,8 @@ tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction dec
                                       (--brief, --mix-diff, --async, --show-appspace, --classify).
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
                                       outside the control-plane map (data-plane reg discovery).
+tools/notify_correlate.py             vfio_region_* -> correlates 0x400 notify-cause transitions with
+                                      the mailbox command around each (proved 0x400 = command-phase reg).
 vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).
