@@ -30,7 +30,7 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
   vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
   replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
-- **Method caveat + status (wall confirmed below-driver on four independent methods — all on a WARM device; a cold-boot capture is the one open software lead):** the `x-no-mmap` BAR trace is
+- **Method caveat + status (wall confirmed below-driver on four independent methods; the last open lead — a cold-boot capture — is now RUN and NEGATIVE on all three surfaces, so clean-room software RE is at its terminus):** the `x-no-mmap` BAR trace is
   **blind to sample DMA** and to bus-master DMA generally — both planes were RE'd by triangulating BAR
   setup registers (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
   --async`). That same blindness is where both walls hide. **Every reachable observation method is now
@@ -53,17 +53,19 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   `dma_alloc_coherent`/descriptor layout, with **nothing extra programmed to the device at init** (only
   `0x410`; the `0x210/0x310` engine arm is stream-time) and **no mailbox pointer-push**. So the vendor's
   driver-level DMA construction equals ours; the wall is **confirmed below the driver** by a fourth
-  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **One state-dependent software
-  lead remains OPEN, though:** the WinDbg run and every vfio capture saw a **warm** device — a VM reboot keeps
-  the device's own DC power on (the 2Pre is not bus-powered, so a TB-cable unplug alone won't reset it), so
-  unless the device was **DC power-cycled** the Clarett stayed armed continuously.
-  Re-reading the boot captures shows **INIT_1 (opcode `0x0`) never appears** (only INIT_2 `0x2`), and there is
-  **no REBOOT (`0x3`) and no firmware/FPGA-sized write burst** — so a **once-per-power-cycle** bring-up (a
-  cold INIT_1, or an FPGA stage moved by DMA, invisible to vfio) could be missing from `clarett_arm_device`,
-  which is generated from the warm capture. Next test: a **cold-boot capture** (device DC power-cycle — config
-  space `FLReset-`, no software reset; a cable-only unplug leaves the self-powered unit warm) running vfio +
-  WinDbg-with-`db`-contents in parallel
-  (`spec/clarett-windbg-plan.md` "Cold-boot capture", manifestation-wall §5f), **ahead of the sibling audit**.
+  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **The last state-dependent
+  software lead — a cold-boot capture — is now RUN and NEGATIVE on all three surfaces (July 3 + 6 2026),
+  closing it.** A VM reboot keeps the device's own DC power on (the 2Pre is not bus-powered, so a TB-cable unplug
+  alone won't reset it); only a **device DC power-cycle** is cold. On a genuinely cold 2Pre: the vfio mailbox
+  trace matches warm (no `INIT_1`/`REBOOT`/firmware burst — and `INIT_1` is absent warm too, so not a skipped
+  step); the WinDbg DMA-allocation footprint matches warm (siblings do zero DMA); and the **DMA buffer contents
+  are zero** — both 2 MB sample MDLs, captured cold and read at the freshest post-init instant, are all-zero with
+  every Xilinx firmware search (`00 09 0f f0`, `aa 99 55 66`, `"tb_top"`) empty. **Firmware-over-DMA is disproven**
+  (the FPGA self-boots from flash), and no once-per-power-cycle bring-up is missing from `clarett_arm_device`.
+  (`manifestation-wall.md` §5f, `spec/clarett-windbg-plan.md` cold runbook.) **This is the terminus of clean-room
+  software RE: every host-visible surface, warm and cold, is exhausted; the differentiator sits below the driver
+  in TB/PCIe transport or a device-init handshake no permitted method can reach.** Realistic paths from here are
+  non-technical (Focusrite/community) or accepting the wall.
   Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the user**), **disassembling the vendor
   driver/kext** (**clean-room no-go**), host-env work, more *warm* Windows/vfio MMIO captures, and driver-revive
   experiments — all out of scope or done/negative.

@@ -384,7 +384,7 @@ sharpens this into two concrete, still-untested cold-boot suspects:
 sequence **by construction** (INIT_1-less, upload-less). If either is the true cold bring-up, our driver is
 missing it. → the cold-boot capture plan (§5f) is the next test, ahead of the sibling audit.
 
-## 5f. Cold-boot (physically power-cycled) capture — RUN (July 3 2026), negative on two of three surfaces `[TEST]`
+## 5f. Cold-boot (DC power-cycled) capture — RUN, NEGATIVE on all three surfaces `[TEST]` (July 3 + 6 2026)
 
 The warm-device caveat's lead, pursued: **DC power-cycle** the **2Pre** (cut its own adapter — the unit is not
 bus-powered, so a TB-cable unplug alone leaves it warm; no function-level reset to fake it, config space
@@ -405,16 +405,28 @@ not cross-model.
   Capture method that finally worked: arm the MDL/common-buffer bps at the boot break where **FocusritePCIe
   is loaded but `FocusritePcieAudio`/`Midi` are not yet** (= before `PrepareHardware`, past the `BgpFw` boot-
   graphics flood that drowns a bp armed at the uptime-0 break). `sxe ld:` never halted (with or without `.sys`).
-- **WinDbg DMA-*contents* surface — STILL OPEN (one sub-task).** This pass logged allocations, not contents;
-  the two 2 MB MDL `MappedVA`s weren't recorded, so they weren't `db`'d late. §5e's warm `db` showed both
-  zero, but near-allocation timing makes "zero" possibly just "not filled yet." **Next: one more cold pass
-  that records the MDL pointers and `db`s them at the desktop (post-init).** EXACT runbook in
-  `clarett-windbg-plan.md` → "Cold contents pass — EXACT runbook". If both read zero post-init on cold (with
-  §5's RAM scan finding no bitstream resident and this pass's no-extra-buffer result), firmware-over-DMA is
-  closed; if nonzero, first real lead.
+- **WinDbg DMA-*contents* surface `[TEST]` (July 6 2026) — NEGATIVE.** Captured both 2 MB MDL **pointers** at
+  allocation (halt on `FR_2MB_MDL_HIT`, `gu` to the return in `FocusritePCIe+0x30b8`, `r @rax` = PMDL;
+  `ByteCount 0x200000` confirmed), then re-read each MDL **post-init** (at the boot break where `FocusritePcieAudio`/
+  `Midi` had just loaded — the freshest moment, before any streaming) to get its now-mapped `MappedSystemVa`, and
+  `db` + searched the **full 2 MB** of each for firmware: `00 09 0f f0` (Xilinx `.bit` header), `aa 99 55 66`
+  (bitstream sync), `"tb_top"` (design name). **Both buffers all-zero; all six searches empty.** A **warm** baseline
+  (VM reboot) run first, for method validation, showed MDL#1 zero and MDL#2 holding 24-bit-in-S32_LE **audio
+  samples** (these are the TX/RX sample buffers) — and its firmware searches were empty too. So on a genuinely
+  cold device, at the freshest post-init instant, **no firmware/bitstream is present in either 2 MB DMA buffer.**
+  This is **comprehensive**, not a spot check: §5e already inventoried the *entire* init DMA footprint, and the
+  2 MB pair are the only buffers big enough to hold an FPGA bitstream. Firmware-over-DMA is **disproven** — consistent
+  with the hardware fact that the FPGA **self-boots from flash** (no host→device firmware transfer exists to capture).
+  METHOD NOTE (why July 3 recorded no `MappedVA`s): a `gu` **inside** a breakpoint command is fatal — WinDbg skips
+  every command after it *and* lets the target run on, so the `.printf`/`g` never fire and nothing is captured. Use a
+  **halt-only** bp (`{ .echo FR_2MB_MDL_HIT }`, no execution command) and run `gu` / `r @rax` **manually** at each halt.
+  Also: `MappedSystemVa` is `0x1` at allocation (unmapped) → record the **MDL pointer**, re-read the VA post-init.
 
-**Net:** the cold-boot lead is closed on the mailbox and DMA-allocation surfaces (same-device cold==warm,
-siblings do no DMA); only the late MDL-contents `db` remains, and prior evidence points to it also being null.
+**Net:** the cold-boot lead is **fully closed** — same-device cold==warm on the mailbox and DMA-allocation
+surfaces, siblings do no DMA, and cold DMA *contents* are zero (no firmware over DMA). Every host-visible surface,
+warm and cold, is now exhausted; the differentiator is confirmed **below the driver** (TB/PCIe transport or a
+device-init handshake) and unreachable by any permitted software method. This is the terminus of clean-room
+software RE for this device.
 
 ---
 

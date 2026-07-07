@@ -108,11 +108,19 @@ cold results are valid — but never do a cable-only unplug and call it cold on 
 **data** (allocations/addresses/attributes/**bytes**). Dumping buffer contents is data observation (what a bus
 analyzer would see); **do not disassemble or step `FocusritePCIe.sys`.**
 
-## Cold contents pass — EXACT runbook (do this next; everything else in this file is context)
+## Cold contents pass — EXACT runbook — RUN July 6 2026, NEGATIVE (kept for method reference)
+
+> **DONE (July 6 2026) — NEGATIVE.** Both 2 MB sample MDLs read **all-zero** at the freshest post-init moment on a
+> cold (DC power-cycled) 2Pre; all firmware searches (`00 09 0f f0`, `aa 99 55 66`, `"tb_top"`) empty. Firmware-over-DMA
+> **disproven**; cold-boot lead closed on all three surfaces (manifestation-wall §5f). This runbook is retained for
+> method reference. **Two hard-won method fixes vs. July 3:** (1) a `gu` **inside** a bp command is fatal — WinDbg skips
+> every command after it and runs the target on, capturing nothing (this is why July 3 recorded no `MappedVA`s). Use a
+> **halt-only** bp (`{ .echo FR_2MB_MDL_HIT }`) and run `gu` / `r @rax` **manually** at each halt. (2) `MappedSystemVa`
+> is `0x1` at allocation — record the **MDL pointer**, re-read the VA post-init (once `FocusritePcieAudio`/`Midi` load).
 
 Status after July 3 2026: the cold mailbox trace and cold DMA-**allocation** capture are DONE and negative
 (manifestation-wall §5f) — same-device (2Pre) cold==warm, no extra buffer, siblings do no DMA. The **one**
-remaining sub-task: `db` the two 2 MB sample MDLs **post-init** on a cold device (last pass didn't record
+remaining sub-task (now also DONE, negative — see box above): `db` the two 2 MB sample MDLs **post-init** on a cold device (last pass didn't record
 their addresses). This runbook is turnkey — run it verbatim.
 
 **What worked / what didn't (so you don't relearn it):**
