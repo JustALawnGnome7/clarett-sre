@@ -19,7 +19,7 @@ Usage:
   sudo tail -f /var/log/libvirt/qemu/Windows10-custom.log | ./tools/fcp_decode.py -
   ./tools/fcp_decode.py capture.txt --raw       # also echo non-mailbox accesses
   ./tools/fcp_decode.py capture.txt --classify  # is this capture a fader move or a routing change?
-  ./tools/fcp_decode.py attach.log --emit-init > driver/clarett_init_seq.h   # device bring-up replay
+  ./tools/fcp_decode.py attach.log --emit-init --init-model 8prex > driver/clarett_init_8prex.h  # device bring-up replay
 
 The 8192-byte appspace persist write-back (a run of SET_DATA into config offset >=200) fires on
 every control change and is collapsed to a single summary line by default; pass --show-appspace to
@@ -307,7 +307,7 @@ def main():
     ap.add_argument("--emit-init", action="store_true",
                     help="emit a C device-bring-up replay table from this capture: every non-meter "
                          "command up to the first monitor-mute write (the bulk config read/writeback "
-                         "included). Redirect to driver/clarett_init_seq.h.")
+                         "included). Redirect to driver/clarett_init_<model>.h.")
     ap.add_argument("--init-model", default="",
                     help="symbol suffix for --emit-init, e.g. '8prex' -> clarett_init_blob_8prex / "
                          "clarett_init_seq_8prex (lets per-model headers coexist). Empty = unsuffixed.")

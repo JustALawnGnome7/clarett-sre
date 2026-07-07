@@ -347,7 +347,7 @@ strategy) the vendor's init DMA equals ours. Cross-checked against the vfio trac
 also identical: **only `0x410/0x414` (response buffer) is programmed at init** — the `0x210/0x310` engine
 arm is **stream-start**, ~25 s later (`8prex_boot_to_stream_with_config.log`: `0x410`@`54:30.35`, arm
 @`55:12.91`), *not* device init. And the vendor pushes **no DMA pointer through the mailbox** at init (no
-buffer address appears in the `0x80xx` mailbox-data writes), so our replayed `clarett_init_seq.h` (opcodes
+buffer address appears in the `0x80xx` mailbox-data writes), so our replayed `clarett_init_8prex.h` (opcodes
 only, **no baked addresses**) carries nothing stale.
 
 `[CONCLUSION]` WinDbg — with the debugger timing control, Microsoft symbols, and visible module ranges the

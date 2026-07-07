@@ -254,7 +254,7 @@ static void clarett_hw_init(struct clarett *c)
 }
 
 /* Generated per-model bring-up replay tables (clarett_init_blob_8prex[] / clarett_init_seq_8prex[]). */
-#include "clarett_init_seq.h"
+#include "clarett_init_8prex.h"
 /* clarett_init_blob_2pre[] / clarett_init_seq_2pre[] (fcp_decode.py --emit-init --init-model 2pre). */
 #include "clarett_init_2pre.h"
 /* clarett_init_blob_4pre[] / clarett_init_seq_4pre[] (fcp_decode.py --emit-init --init-model 4pre). */
@@ -262,7 +262,7 @@ static void clarett_hw_init(struct clarett *c)
 
 /*
  * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
- * (clarett_full_init_mute.log), regenerated into clarett_init_seq.h by `fcp_decode.py --emit-init`:
+ * (clarett_full_init_mute.log), regenerated into clarett_init_8prex.h by `fcp_decode.py --emit-init`:
  * every non-meter command up to the monitor-mute write, minus the bulk 8 KB config read/writeback.
  * Self-boot does NOT arm config access (GET_DATA fails); this host init arms it. Must run against a
  * device in its fresh power-on state — re-initializing an already-armed device wedges it instead.

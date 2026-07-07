@@ -202,7 +202,7 @@ struct snd_pcm_substream;
 /*
  * Device bring-up opcodes seen in the vendor attach capture (clarett_full_init_mute.log).
  * Not fully decoded; the bring-up is replayed verbatim at probe (clarett_arm_device) from the
- * generated clarett_init_seq.h, which precedes config writes actually taking effect on hardware.
+ * generated clarett_init_8prex.h, which precedes config writes actually taking effect on hardware.
  * Named here for documentation only — the replay table carries raw opcodes.
  *   0x000001 subsystem enable {u16 id}; 0x001000/0x002000/0x003000/0x004000 subsystem-count
  *   queries; 0x002002 SET_MIX {u16 mix, u16 coeff[30]}; 0x003002 SET_MUX; 0x004001/0x004005

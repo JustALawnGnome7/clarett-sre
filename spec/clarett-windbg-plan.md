@@ -26,7 +26,7 @@ MS APIs**; `FocusritePCIe.sys` was never disassembled/stepped.
   `dma_alloc_coherent`. Same address range, same cache/coherency, same descriptor-table+scatter strategy.
 - **Nothing extra reaches the device at init.** Cross-checked with the vfio trace: only `0x410/0x414` is
   programmed at init (`0x210/0x310` engine-arm is stream-start, ~25 s later); no DMA pointer is pushed via
-  the mailbox; our `clarett_init_seq.h` replay carries no baked addresses.
+  the mailbox; our `clarett_init_8prex.h` replay carries no baked addresses.
 
 `[CONCLUSION]` The plan's **"anticlimax" branch** (Phase 3): the vendor driver does nothing extra with DMA at
 the driver level. WinDbg got the timing/symbols/module-ranges the raced-out, stripped-kext macOS attempt

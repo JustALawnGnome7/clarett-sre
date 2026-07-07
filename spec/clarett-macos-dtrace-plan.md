@@ -30,7 +30,7 @@ is given*, not the driver's source. Disassembling the kext/dext binary would cro
 
 ## What a result looks like (decision criteria)
 
-Diff the capture against our replay (`captures/our_trace.log` + `driver/clarett_init_seq*.h`, which
+Diff the capture against our replay (`captures/our_trace.log` + `driver/clarett_init_*.h`, which
 program only the single GET-response buffer at BAR `0x410/0x414`):
 
 | Observation on the Mac | Action in our driver |
