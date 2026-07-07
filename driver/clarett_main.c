@@ -992,9 +992,11 @@ static void clarett_setup_irq(struct clarett *c)
 		return;
 	}
 	c->n_vec = nvec;
-	if (nvec < CLARETT_NUM_VECTORS)
-		dev_info(&pci->dev, "MSI: got %d/%d vectors (causes funnel to the allocated ones)\n",
-			 nvec, CLARETT_NUM_VECTORS);
+	/* Always record the achieved count: 4/4 matches FC (session_notes.log: Enable+ Count=4/4);
+	 * fewer means the platform (typically vfio passthrough) collapsed them and causes funnel to
+	 * the allocated vectors. Logged unconditionally so every run pins down what it actually got. */
+	dev_info(&pci->dev, "MSI: got %d/%d vectors%s\n", nvec, CLARETT_NUM_VECTORS,
+		 nvec < CLARETT_NUM_VECTORS ? " (causes funnel to the allocated ones)" : "");
 
 	for (i = 0; i < nvec; i++) {
 		c->irq_ctx[i].c = c;
