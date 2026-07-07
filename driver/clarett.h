@@ -109,9 +109,13 @@ struct snd_pcm_substream;
  * (4pre, at stream time) is the sole place bit3 (0x8) ever appears.
  *
  * Consequence for our ISR: vec0 fires on mailbox-DONE too, and at completion 0x400 reads its idle
- * 0x3 (== NOTIFY_MON_PRIMARY) — so treating 0x3 as a monitor event self-triggers. The ISR guards on
- * cmd_inflight; genuine front-panel events are still caught in the idle gaps between commands.
- * (The earlier 0x00200000/0x00400000 pair was an unverified §11 guess that never matched traffic.)
+ * 0x3 (== NOTIFY_MON_PRIMARY), so a completion MSI can be misread as a monitor event; the cmd_inflight
+ * guard suppresses that self-reflection. But hardware (July 6 2026, log_responses=1 on the 2Pre) shows
+ * the guard is only a minor cleanup: the dominant "notification retried indefinitely" storm is the
+ * DEVICE genuinely re-asserting 0x3 in us-scale bursts (8 in 234us, far faster than our ~30ms command
+ * rate, inflight=0) because our GET returns empty (size=0) and never satisfies it — where FC's returns
+ * real config and it goes quiet. So this is a dormant-backend symptom, not a driver bug (manifestation-
+ * wall §5a). (The earlier 0x00200000/0x00400000 pair was an unverified §11 guess that never matched.)
  */
 #define NOTIFY_MON_PRIMARY       0x00000003u  /* bit0|bit1 — raised on every monitor (mute/dim) event */
 #define NOTIFY_MON_AUX           0x00200000u  /* bit21 — co-occurs intermittently */
@@ -352,10 +356,13 @@ struct clarett {
 	/*
 	 * Set while a mailbox command is in flight (clarett_fcp submit->complete). vec0 fires on
 	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1
-	 * = 0x3) at completion time — so without this guard the ISR mistakes its own completion for a
-	 * monitor event and reschedules notify_work off notify_work's own GET (self-sustaining storm).
-	 * The ISR skips 0x400 handling when this is set; real events land in the idle gaps between
-	 * commands. See clarett_irq() and the 0x400 note above REG_NOTIFY_CAUSE.
+	 * = 0x3) at completion, so a completion MSI can be misread as a monitor event. This guard makes
+	 * the ISR skip 0x400 while our own command is in flight, suppressing that self-reflection.
+	 * NOTE (hardware-confirmed July 6 2026): this is only a MINOR contributor. On a walled device the
+	 * dominant "notification retried indefinitely" storm is the DEVICE genuinely re-asserting 0x3 in
+	 * us-scale bursts because our GET returns empty (size=0) and never satisfies it — the guard cannot
+	 * stop that (the device fires in the idle gaps where inflight=0). See clarett_irq() and the
+	 * REG_NOTIFY_CAUSE note; manifestation-wall §5a.
 	 */
 	atomic_t cmd_inflight;
 

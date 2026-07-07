@@ -850,11 +850,11 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 					     cause, ev, inflight);
 
 		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
-		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Suppress the notify path
-		 * while our own command is in flight, or this ISR mistakes the completion for a monitor event
-		 * and reschedules notify_work off notify_work's own GET — a self-sustaining storm that
-		 * manifested as the "config-change notification retried indefinitely" symptom. Real
-		 * front-panel events arrive in the idle gaps between commands, where inflight is clear. */
+		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Skipping the notify path
+		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware July 6
+		 * 2026): this is minor — the bulk of the "notification retried indefinitely" storm is the
+		 * DEVICE genuinely re-asserting 0x3 (us-scale bursts, inflight=0) because our GET is empty;
+		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps. */
 		if (ev && !inflight) {
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
