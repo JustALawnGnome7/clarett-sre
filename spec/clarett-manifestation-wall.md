@@ -398,6 +398,12 @@ not cross-model.
   `INIT_1` I flagged is absent **cold and warm** → it is *not* a cold-only step we skip; the Clarett TB flow
   simply doesn't use it. `clarett_arm_device` is **not** missing a cold-only mailbox command. (Only diff: a
   few lightweight query/enable opcodes appear ~2× cold — an extra enumerate pass, not a new sequence.)
+  **Confirmed twice (July 6, `captures/2pre_cold_boot2.log`):** a second cold boot, this time captured
+  **driver-only** (`FocusritePCIe.sys` bring-up with **no Focusrite Control app** → `GET_METER` count 0, so no
+  meter-poll noise), shows the same result — no `INIT_1`, no `REBOOT`, no firmware-sized burst; same vocabulary
+  (`CONFIG_PUSH` ×43, the known 8 KB config read/write-back at off `0xc8..0x2088`, subsystem enables, `SET_MIX`/
+  `SET_MUX`, `INIT_2`), ending on the init `DATA_CMD`. So even the raw kernel driver's cold bring-up carries no
+  cold-only command and no mailbox firmware push.
 - **WinDbg DMA-allocation surface `[TEST]` — NEGATIVE.** Cold FocusritePCIe init DMA footprint =
   **2×{16 KB common buffer + 2 MB MDL} + 1×4 KB common buffer, cached** — **identical to the §5e warm 2Pre**,
   no extra buffer, no firmware-sized allocation. **Siblings closed:** `SwRoot`/`Audio`/`Midi` were all loaded
