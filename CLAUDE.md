@@ -55,12 +55,14 @@ Control byte-for-byte, yet neither plane functions. This is the central unsolved
   driver-level DMA construction equals ours; the wall is **confirmed below the driver** by a fourth
   independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **One state-dependent software
   lead remains OPEN, though:** the WinDbg run and every vfio capture saw a **warm** device — a VM reboot keeps
-  Thunderbolt power, so unless the TB cable was physically replugged the Clarett stayed armed continuously.
+  the device's own DC power on (the 2Pre is not bus-powered, so a TB-cable unplug alone won't reset it), so
+  unless the device was **DC power-cycled** the Clarett stayed armed continuously.
   Re-reading the boot captures shows **INIT_1 (opcode `0x0`) never appears** (only INIT_2 `0x2`), and there is
   **no REBOOT (`0x3`) and no firmware/FPGA-sized write burst** — so a **once-per-power-cycle** bring-up (a
   cold INIT_1, or an FPGA stage moved by DMA, invisible to vfio) could be missing from `clarett_arm_device`,
-  which is generated from the warm capture. Next test: a **cold-boot capture** (physical TB replug — config
-  space `FLReset-`, no software reset) running vfio + WinDbg-with-`db`-contents in parallel
+  which is generated from the warm capture. Next test: a **cold-boot capture** (device DC power-cycle — config
+  space `FLReset-`, no software reset; a cable-only unplug leaves the self-powered unit warm) running vfio +
+  WinDbg-with-`db`-contents in parallel
   (`spec/clarett-windbg-plan.md` "Cold-boot capture", manifestation-wall §5f), **ahead of the sibling audit**.
   Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the user**), **disassembling the vendor
   driver/kext** (**clean-room no-go**), host-env work, more *warm* Windows/vfio MMIO captures, and driver-revive

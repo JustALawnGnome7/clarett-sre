@@ -6,8 +6,8 @@
 > passthrough) and breakpoint the **symbolicated Windows DMA APIs** the driver calls, attributing to the
 > Focusrite `.sys` by module range. **Status: RUN (July 2 2026). Outcome: the vendor's driver-level DMA is
 > equivalent to ours; the wall is confirmed below-driver.** Full write-up: `clarett-manifestation-wall.md` §5e.
-> **Caveat found later:** that run saw a **warm** (never power-cycled) device — a VM reboot keeps TB power, so
-> a once-per-power-cycle bring-up (INIT_1 `0x0`, or a DMA firmware stage) would be invisible. The **cold-boot
+> **Caveat found later:** that run saw a **warm** (never power-cycled) device — a VM reboot keeps the device's
+> DC power on, so a once-per-power-cycle bring-up (INIT_1 `0x0`, or a DMA firmware stage) would be invisible. The **cold-boot
 > capture** below (§5f) is now the top open lead, ahead of the sibling audit.
 
 ## Result (July 2 2026) — RUN, clean-room discipline held
@@ -36,9 +36,9 @@ below the driver (transport/link/device-init handshake), invisible to all host-s
 ## Cold-boot capture (planned, NOT yet done) — the top open lead
 
 **Why this jumped ahead of the sibling audit.** The July 2 run — and *every* vfio capture it cross-checks
-against — saw a **warm** device: a libvirt/VM reboot does not cut Thunderbolt power, so unless the TB cable
-was physically replugged the Clarett stayed armed continuously, and we captured the vendor re-initializing an
-**already-armed** device. Re-reading the boot captures makes the gap concrete (manifestation-wall §5e caveat):
+against — saw a **warm** device: a libvirt/VM reboot does not cut the Clarett's power (it runs off its own DC
+adapter, not the TB bus), so unless the device was **DC power-cycled** it stayed armed continuously, and we
+captured the vendor re-initializing an **already-armed** device. Re-reading the boot captures makes the gap concrete (manifestation-wall §5e caveat):
 **INIT_1 (opcode `0x0`) never appears** (we see INIT_2 `0x2` only — the scarlett2 first-contact step 1 is
 missing), and there is **no REBOOT (`0x3`) and no firmware/FPGA-sized write burst**. `seq=0` is a *driver*-side
 reset, not a cold marker. Our `clarett_arm_device` is generated from the warm capture, so it is INIT_1-less
@@ -48,10 +48,13 @@ and upload-less **by construction** — if either is the true cold bring-up, we 
 either surface a cold-only command/firmware stage (→ add it to `clarett_arm_device` and re-test the wall) or
 close the last state-dependent hole. This is software-only and **not** excluded.
 
-**The only true reset is a physical replug.** Config space reports **`FLReset-`** — no function-level reset
-to trigger from software, and a VM reboot keeps the device powered. So: with the target VM shut down, **unplug
-the Thunderbolt cable, wait ~10 s, replug** (and re-authorize if `boltctl` prompts). That, and only that,
-gives a cold device.
+**The only true reset is a device DC power-cycle.** Config space reports **`FLReset-`** — no function-level
+reset to trigger from software, and a VM reboot keeps the device powered. The 2Pre has its **own DC adapter and
+cannot be bus-powered over Thunderbolt**, so **unplugging the TB cable alone does NOT reset it** — the FPGA/
+firmware stay running (warm). So: with the target VM shut down, **cut the device's own DC power (adapter off)
+~10 s, then restore it** (and re-authorize if `boltctl` prompts, re-check the `vfio-pci` bind). That, and only
+that, gives a cold device. (Every prior "TB replug" in this project was in practice a DC power-cycle, so those
+cold results are valid — but never do a cable-only unplug and call it cold on this hardware.)
 
 **Run both instruments at once** — they cover different blind spots:
 1. **vfio MMIO trace** (device-facing FCP/mailbox) — catches a cold-only **INIT_1 (`0x0`)** or **REBOOT
@@ -124,9 +127,10 @@ their addresses). This runbook is turnkey — run it verbatim.
   allocation** (mapped later). So **record the MDL pointer** and read/`db` the VA **at the desktop**.
 
 ### 0. Cold device + instruments
-1. VM off. **Physically power-cycle the 2Pre** (unplug TB ~10 s, replug; `boltctl authorize` on the host if
-   it doesn't reattach). Only this is cold; a VM reboot is warm.
-2. Host: `sudo tail -F /var/log/libvirt/qemu/<domain>-custom.log` → save to `captures/2pre_cold_boot2.log`
+1. VM off. **DC power-cycle the 2Pre** — cut its own DC adapter ~10 s, restore (`boltctl authorize` on the host
+   if it doesn't reattach; re-check `vfio-pci`). NOT a TB-cable unplug: the 2Pre is self-powered, so pulling the
+   cable leaves it warm. Only a DC power-cycle is cold; a VM reboot is warm.
+2. Host: `sudo tail -F /var/log/libvirt/qemu/Windows10-custom.log` → save to `captures/2pre_cold_boot2.log`
    (parallel re-confirm of no `INIT_1`/`REBOOT`).
 3. Debugger VM (`Windows10-WinDbg`) up and listening; then start the target VM.
 

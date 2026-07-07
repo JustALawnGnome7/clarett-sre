@@ -361,8 +361,9 @@ software means; the remaining reachable surfaces are all exhausted or excluded (
 kext/`.sys` disassembly clean-room no-go).
 
 `[CAVEAT — warm device]` **This run, and every vfio capture it cross-checks against, saw a *warm* device.**
-A libvirt/VM reboot does **not** cut Thunderbolt bus power, so unless the TB cable was physically replugged
-the Clarett stayed **continuously armed** across all captures. So the §5e inventory is the vendor
+A libvirt/VM reboot does **not** cut the Clarett's power — it runs off its own DC adapter, **not** Thunderbolt
+bus power, so a TB-cable unplug alone would not reset it; only a **device DC power-cycle** does. Unless the
+device was DC power-cycled it stayed **continuously armed** across all captures. So the §5e inventory is the vendor
 re-initializing an **already-armed** device — which is state-*independent* for the DMA *allocations*
 (driver-side; the conclusion above holds), but **blind to anything the vendor does only once per physical
 power cycle.** Re-reading the boot captures (`clarett_full_init_mute.log`, `8prex_boot_to_stream_with_config.log`)
@@ -385,8 +386,9 @@ missing it. → the cold-boot capture plan (§5f) is the next test, ahead of the
 
 ## 5f. Cold-boot (physically power-cycled) capture — RUN (July 3 2026), negative on two of three surfaces `[TEST]`
 
-The warm-device caveat's lead, pursued: power-cycle the **2Pre** (physical TB replug — no function-level
-reset to fake it, config space `FLReset-`; a VM reboot stays warm) and diff cold vs warm on both instruments.
+The warm-device caveat's lead, pursued: **DC power-cycle** the **2Pre** (cut its own adapter — the unit is not
+bus-powered, so a TB-cable unplug alone leaves it warm; no function-level reset to fake it, config space
+`FLReset-`; a VM reboot stays warm) and diff cold vs warm on both instruments.
 **Note: the §5e WinDbg device was also the 2Pre** (warm) — so this is a same-device cold-vs-warm comparison,
 not cross-model.
 
