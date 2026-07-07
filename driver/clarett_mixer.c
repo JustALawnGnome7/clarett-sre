@@ -123,10 +123,8 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	 * NOTE: this is byte-identical to Focusrite Control's per-toggle sequence (SET_DATA +
 	 * DATA_CMD{activate}; FC's standalone DATA_CMD{5} is a once-at-end debounced persist, not
 	 * per-toggle). On hardware the write completes (done=1, fcperr=0) but the front-panel state
-	 * does not move — under investigation; see clarett_verify_writes / control-manifestation memo.
+	 * does not move — see spec/clarett-manifestation-wall.md.
 	 */
-	if (clarett_verify_writes)
-		clarett_verify_write(c, d->offset, dev);
 	return 1;
 }
 

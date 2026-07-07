@@ -20,7 +20,6 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	unsigned long deadline;
 	u32 cause = 0, first_cause = 0, fcperr = 0;
 	int i, ret = 0, polls = 0;
-	bool probe = clarett_resp_probe > 0;	/* resp_probe one-shot diagnostic (spec §5c) */
 
 	if (len > CLARETT_MBOX_DATA_MAX)
 		return -EINVAL;
@@ -42,11 +41,6 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		for (j = 0; j < 4 && i + j < len; j++)
 			w |= (u32)data[i + j] << (8 * j);
 		clarett_wl(c, REG_MBOX + MBOX_DATA + i, w);
-	}
-
-	if (probe) {			/* pre-fill so post-completion bytes are demonstrably device-written */
-		memset(c->resp_buf, 0xAA, 64);
-		dma_wmb();
 	}
 
 	/* Mark the command in flight BEFORE submitting: vec0 fires on mailbox-DONE, and the ISR must
@@ -81,64 +75,7 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	else if (fcperr)
 		ret = -EIO;
 
-	/*
-	 * resp_probe one-shot (spec §5c): close the last on-chip blind spot. Validate the DMAed response
-	 * header (echo/seq/status/size) and separately read the BAR mailbox data region (0x8030+), to
-	 * confirm whether the device leaves any response bytes on-chip (BAR) rather than only in the DMA
-	 * buffer. Runs under mbox_lock (serialised vs the meter heartbeat); c->seq is still the request seq
-	 * here (incremented below), so the echoed seq is comparable. Diagnostic only — ret is untouched.
-	 */
-	if (probe) {
-		const u8 *r = c->resp_buf;
-		u32 echo, rstatus, expect = CMD_EXEC_FLAG | opcode, md[12];
-		u16 rsize, rseq;
-		bool dma_data = false, bar_data = false;
-		int k;
-
-		/* the DMAed response can lag the DONE bit — give it a bounded moment to land */
-		for (k = 0; k < 25; k++) {
-			dma_rmb();
-			if (r[FCP_RESP_ECHO_OFF] != 0xAA)
-				break;
-			usleep_range(200, 300);
-		}
-		dma_rmb();
-		echo    = r[0] | r[1] << 8 | r[2] << 16 | r[3] << 24;
-		rsize   = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-		rseq    = r[FCP_RESP_SEQ_OFF]  | r[FCP_RESP_SEQ_OFF + 1] << 8;
-		rstatus = r[FCP_RESP_STATUS_OFF] | r[FCP_RESP_STATUS_OFF + 1] << 8 |
-			  r[FCP_RESP_STATUS_OFF + 2] << 16 | r[FCP_RESP_STATUS_OFF + 3] << 24;
-		for (k = 0; k < rsize && k < 32; k++)
-			if (r[FCP_RESP_DATA_OFF + k] != 0xAA)
-				dma_data = true;
-
-		/* BAR mailbox data region. md[0..1] echo our own request for data-class commands; a
-		 * device-written response would appear past that (or flip md[0] to the echoed cmd). */
-		for (k = 0; k < 12; k++) {
-			md[k] = clarett_rl(c, REG_MBOX + MBOX_DATA + k * 4);
-			if (k >= 2 && md[k])
-				bar_data = true;
-		}
-
-		dev_info(&c->pci->dev,
-			 "resp_probe op=0x%06x DMA{echo=0x%08x %s seq=%u %s status=0x%x size=%u data=%s} "
-			 "BAR@0x30=%08x %08x %08x %08x (%s)\n",
-			 opcode, echo, echo == expect ? "OK" : "MISMATCH",
-			 rseq, rseq == c->seq ? "OK" : "MISMATCH", rstatus, rsize,
-			 dma_data ? "PRESENT" : "empty",
-			 md[0], md[1], md[2], md[3],
-			 bar_data ? "BAR-NONEMPTY-past-req" : "BAR-empty-past-req");
-
-		clarett_resp_probe--;
-	}
-
 	c->seq++;
-
-	/* Optional post-command settle delay (cmd_delay_us): mimic FC's x-no-mmap pacing to test whether
-	 * arming/manifestation needs time to latch between commands. Process context under mbox_lock, so
-	 * sleeping is fine; small slack lets the scheduler coalesce the timer. */
-	if (clarett_cmd_delay_us > 0)
-		usleep_range(clarett_cmd_delay_us, clarett_cmd_delay_us + (clarett_cmd_delay_us >> 2) + 1);
 
 	atomic_set(&c->cmd_inflight, 0);	/* completion window closed; idle-gap events may resume */
 
@@ -201,40 +138,6 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 
 	c->shadow[offset] = val;
 	return 0;
-}
-
-/*
- * Diagnostic: after a control write, GET_DATA the same offset and log whether the device's own
- * config RAM now reflects the value we wrote. Splits "device discards our write" (stale read) from
- * "device accepts it but never physically applies" (matching read, LED still frozen). Run with
- * meter_poll_ms=0 so the GET_METER heartbeat can't overwrite resp_buf between the GET and the read.
- */
-void clarett_verify_write(struct clarett *c, u32 offset, u8 expected)
-{
-	const u8 *r = c->resp_buf;
-	u32 echo;
-	int err;
-	u8 got;
-	bool dmaed;
-
-	/* Read a 16-byte window starting at `offset` (single-byte GETs may behave differently from
-	 * the region reads the device expects); the target byte is the first data byte. */
-	err = clarett_get_data(c, offset, 16);
-	if (err) {
-		dev_info(&c->pci->dev, "verify off=%u: GET_DATA failed (%d)\n", offset, err);
-		return;
-	}
-	dma_rmb();
-	echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
-	       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
-	dmaed = (echo == (CMD_EXEC_FLAG | FCP_GET_DATA));
-	got = r[FCP_RESP_DATA_OFF];
-
-	dev_info(&c->pci->dev,
-		 "verify off=%u: wrote=0x%02x device-reads=0x%02x echo=0x%08x (%s)\n",
-		 offset, expected, got, echo,
-		 !dmaed ? "NO GET RESPONSE (read untrustworthy)" :
-		 got == expected ? "ACCEPTED into config RAM" : "DISCARDED / stale");
 }
 
 /* Read-modify-write the `mask` bits of a shared config byte to the value in `val`, then commit.

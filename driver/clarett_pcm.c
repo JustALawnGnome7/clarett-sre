@@ -35,54 +35,6 @@
  */
 
 /*
- * Diagnostic: after arming in prepare(), inline-poll 0x300 for ~1 s to measure whether the engine
- * clocks at all — independent of whether the consumer (arecord) stays alive.
- */
-static bool pcm_selftest;
-module_param(pcm_selftest, bool, 0444);
-MODULE_PARM_DESC(pcm_selftest,
-		 "On PCM prepare, inline-poll 0x300 for ~1s after arming to count periods (debug).");
-
-/* Inline 2 s poll of 0x300 to count periods, independent of any consumer. @when tags the call site.
- * Dumps the latched engine register/descriptor state first so it can be diffed against the working
- * stream_probe engine_start. */
-static void clarett_selftest_poll(struct clarett *c, const char *when)
-{
-	void __iomem *bar = c->bar0;
-	unsigned long end = jiffies + msecs_to_jiffies(2000);
-	__le64 *tx_tbl = (__le64 *)c->stream_buf;
-	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + clarett_pcm_tx_ring(c));
-	u32 periods = 0, last = 0, maxc = 0;
-
-	dev_info(&c->pci->dev,
-		 "selftest[%s] regs: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ctrl=%08x ptr=%08x | tx0=%016llx rx0=%016llx\n",
-		 when,
-		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI), readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO),
-		 readl(bar + STREAM_BLK0 + STREAM_OFF_CTRL), readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
-		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI), readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO),
-		 readl(bar + STREAM_BLK1 + STREAM_OFF_CTRL), readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
-		 le64_to_cpu(tx_tbl[0]), le64_to_cpu(rx_tbl[0]));
-
-	while (time_before(jiffies, end)) {
-		u32 c2 = readl(bar + STREAM_BLK1);	/* 0x300 read-to-clear = ACK */
-
-		readl(bar + STREAM_BLK0);
-		readl(bar + 0x500);
-		if (c2 & 0x80000000) {
-			u32 v = c2 & 0x7fffffff;
-
-			periods++;
-			if (v > maxc)
-				maxc = v;
-			last = v;
-		}
-		usleep_range(100, 200);
-	}
-	dev_info(&c->pci->dev, "pcm selftest [%s]: periods=%u max_ctr=0x%x last=0x%x\n",
-		 when, periods, maxc, last);
-}
-
-/*
  * Constant capability template; the per-model geometry fields (channels, buffer/period bytes,
  * periods_max) are filled in clarett_pcm_open() from c->model.
  */
@@ -278,9 +230,6 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 
 	clarett_engine_arm(c, r0, r1);	/* full-duplex; same contiguous layout as the proven probe */
 
-	if (pcm_selftest)
-		clarett_selftest_poll(c, "prepare-arm");
-
 	/*
 	 * ACK from here, not from the trigger: the engine bursts immediately after arm and stalls within
 	 * ms if unserviced, so the servicer must be ACKing 0x300 the instant it is armed. The trigger only
@@ -367,7 +316,6 @@ int clarett_create_pcm(struct clarett *c)
 {
 	struct snd_pcm *pcm;
 	size_t buf = clarett_rx_ring_bytes(c);				/* ALSA buffer = RX sample ring */
-	dma_addr_t r1off = clarett_pcm_tx_ring(c);			/* RX descriptor-table base offset */
 	int err;
 
 	err = snd_pcm_new(c->card, c->model->name, 0, 0, 1, &pcm);	/* 0 playback, 1 capture */
@@ -393,10 +341,5 @@ int clarett_create_pcm(struct clarett *c)
 		 clarett_frag_bytes(c->model->playback_channels),
 		 clarett_frag_bytes(c->model->capture_channels), &c->stream_dma);
 
-	if (pcm_selftest) {
-		clarett_engine_arm(c, c->stream_dma, c->stream_dma + r1off);
-		clarett_selftest_poll(c, "probe-arm");
-		clarett_engine_stop(c);
-	}
 	return 0;
 }

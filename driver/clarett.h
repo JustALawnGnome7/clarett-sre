@@ -110,7 +110,7 @@ struct snd_pcm_substream;
  *
  * Consequence for our ISR: vec0 fires on mailbox-DONE too, and at completion 0x400 reads its idle
  * 0x3 (== NOTIFY_MON_PRIMARY), so a completion MSI can be misread as a monitor event; the cmd_inflight
- * guard suppresses that self-reflection. But hardware (July 6 2026, log_responses=1 on the 2Pre) shows
+ * guard suppresses that self-reflection. But hardware (July 6 2026, response-logging on the 2Pre) shows
  * the guard is only a minor cleanup: the dominant "notification retried indefinitely" storm is the
  * DEVICE genuinely re-asserting 0x3 in us-scale bursts (8 in 234us, far faster than our ~30ms command
  * rate, inflight=0) because our GET returns empty (size=0) and never satisfies it — where FC's returns
@@ -504,24 +504,11 @@ int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate);
-void clarett_verify_write(struct clarett *c, u32 offset, u8 expected);
-extern bool clarett_verify_writes;
 
-/* BAR0 access wrappers that optionally log in QEMU vfio_region_* format (trace_regs param). */
+/* BAR0 access wrappers. */
 void clarett_wl(struct clarett *c, u32 off, u32 val);
 u32 clarett_rl(struct clarett *c, u32 off);
-extern bool clarett_trace_regs;
 
-/* Settle delay (microseconds) inserted after every completed FCP command. 0 = native back-to-back
- * speed. Mimics FC's x-no-mmap pacing (ms-apart commands) to test the device-state/arming timing
- * hypothesis: does manifestation need settle time between arm/toggle commands? */
-extern int clarett_cmd_delay_us;
-
-/* Diagnostic one-shot (resp_probe param): for the first N FCP commands, validate the DMAed response
- * header and dump the BAR mailbox data region (0x8030+), to check whether any response bytes land
- * on-chip (BAR) rather than only in the DMA buffer. Counts down to 0. Non-fatal; command path unchanged.
- * See spec/clarett-manifestation-wall.md §5c. */
-extern int clarett_resp_probe;
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
 
 /* mixer.c */

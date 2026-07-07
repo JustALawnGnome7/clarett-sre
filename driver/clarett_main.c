@@ -54,20 +54,6 @@ static int rekick_ms = 20;
 module_param(rekick_ms, int, 0444);
 MODULE_PARM_DESC(rekick_ms, "Stall threshold for rekick: ms with no new 0x300 period before kicking.");
 
-static bool pollall;
-module_param(pollall, bool, 0444);
-MODULE_PARM_DESC(pollall,
-		 "Servicer reads the FULL cause block 0x100/0x200/0x300/0x400/0x500 each loop, mimicking "
-		 "Focusrite Control's poll exactly (it skips 0x100/0x400 by default). Tests whether the full "
-		 "poll is the 'host keeping up' signal that lets the engine wrap past one ring pass.");
-
-bool clarett_verify_writes;
-module_param_named(verify_writes, clarett_verify_writes, bool, 0444);
-MODULE_PARM_DESC(verify_writes,
-		 "Diagnostic: after each control write, GET_DATA the offset back and log whether the "
-		 "device's config RAM reflects it. Use with meter_poll_ms=0 to avoid heartbeat DMA racing "
-		 "the read-back buffer.");
-
 static int meter_poll_ms = CLARETT_METER_POLL_MS;
 module_param(meter_poll_ms, int, 0444);
 MODULE_PARM_DESC(meter_poll_ms,
@@ -84,52 +70,6 @@ MODULE_PARM_DESC(dma_bits,
 		 "31 -> <2GB, 30 -> <1GB) to force the allocation into the VM's range and test whether the "
 		 "engine's burst-then-stall is sensitive to buffer address. Long shot: PTR advances at "
 		 "0xffe00000 with no fault, so the high address is not obviously the blocker.");
-
-/*
- * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
- * byte-identical PCIe interface (MMIO regs, FCP query responses, config-space, even the dummy serial),
- * so the model is NOT auto-detectable from the device — it must be named. Default 8PreX preserves prior
- * behaviour. There is no userspace shortcut either: the line is entirely Thunderbolt 2 (discontinued
- * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
- * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
- */
-static bool log_responses;
-module_param(log_responses, bool, 0444);
-MODULE_PARM_DESC(log_responses,
-		 "Log the device's DMAed response (first 24 bytes of resp_buf) after each arm command. "
-		 "Our arm replays a fixed sequence and ignores replies; FC's bring-up branches on them. Use "
-		 "this to spot a response the device gives US that differs from FC's captured session (a zero "
-		 "enumeration count, an error/not-ready status) — which would make our static replay land "
-		 "control writes on nothing. Default false.");
-
-int clarett_cmd_delay_us;
-module_param_named(cmd_delay_us, clarett_cmd_delay_us, int, 0444);
-MODULE_PARM_DESC(cmd_delay_us,
-		 "Microseconds to sleep after every completed FCP command (arm + control writes). Default 0 "
-		 "(native back-to-back). The FC traffic we byte-matched was captured under x-no-mmap, where "
-		 "every register access traps to QEMU, so the device saw those commands with ms-scale gaps. "
-		 "This re-introduces settle time to test the device-state/arming hypothesis: that control "
-		 "changes complete (done=1) but don't physically manifest because the FPGA datapath needs "
-		 "time to latch between commands that our µs-apart replay never gives it. Try 1000-10000.");
-
-int clarett_resp_probe;
-module_param_named(resp_probe, clarett_resp_probe, int, 0444);
-MODULE_PARM_DESC(resp_probe,
-		 "Diagnostic one-shot: for the first N FCP commands, validate the DMAed response header (echo/"
-		 "seq/status/size) AND dump the BAR mailbox data region (0x8030+). Closes the last on-chip "
-		 "blind spot — confirms whether the device leaves any response bytes in the BAR (it doesn't; "
-		 "responses come via DMA and are empty, spec §5c). 0 = off. Non-fatal; command path unchanged. "
-		 "Try resp_probe=12.");
-
-static bool drain_causes;
-module_param(drain_causes, bool, 0444);
-MODULE_PARM_DESC(drain_causes,
-		 "In the meter worker, also read (read-to-clear) cause blocks 0x200/0x300/0x500 each tick, "
-		 "mimicking FC's status loop (FC polls all five 0x100-0x500 in lockstep ~24Hz). Our mailbox "
-		 "poll drains 0x100 and the notify path drains 0x400, but 0x200/0x300/0x500 are otherwise "
-		 "untouched in a control-only session. Tests whether the device gates config-commit on the "
-		 "host continuously clearing those status blocks. Drives its own ~40ms loop even with "
-		 "meter_poll_ms=0. Default false.");
 
 static bool monitor_enables = true;
 module_param(monitor_enables, bool, 0444);
@@ -176,34 +116,14 @@ static const struct clarett_model *clarett_pick_model(const struct pci_device_id
 	return (const struct clarett_model *)ent->driver_data;
 }
 
-/*
- * Register-access trace. Logs every wrapped BAR0 access in QEMU's vfio_region_* line format so the
- * driver's OWN wire traffic can be fed straight through tools/fcp_decode.py and byte-diffed against
- * Focusrite Control's captured trace. Used to settle whether the our-driver-vs-FC gap is on-wire (a
- * traffic difference we can fix) or off-wire (DMA the MMIO trace can't see). Capture with meter_poll_ms=0.
- */
-bool clarett_trace_regs;
-module_param_named(trace_regs, clarett_trace_regs, bool, 0444);
-MODULE_PARM_DESC(trace_regs,
-		 "Log every wrapped BAR0 register access in QEMU vfio_region_* format (dmesg), for diffing "
-		 "the driver's wire traffic against Focusrite Control's trace via fcp_decode.py.");
-
 void clarett_wl(struct clarett *c, u32 off, u32 val)
 {
-	if (clarett_trace_regs)
-		dev_info(&c->pci->dev, "vfio_region_write  (%s:region0+0x%x, 0x%x, 4)\n",
-			 pci_name(c->pci), off, val);
 	writel(val, c->bar0 + off);
 }
 
 u32 clarett_rl(struct clarett *c, u32 off)
 {
-	u32 val = readl(c->bar0 + off);
-
-	if (clarett_trace_regs)
-		dev_info(&c->pci->dev, "vfio_region_read   (%s:region0+0x%x, 4) = 0x%x\n",
-			 pci_name(c->pci), off, val);
-	return val;
+	return readl(c->bar0 + off);
 }
 
 static void clarett_hw_init(struct clarett *c)
@@ -293,134 +213,17 @@ static int clarett_arm_device(struct clarett *c)
 			clk_sent = true;
 		}
 
-		/*
-		 * Response logging (log_responses): our arm is a static replay that ignores every device
-		 * reply. FC's bring-up is response-driven. Pre-fill resp_buf with 0xAA so untouched bytes are
-		 * obvious, then dump header(16)+data(32). A command that DMAs a reply overwrites the 0xAA;
-		 * bytes left 0xAA were never written. This disambiguates real device output from stale buffer
-		 * and shows whether GET_DATA returns this device's real config (vs the static blob we write
-		 * back) — a per-device mismatch would mean our writeback corrupts config.
-		 */
-		if (log_responses)
-			memset(c->resp_buf, 0xAA, 64);
-
 		err = clarett_fcp(c, s->opcode, c->model->init_blob + s->off, s->len);
 		if (err) {
 			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
 				 i, s->opcode, err);
 			fails++;
 		}
-
-		if (log_responses) {
-			dma_rmb();
-			dev_info(&c->pci->dev, "arm[%d] op=0x%06x err=%d resp: %*ph\n",
-				 i, s->opcode, err, 48, c->resp_buf);
-		}
-
-		/*
-		 * In-window config-read probe. FC reads config IMMEDIATELY after the 0x004005 prologue
-		 * (capture #167->#168), before the trailing write-back + persist DATA_CMD{5}. Our normal
-		 * postarm probe reads ~57 commands later, in a different state, and comes back empty. Replay
-		 * FC's exact opening reads (#168-172: {8,4}{c,4}{8,4}{c,4}{0,0x3f8}) right here. Real bytes
-		 * ⇒ config-read is only open in this window and our later commands close it; still empty
-		 * ⇒ even FC's own read position is dead for us → the difference is off-wire, not ordering.
-		 */
-		if (log_responses && s->opcode == 0x004005) {
-			static const struct { u32 off, len; } iw[] = {
-				{ 0x8, 0x4 }, { 0xc, 0x4 }, { 0x8, 0x4 }, { 0xc, 0x4 }, { 0x0, 0x3f8 },
-			};
-			const u8 *ir = c->resp_buf;
-			int m, mw;
-
-			for (m = 0; m < ARRAY_SIZE(iw); m++) {
-				memset(c->resp_buf, 0xAA, 16 + iw[m].len + 8);
-				err = clarett_get_data(c, iw[m].off, iw[m].len);
-				for (mw = 0; mw < 30; mw++) {
-					dma_rmb();
-					if (ir[FCP_RESP_DATA_OFF] != 0xAA)
-						break;
-					usleep_range(1000, 1100);
-				}
-				dma_rmb();
-				dev_info(&c->pci->dev, "inwindow GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
-					 iw[m].off, iw[m].len, err, mw, 48, c->resp_buf);
-			}
-		}
 	}
 	if (fails)
 		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
 			 fails, c->model->n_init_steps);
 
-	/*
-	 * Post-arm config-access probe (log_responses). Mid-init GET_DATA returns a header-only reply
-	 * (size=0, no payload). Does config access come alive once the FULL bring-up has run? GET a few
-	 * offsets with a 0xAA marker: 0x00 (config base), 0xc8 (writeback region), 0xa6 (Mode), 0x18
-	 * (monitor). If DATA (offset 16+) is still 0xAA, the device never returns its config to us — so
-	 * our static writeback runs blind. If real bytes appear, config access works and the empties were
-	 * just mid-init timing.
-	 */
-	if (log_responses) {
-		/*
-		 * Replicate FC's exact opening GET sequence (from 8prex_boot_to_stream_with_config.log
-		 * #168-180): two len=4 field reads at 0x8/0xc, then the bulk config walk in 0x3f8 chunks.
-		 * Plus {24,92} (the params that returned real data in transport-spec §8) and {24,32} (the
-		 * post-arm probe that came back empty) so we A/B length at one offset. If the 0x3f8 / len=92
-		 * reads return payload where len=32 did not, the device returns size=0 for short/non-region
-		 * reads — a length-encoding bug, not a state wall.
-		 */
-		static const struct { u32 off, len; } probe[] = {
-			{ 0x8,  0x4   }, { 0xc,  0x4   },	/* FC's two preliminary field reads */
-			{ 0x0,  0x3f8 },			/* FC's bulk chunk (1016 bytes) */
-			{ 0x18, 92    },			/* known-good params (spec §8) */
-			{ 0x18, 0x20  },			/* the failing post-arm params */
-		};
-		u8 *r = c->resp_buf;
-		int k, w;
-
-		for (k = 0; k < ARRAY_SIZE(probe); k++) {
-			memset(c->resp_buf, 0xAA, 16 + probe[k].len + 8);
-			err = clarett_get_data(c, probe[k].off, probe[k].len);
-			/* Wait for a possibly-late payload DMA: poll the first data byte (offset 16) for up
-			 * to ~30 ms. If it leaves 0xAA, the device wrote payload after done — a late-DMA/read
-			 * race (FC reads slowly under x-no-mmap and never hits it). If it stays 0xAA the whole
-			 * time, the device truly returns no config to us. */
-			for (w = 0; w < 30; w++) {
-				dma_rmb();
-				if (r[FCP_RESP_DATA_OFF] != 0xAA)
-					break;
-				usleep_range(1000, 1100);
-			}
-			dma_rmb();
-			dev_info(&c->pci->dev, "postarm GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
-				 probe[k].off, probe[k].len, err, w, 48, c->resp_buf);
-		}
-
-		/*
-		 * Settle-then-retry: our arm+probe ran in ~150 ms, but FC reads config seconds into the
-		 * session (after ms-paced x-no-mmap commands) and the one confirmed non-empty GET (§8) came
-		 * later still, on a notification. If the device's config engine comes alive asynchronously,
-		 * a GET after a few seconds should return real bytes where the immediate ones did not. Re-run
-		 * FC's bulk chunk and the known-good {24,92} after a 3 s sleep. Data here ⇒ config-read is
-		 * time/async-gated (settle delay fixes it); still empty ⇒ it needs an event/handshake we miss.
-		 */
-		msleep(3000);
-		for (k = 0; k < 2; k++) {
-			u32 off = k ? 0x18 : 0x0;
-			u32 len = k ? 92 : 0x3f8;
-
-			memset(c->resp_buf, 0xAA, 16 + len + 8);
-			err = clarett_get_data(c, off, len);
-			for (w = 0; w < 30; w++) {
-				dma_rmb();
-				if (r[FCP_RESP_DATA_OFF] != 0xAA)
-					break;
-				usleep_range(1000, 1100);
-			}
-			dma_rmb();
-			dev_info(&c->pci->dev, "postarm-late GET off=0x%02x len=0x%x err=%d waited=%dms resp: %*ph\n",
-				 off, len, err, w, 48, c->resp_buf);
-		}
-	}
 	return 0;
 }
 
@@ -609,17 +412,11 @@ static int clarett_stream_service(void *data)
 		}
 
 		/*
-		 * Mirror Windows' cause-block poll. By default we skip 0x100 (mailbox cause — read-to-clear,
-		 * racing clarett_fcp's poll) and 0x400 (notify), reading only 0x200/0x300/0x500. pollall reads
-		 * the full block in FC's order to test whether that complete poll is the signal that lets the
-		 * engine wrap. Safe during pure streaming (no mailbox/notify traffic in flight).
+		 * Mirror Windows' cause-block poll: read 0x200/0x300/0x500 each loop. We skip 0x100 (mailbox
+		 * cause — read-to-clear, racing clarett_fcp's poll) and 0x400 (notify).
 		 */
-		if (pollall)
-			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 */
 		readl(bar + STREAM_BLK0);		/* 0x200 TX cause */
 		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period ack */
-		if (pollall)
-			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 */
 		readl(bar + 0x500);			/* 0x500 IRQ summary */
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
@@ -843,12 +640,6 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 		u32 ev = cause & NOTIFY_MONITOR_MASK;
 		bool inflight = atomic_read(&c->cmd_inflight);
 
-		/* Diagnostic (log_responses): surface every 0x400 event and which bits matched the mask.
-		 * dev_info from hardirq is printk-safe. */
-		if (log_responses && cause)
-			dev_info_ratelimited(&c->pci->dev, "notify ISR cause=0x%08x masked=0x%x inflight=%d\n",
-					     cause, ev, inflight);
-
 		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
 		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Skipping the notify path
 		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware July 6
@@ -879,14 +670,6 @@ static void clarett_notify_work(struct work_struct *work)
 	if (!ev)
 		return;
 
-	/* Notification-trigger test: pre-fill so an empty GET is visible, then dump the response this
-	 * notification's GET{24,92} brings back. This is the exact {offset,len} that returned REAL config
-	 * in transport-spec §8 ("on a Mute notification"). Real bytes here ⇒ an async event wakes config-
-	 * read where our cold post-arm replay could not — the engine is live, just un-triggered. Run with
-	 * meter_poll_ms=0 so the GET_METER heartbeat can't clobber resp_buf between the GET and this read. */
-	if (log_responses)
-		memset(c->resp_buf, 0xAA, 16 + MONITOR_CFG_LEN + 8);
-
 	err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
 	if (err) {
 		/* Rate-limited: on a walled device the periodic unsatisfied config-change notification
@@ -899,20 +682,6 @@ static void clarett_notify_work(struct work_struct *work)
 		u16 size;
 
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
-		if (log_responses) {
-			int nw;
-
-			for (nw = 0; nw < 30; nw++) {
-				dma_rmb();
-				if (r[FCP_RESP_DATA_OFF] != 0xAA)
-					break;
-				usleep_range(1000, 1100);
-			}
-			dma_rmb();
-			dev_info(&c->pci->dev,
-				 "notify GET off=%u len=%u ev=0x%x waited=%dms resp: %*ph\n",
-				 MONITOR_CFG_OFFSET, MONITOR_CFG_LEN, ev, nw, 48, c->resp_buf);
-		}
 		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
 		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
 		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
@@ -961,15 +730,7 @@ static void clarett_meter_work(struct work_struct *work)
 	if (meter_poll_ms > 0)
 		clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
 
-	/* Mimic FC's status loop: it reads all five cause blocks in lockstep. We already drain 0x100
-	 * (mailbox poll) and 0x400 (notify); 0x200/0x300/0x500 are otherwise untouched control-side. */
-	if (drain_causes) {
-		readl(c->bar0 + STREAM_BLK0);		/* 0x200 (read-to-clear) */
-		readl(c->bar0 + STREAM_BLK1);		/* 0x300 */
-		readl(c->bar0 + 0x500);			/* 0x500 converter status */
-	}
-
-	if (meter_poll_ms > 0 || drain_causes)
+	if (meter_poll_ms > 0)
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
 }
 
@@ -1089,7 +850,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
 	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the
 	 * monitor-enable writes below take effect like a real session. */
-	if (meter_poll_ms > 0 || drain_causes)
+	if (meter_poll_ms > 0)
 		schedule_delayed_work(&c->meter_work,
 				      msecs_to_jiffies(meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS));
 
