@@ -19,7 +19,7 @@ After a correct vendor bring-up, a control write (e.g. Air on/off, Mic↔Inst mo
 completes cleanly — `done=1, fcperr=0` — but the **front-panel state does not change.** The identical
 operation in FC, in the same passthrough path, *does* move the LEDs, **with no audio stream and no
 engine armed** (so this is not a data-plane prerequisite — disproven separately; LEDs move in FC at
-idle). `[TRACE: clarett_monitor_mutedim.log touches only mailbox/doorbell/cause regs]`
+idle). `[TRACE: 8prex_monitor_mutedim.log touches only mailbox/doorbell/cause regs]`
 
 The control encodings themselves are XML-confirmed and correct: Air @174/175 cmd7, Mode @166/167 cmd6
 (Line=1/Inst=2), monitor Mute @24 / Dim @28 / master gain @112 cmd2.
@@ -366,7 +366,7 @@ bus power, so a TB-cable unplug alone would not reset it; only a **device DC pow
 device was DC power-cycled it stayed **continuously armed** across all captures. So the §5e inventory is the vendor
 re-initializing an **already-armed** device — which is state-*independent* for the DMA *allocations*
 (driver-side; the conclusion above holds), but **blind to anything the vendor does only once per physical
-power cycle.** Re-reading the boot captures (`clarett_full_init_mute.log`, `8prex_boot_to_stream_with_config.log`)
+power cycle.** Re-reading the boot captures (`8prex_full_init_mute.log`, `8prex_boot_to_stream_with_config.log`)
 sharpens this into two concrete, still-untested cold-boot suspects:
 - **INIT_1 (opcode `0x0`) never appears.** Both captures show **INIT_2 (`0x000002`) but no INIT_1** — the
   scarlett2 first-contact handshake's *first* step is absent. The decoder surfaces zero-execute opcodes
@@ -380,7 +380,7 @@ sharpens this into two concrete, still-untested cold-boot suspects:
 - **`seq=0` is not a cold marker.** Both captures start at `seq=0`, but `seq` is a *driver*-side counter
   reset per driver load / VM reboot — it cannot distinguish cold from warm.
 
-`clarett_arm_device` is generated from the warm `clarett_full_init_mute.log`, so it reproduces the warm
+`clarett_arm_device` is generated from the warm `8prex_full_init_mute.log`, so it reproduces the warm
 sequence **by construction** (INIT_1-less, upload-less). If either is the true cold bring-up, our driver is
 missing it. → the cold-boot capture plan (§5f) is the next test, ahead of the sibling audit.
 

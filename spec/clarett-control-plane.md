@@ -54,7 +54,7 @@ Each control commits with a `command` opcode. On the **8PreX** these are: `[XML]
 | 8 | meter source |
 
 > Note: opcode numbers differ from the USB 8Pre (there air=8, mode=7, flash=6). Use these. `[XML]`
-> **Command 5 confirmed live** (`clarett_monitor_mutedim.log`): after a monitor mute/dim change commits
+> **Command 5 confirmed live** (`8prex_monitor_mutedim.log`): after a monitor mute/dim change commits
 > (command 2), Focusrite Control issues a **standalone `DATA_CMD{activate=5}`** — a bare flash-commit with
 > **no preceding `SET_DATA`** — on a short debounce (~52–56 transactions later). This is the persist path,
 > and it is *distinct* from the bulk appspace `SET_DATA` write-back of §8/§12. `[TRACE]`
@@ -298,13 +298,13 @@ one per sample-rate band**, payload `{u32 header, u32 entry[]}`:
   (e.g. `0x300+n` mixer-input slot, `0x408/0x409` monitor out, `0x600+n` PCM capture, `0x400+n` analogue).
 - Worked entries: `0x400600` = Record 1 ← Mic 1; `0x300408` = Monitor 1 ← Mix 1; `0x60a186` =
   S/PDIF Out 1 ← Playback; `0x401301` = Mixer input slot 2 ← Analogue in 2.
-- **Traced stimulus `[TRACE-CONFIRMED]`** (`clarett_mux_full.log`): setting *Monitor Output 1*'s input
+- **Traced stimulus `[TRACE-CONFIRMED]`** (`8prex_mux_full.log`): setting *Monitor Output 1*'s input
   from Analogue 1 → Analogue 2 wrote `0x401408`/`0x401409` (Monitor Out 1 L/R ← Analogue in 2), i.e.
   `0x408/0x409 <- 0x401`; previously `<- 0x400`. Three `SET_MUX` (one per band), **no `SET_MIX`** — a
   direct output-source reassignment is MUX-only (unlike a mixer-input edit, which also rewrites `SET_MIX`).
 - A control change that touches routing rewrites the **whole** matrix (all three bands). Whether a
   `SET_MIX` rewrite accompanies it depends on the action: a **direct output-source reassignment** (e.g.
-  Monitor Out ← a different analogue input) is **`SET_MUX` only** (`[TRACE]`, `clarett_mux_full.log`),
+  Monitor Out ← a different analogue input) is **`SET_MUX` only** (`[TRACE]`, `8prex_mux_full.log`),
   whereas a **mixer-input edit** (adding/removing a channel *into a mix*) also rewrites the affected
   `SET_MIX` bus. `--classify` distinguishes them: MUX-only → routing/patchbay; MUX+MIX → mixer-matrix edit.
 
@@ -396,7 +396,7 @@ traffic is only the GUI's meter view).
   the full 8192-byte store via `SET_DATA` in 1016-byte (1 KB-payload) chunks from offset 200 to 8392
   (transport spec §8); that bulk write-back is RAM-only (no opcode-5 flash follows it). `[TRACE]`
 - **Two distinct persist behaviours observed — they do not co-occur:** the monitor mute/dim change
-  (`clarett_monitor_mutedim.log`) does the *opposite* — a standalone `DATA_CMD{activate=5}` flash-commit
+  (`8prex_monitor_mutedim.log`) does the *opposite* — a standalone `DATA_CMD{activate=5}` flash-commit
   with **no** appspace `SET_DATA` write-back at all (see §2). So persist is per-control: a bulk RAM
   write-back for some controls, a bare opcode-5 flash-commit for the monitor section. The full trigger
   matrix (which controls take which path, and when the RAM store is actually flashed) is **`[TRACE]`**. `[TRACE]`

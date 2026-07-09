@@ -145,7 +145,7 @@ from control-plane spec §11 — likely written to a notification register the I
    Notifications arrive on **MSI vector 0** (bare metal: only vec0 ever fires) with the §11 mask in
    **cause reg `0x400`**; host re-syncs with `GET_DATA{0x18,0x5c}` + per-band `GET_MUX`. See §8.
 
-## 8. CONFIRMED from boot-init trace (`clarett_init_short.log`, ControlServer NOT running)
+## 8. CONFIRMED from boot-init trace (`8prex_init_short.log`, ControlServer NOT running)
 
 The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRMED]`
 
@@ -194,7 +194,7 @@ version/identity *check*, not code loading. Two independent proofs:
   and front-end FPGA must *already be configured* — that link is the precondition for the PCIe tunnel
   the host driver rides on. The host cannot upload the bitstream over a link that needs that same
   bitstream to exist. So the FPGA loads from local flash at power-on, before any host involvement.
-- **Empirical (`clarett_init_short.log`).** The boot histogram is **zero `SET_DATA` and zero bulk
+- **Empirical (`8prex_init_short.log`).** The boot histogram is **zero `SET_DATA` and zero bulk
   transfer** — only `0x5000` CONFIG_PUSH (2-byte payloads ×46), small `0x6000`/`0x7000` queries, and
   `0x800005` **READ_SEG ×2** (the host *reading* flash segments). A bitstream upload would be hundreds
   of KB–MB of mailbox writes; nothing of that size exists. And the driver reads back valid
@@ -207,7 +207,7 @@ load. **But this does NOT mean the host can skip init**: a fresh device still re
 bring-up** to arm config access (see "Session bring-up IS required" below). An earlier version of this
 note wrongly concluded "the control plane works without replaying init" — that was an artifact of only
 ever testing a device the vendor app had already initialized before hand-over; the fresh-power-cycle
-experiments (`clarett_full_init_mute.log`) disproved it. `[corrected]`
+experiments (`8prex_full_init_mute.log`) disproved it. `[corrected]`
 
 **Vendor firmware files** (in the VM at `…/Focusrite Control/Server/Resources/Firmware/`) are the
 update/recovery payloads, flashed **only on a version mismatch** — never read or pushed at boot:
@@ -220,7 +220,7 @@ Firmware update is therefore an **optional, user-initiated** capability, never p
 **Clean-room:** these are vendor binary blobs — keep them out of the driver tree (like the XML
 descriptors); any future update support should flash only user-supplied images, not bundled ones.
 
-### Session bring-up IS required — host must arm the device `[HW/TRACE — clarett_full_init_mute.log]`
+### Session bring-up IS required — host must arm the device `[HW/TRACE — 8prex_full_init_mute.log]`
 Distinct from firmware loading: a freshly power-cycled, self-booted 8PreX does **not** accept config
 operations until the host replays the vendor session init. Confirmed on bare metal:
 - On a **fresh** device, `GET_DATA` returns an FCP error — the config space is not "armed".
@@ -252,14 +252,14 @@ vendor's entire control-plane behaviour byte-for-byte (full init, config read/wr
 
 **The earlier conclusion here — "effects stay inert until the audio engine is streaming; the remaining
 work is the data plane" — is WRONG and has been disproven.** FC moves the same LEDs **at idle with no
-stream and no engine armed** (`clarett_monitor_mutedim.log` touches only the mailbox/cause regs). So
+stream and no engine armed** (`8prex_monitor_mutedim.log` touches only the mailbox/cause regs). So
 manifestation does not require the data plane. This session added a second, cleaner symptom of the same
 root: `GET_DATA` returns an **empty** payload too (below). Both the control plane and the data plane fail
 the same way — our observable traffic (BAR0 + FCP + PCI config) is byte-identical to FC's, yet neither
 functions — so the differentiator is **off-wire / below the BAR surface**, not a missing control-plane
 command and not the data plane. Full elimination chain: `spec/clarett-manifestation-wall.md`.
 
-### Opcode map — CONFIRMED by stimulus (master-mute capture, `clarett_master_mute_decoded_live.log`)
+### Opcode map — CONFIRMED by stimulus (master-mute capture, `8prex_master_mute.log`; decode via `tools/fcp_decode.py`)
 | opcode | name | payload | proof |
 |---|---|---|---|
 | `0x001001` | GET_METER | `{u32 offset, u32 len}` | GUI polls continuously (`offset=0x560000`) |

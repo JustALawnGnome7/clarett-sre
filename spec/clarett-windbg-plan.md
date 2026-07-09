@@ -94,7 +94,7 @@ cold results are valid — but never do a cable-only unplug and call it cold on 
    ```
    python3 tools/fcp_decode.py --brief captures/cold_boot.log | sed -n '/opcode histogram/,$p'
    ```
-   Compare against `clarett_full_init_mute.log`'s histogram (INIT_2 ×6, CONFIG_PUSH ×122, no INIT_1/REBOOT).
+   Compare against `8prex_full_init_mute.log`'s histogram (INIT_2 ×6, CONFIG_PUSH ×122, no INIT_1/REBOOT).
    **A cold-only `0x0` (INIT_1) or `0x3` (REBOOT), or any new chunked-SET_DATA burst, is the find.**
 
 ### Decide

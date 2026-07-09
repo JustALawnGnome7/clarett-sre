@@ -200,7 +200,7 @@ struct snd_pcm_substream;
 #define FCP_GET_73               0x007003
 
 /*
- * Device bring-up opcodes seen in the vendor attach capture (clarett_full_init_mute.log).
+ * Device bring-up opcodes seen in the vendor attach capture (8prex_full_init_mute.log).
  * Not fully decoded; the bring-up is replayed verbatim at probe (clarett_arm_device) from the
  * generated clarett_init_8prex.h, which precedes config writes actually taking effect on hardware.
  * Named here for documentation only — the replay table carries raw opcodes.

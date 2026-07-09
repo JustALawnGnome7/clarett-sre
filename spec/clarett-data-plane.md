@@ -4,7 +4,7 @@
 > and 4Pre (the 8PreX is the reference model); per-model geometry is called out inline.
 
 **Status (June 28 2026):** far past a "plan". Phase 1 (streaming register map) **recovered** from
-`clarett_full_init_mute.log` (§3b); Phase 2 (descriptor format + sample layout) **recovered** from live
+`8prex_full_init_mute.log` (§3b); Phase 2 (descriptor format + sample layout) **recovered** from live
 guest-RAM dumps (§3c); the engine is **implemented and validated** — arms cleanly, DMAs a burst,
 descriptors valid (no IOMMU faults), the DMA PTR advances. **But it will not sustain past one ring pass**:
 it flags "period 0 ready" and the `0x300` counter never advances, universal across both models. Every
@@ -70,9 +70,9 @@ like this FPGA PCIe DMA engine. Expect this to be empirical and slower.
 
 ## 3b. Data-plane register map — RECOVERED from a streaming capture `[TRACE]`
 
-**Phase 1 is largely already done.** `clarett_full_init_mute.log` was captured with Focusrite Control
+**Phase 1 is largely already done.** `8prex_full_init_mute.log` was captured with Focusrite Control
 **live**, so its ASIO engine was streaming — the trace contains the full streaming-setup register
-activity (`tools/bar_profile.py clarett_full_init_mute.log --new-only`). Two structurally identical
+activity (`tools/bar_profile.py 8prex_full_init_mute.log --new-only`). Two structurally identical
 **ring blocks** appear, at `0x200` (→ MSI **vec1**) and `0x300` (→ MSI **vec2**), confirming the
 vec1/vec2 period-IRQ hypothesis:
 
@@ -169,7 +169,7 @@ buffer with entries at the fragment stride satisfies the engine — it only need
 
 **Phase 1 — Streaming setup (BAR registers). ✅ LARGELY DONE — see §3b.**
 The register map (ring blocks `0x200`/`0x300`, base/size/control/pointer, IRQ config) and the
-stream-start write sequence are already recovered from `clarett_full_init_mute.log`. Direction
+stream-start write sequence are already recovered from `8prex_full_init_mute.log`. Direction
 (`0x200`=TX, `0x300`=RX) is now also settled — not by playback-only/record-only captures but by
 reading *which channels were live* in the RAM dumps (§3c). This phase is in hand.
 
@@ -547,7 +547,7 @@ fastest path now is an **active probe from our own driver**, not more passive tr
        step is confirmed identical to the 8PreX (model-independent).
 
 Prerequisite still open: **clock-source / sample-rate** (control-plane §7) must be set before streaming
-and is still untraced — but note the engine streamed in `clarett_full_init_mute.log` after only the §3b
+and is still untraced — but note the engine streamed in `8prex_full_init_mute.log` after only the §3b
 *register* writes (no new mailbox clock command was needed beyond the bring-up we already replay), so
 clocking may already be covered by `clarett_arm_device`. Confirm during step 1; if the engine won't
 start, capture an FC sample-rate change to find the clock command.

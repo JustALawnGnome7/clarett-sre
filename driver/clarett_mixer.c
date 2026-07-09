@@ -142,7 +142,7 @@ int clarett_create_controls(struct clarett *c)
 		return -ENOMEM;
 
 	/*
-	 * Monitor section (command 2). Trace-confirmed against clarett_monitor_mutedim.log:
+	 * Monitor section (command 2). Trace-confirmed against 8prex_monitor_mutedim.log:
 	 * mute @ offset 24 and dim @ offset 28 are 1-bit fields that toggle 0/1 and commit
 	 * with activate=2 (both directions verified). Named "Mute"/"Dim" to match the USB unit
 	 * (scarlett2). For these to physically affect Monitor Out 1-2 the per-output enable bits

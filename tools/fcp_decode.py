@@ -15,7 +15,7 @@ Register map is from spec/clarett-fcp-transport.md §8 (boot-init trace). Offset
 constants below — tweak if later captures refine them.
 
 Usage:
-  ./tools/fcp_decode.py captures/clarett_init_short.log
+  ./tools/fcp_decode.py captures/8prex_init_short.log
   sudo tail -f /var/log/libvirt/qemu/Windows10-custom.log | ./tools/fcp_decode.py -
   ./tools/fcp_decode.py capture.txt --raw       # also echo non-mailbox accesses
   ./tools/fcp_decode.py capture.txt --classify  # is this capture a fader move or a routing change?
