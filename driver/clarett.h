@@ -287,16 +287,22 @@ struct clarett_model {
  * A failed/absent DMA leaves the echo word 0, so checking it avoids consuming a
  * stale buffer (seen on the first GET at load, which DMAs all zeroes). But the echo
  * word alone is NOT sufficient: our device answers GET_DATA with the header present
- * (echo + 0x03 success) yet size=0 and NO payload — the config backend is dormant for
- * our driver (spec/clarett-manifestation-wall.md §5a). So a reader must ALSO
+ * yet size=0 and NO payload — the config backend refuses our session (see below and
+ * spec/clarett-manifestation-wall.md §5a/§7). So a reader must ALSO
  * require size > 0 before consuming resp[16+]; otherwise it copies stale buffer bytes.
+ *
+ * resp[8..11] is the FCP ERROR word: 0 = OK. A working session's responses carry 0
+ * with real payload sizes (pmemsave of FC's live buffer, July 9 2026 — transport spec
+ * §8). Our sessions get 0x3 on every response — a refusal code, NOT "success" (the
+ * pre-July-9 reading, calibrated only on walled responses, had this backwards).
  */
 #define FCP_RESP_ECHO_OFF        0
 #define FCP_RESP_SIZE_OFF        4
 #define FCP_RESP_SEQ_OFF         6      /* echoed request seq in the DMAed response header */
-#define FCP_RESP_STATUS_OFF      8      /* status/error word; 0x03 = SUCCESS (fcp-transport spec) */
+#define FCP_RESP_STATUS_OFF      8      /* FCP error word; see layout comment above */
 #define FCP_RESP_DATA_OFF        16
-#define FCP_RESP_STATUS_SUCCESS  0x03
+#define FCP_RESP_ERR_OK          0x00   /* working-session responses */
+#define FCP_RESP_ERR_WALLED      0x03   /* the refusal every command gets on our sessions */
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */

@@ -441,8 +441,158 @@ software RE for this device.
 All gated, default-off-from-FC's-perspective where relevant, so the elimination is re-runnable:
 `trace_regs` (in-driver wire trace), `inject_clock` (the 0x6003 hack), `monitor_enables` (probe
 seeding), `drain_causes` (FC-style all-cause poll), `meter_poll_ms` (GET_METER heartbeat),
-`verify_writes` (post-write GET_DATA readback), `dma_bits` (coherent mask width).
+`verify_writes` (post-write GET_DATA readback), `dma_bits` (coherent mask width),
+`premailbox_reads` (default true; replay the vendor's exact pre-mailbox BAR0 read set at attach — caps,
+`0x4/0x8`, serial, `0x514`, `0x58c×2`, all four cause blocks, the full `0x8000–0x801c` fw header — the
+sole host-visible pre-mailbox difference the §7 cold ladder left; set 0 for the old read-minimal probe to
+A/B whether the reads flip `GET_DATA` to `error=0`),
+`resp_prefill` (fill the `0x410` response buffer with a byte before every submit: `0` = FC's
+freshly-zeroed common buffer, `170` = the §5a 0xAA emptiness marker, `-1` = untouched baseline —
+probes whether the device reads this buffer, the only host address it knows at init; see §7).
 
 Exact-subset replay: power-cycle the device (bring-up must run on a fresh device), then
 `insmod snd-clarett.ko model=2pre inject_clock=0 monitor_enables=0 meter_poll_ms=0`, toggle a control,
 observe no front-panel change.
+
+---
+
+## 7. Open lead — host-RAM contents the device reads `[PLAN]` (July 9 2026)
+
+The §5f terminus verdict covers every surface the four methods could *see* — but none of them ever
+observed **runtime host-CPU writes into device-visible DMA memory**, nor compared that memory's
+**contents** between a working and a walled session. The elimination itself points here: with the
+Fedora-guest A/B making the TB/PCIe path identical by construction and every MMIO/config/MSI surface
+matched by measurement, the only thing a deterministic endpoint can still observe differently is
+**what it finds when it DMA-reads host RAM** — and the sole host address it knows at init is the
+`0x410/0x414` response buffer. Precedent that this device acts on buffer contents: the data-plane
+`0xAA` RX pre-fill was the lone difference that made the engine clock, and flat-mode faults showed
+the engine dereferencing buffer bytes as pointers (data-plane §9).
+
+Planned instruments, cheap-first:
+1. **`resp_prefill` A/B (driver lever, §6) — RUN, NEGATIVE `[TEST]` (July 9 2026).** Per-command fill
+   of the response buffer: `0` mirrors FC's freshly-zeroed 4 KB common buffer; `170` (0xAA) restores
+   the §5a emptiness marker; `-1` baseline (zeroed at alloc, previous response left in place — the
+   behaviour every walled run so far used). Result on the 2Pre with `resp_prefill=0`: `clarett_seed_shadow`
+   still fails (`-EIO` after 3 attempts = the echo+size guard rejecting `size=0` responses) and an Air
+   toggle via alsamixer does not move the front-panel LEDs — identical wall. So the device does not gate
+   on *stale-response residue vs zeroed* buffer contents. (Validity assumes the standard fresh
+   DC-power-cycle before load, per §6.) Narrows the RAM-contents theory to content FC actively *writes*
+   (tests 2–3), not hygiene we lack.
+2. **pmemsave temporal diff of FC's response buffer — RUN `[TEST]` (July 9 2026): no host seed, no
+   request mirror, but a MAJOR CORRECTION FOUND.** Runbook: `spec/clarett-respbuf-plan.md`; tools:
+   `dma_bases.py` (extracts the `0x410/0x414` GPA), `resp_burst.sh`, `resp_dump.py`. S0 (driver-only,
+   quiescent) + a 668-snapshot burst across FC startup + meter steady state (460 distinct buffer
+   states): **every state is a well-formed device response; nothing host-written** — the seed/mirror
+   hypothesis is negative on this buffer (sub-50 ms transients technically remain for `ba w`, but
+   the motivating theory is now superseded). **The discovery: resp`+8` is an FCP ERROR word, not a
+   status.** The working session's every response carries **`+8=0x00` with real payloads** (`GET_METER`
+   size=192; `GET_6.5` size=4 payload=48000 — new fact: `0x6005` = sample-rate query; `SET_DATA`
+   size=0 ack; content cross-matches the macOS §5d captures at the +16 header shift). Our sessions get
+   **`+8=0x3, size=0` on every response from query #1** — i.e. the device REFUSES our whole session
+   with a named error code; "SUCCESS 0x03 + empty" (§5a/§5c wording) was a mis-calibration made when
+   only walled responses had ever been seen. Transport spec §8 corrected; `clarett.h` constants renamed
+   (`FCP_RESP_ERR_OK`/`FCP_RESP_ERR_WALLED`). **The wall restated: what arms a session = whatever makes
+   the device answer error 0 instead of error 3.**
+   **→ Cold-boot error timeline, sampling pass — RUN `[TEST]` (July 9 2026), head unresolved.**
+   DC power-cycled 2Pre, burst-sampled the vendor's own cold bring-up (2907 snapshots): the earliest
+   observable response — **seq 61, `CONFIG_PUSH{0x1e}` answered `"ADAT 8"` — is already `error=0` on a
+   genuinely cold device.** (New fact: `CONFIG_PUSH` 0x5000 is really a per-id *name query* — the
+   working device answers each with the port's name string.) The bring-up is two ~30 ms phases
+   (seq 0–61, then a ~48 s OS-boot idle, then seq 62–84): far too fast for ~10 Hz sampling, and the
+   buffer GPA is not boot-stable, so pre-aiming is impossible. **If a 3→0 flip exists it is inside
+   seq 0–60** (READ_SEG, GET_7.1×3, INIT_2, GET_6.2/6.0, CONFIG_PUSH ladder — all commands we replay
+   byte-identically). Public-source cross-check: the mainline ALSA `fcp` driver's response struct
+   confirms `+8` is the error word and treats ANY nonzero value as failure; no public enumeration of
+   code 3 exists.
+   **→ gdb doorbell ladder — RUN `[TEST]` (July 10 2026): NO 3→0 flip; the working device answers
+   `error=0` from command #0 on a cold boot. THE GATE IS PRE-MAILBOX.** `tools/doorbell_ladder.gdb`
+   attached to the custom (debug-info) QEMU, broke `vfio_region_write`, and appended the 4 KB response
+   buffer at every doorbell submit (GPA learned live from `0x410/0x414`; GPA→HVA via the pc.ram block;
+   pure gdb reads). Captured the full **85-command cold bring-up** (`/tmp/ladder.bin`, decode
+   `resp_dump.py --ladder`). Result: **record 1 (response to seq 0, `READ_SEG`) is already `error=0`
+   with a real 8-byte payload, and every command seq 0→83 answers `error=0` with rich real data.**
+   (Record 0 = stale pre-arm buffer, expected.) There is **no error-3 phase and no arming command** —
+   the vendor's device is in the "answer this host" state from the very first mailbox command. Since
+   our driver gets `error=3, size=0` from *its* command #0 (§5c, re-read with the July-9 correction),
+   **the accept-vs-refuse decision is made before mailbox command #0 — an attach-time condition, not a
+   mailbox step.** No mailbox change can cross the wall (finally explains why none ever did).
+   **Pre-mailbox surface diff (the one new lead):** in the cold trace the vendor's pre-mailbox BAR0
+   *writes* are identical to ours (`0x104=0xf000003f`, `0x500=8`, `0x510=8`, `0x410/0x414`), but it
+   *reads* a wider set at attach than `clarett_hw_init` does. Vendor reads `0x0`(caps), `0x4`, `0x8`,
+   `0x10/0x14`(serial), **all four cause blocks `0x100/0x200/0x300/0x400`** (read-to-clear), `0x500`,
+   **`0x514`, `0x58c`(×2)**, and the **full 8-word fw header `0x8000–0x801c`**. Our probe reads only
+   `0x10/0x14` + `0x8000/0x8004`. So the vendor touches, at attach, several registers we never
+   read — including read-to-clear cause blocks and the peculiar `0x58c` (read twice). **NEXT (cheap):**
+   replay the vendor's exact pre-mailbox read set in `clarett_hw_init` (a read-only change), fresh
+   power-cycle, and check whether `GET_DATA` flips to `error=0`. Weak prior (reads rarely gate
+   acceptance, and 4 methods point below-driver), but it is the *only* host-visible pre-mailbox
+   difference and sits exactly where the ladder localized the gate — worth one power-cycle.
+   (**Method correction:** an earlier draft proposed WinDbg `ba w4` on resp+8 — wrong: x86 debug
+   registers trap CPU accesses only, never device DMA writes; the gdb ladder replaced it. gdb caveats
+   learned: attach the *custom* `/usr/local/bin` QEMU by path not `pgrep qemu.*Windows10` (matches the
+   stock WinDbg VM); `handle SIGUSR1/2 nostop pass` or the vCPU-kick freezes gdb and a long stop
+   starves libvirt's keepalive → virt-manager drops the domain; press `c` past the attach pager.)
+
+   **→ pre-mailbox-read replay — RUN `[TEST]` (July 10 2026): NEGATIVE. GET_DATA still `error=3`.**
+   Driver lever `premailbox_reads` (default on) replays the vendor's exact pre-mailbox read set + write
+   reorder (0x104 before the DMA addr) + matched inter-group timing (usleep_range 0.8–8 ms/gap) at attach.
+   On the 2Pre: `clarett_seed_shadow` still fails (`-EIO`, `GET_DATA` still `error=3`/`size=0`) — the
+   config backend gate is **unchanged** on every variant. The whole host-visible pre-mailbox surface
+   (writes, reads, their values, order, timing) is now matched/inert and GET_DATA stays `error=3` ⇒ the
+   pre-mailbox lead is **exhausted**, re-confirming the below-driver localization.
+   **⚠ RETRACTED over-claim (July 10 2026) — the "Analogue-2 LED flash = first physical device response"
+   was a FALSE ALARM; do not resurrect it.** During these loads an Analogue-2 LED flashed red a few times
+   and was (wrongly) reported here as the device physically reacting to our driver, then "explained" as a
+   pending-cause read-to-clear. **Both readings are withdrawn.** The user identified the LED as the
+   **Analogue-2 INPUT CLIP meter** (fires when the analog input momentarily exceeds the clip threshold) —
+   an input signal-level indicator, not a device-state LED — and it does **not** reproduce with
+   `premailbox_causes=1`. So the flashes were **incidental analog input transients** (a floating input
+   picking up a pop / noise), and the `premailbox_causes` correlation was small-sample coincidence. There
+   was **no** physical device response and **no** foothold. LESSON (again): an intermittent, uncontrolled
+   hardware observation is not evidence until it reproduces under control — do not promote it to a finding.
+   **What DID stay solid (independent of the LED):** the device completes our mailbox at the BAR level
+   (`MBOX_ERROR`@`0x8028 = 0`, `done=1`) and DMAs a well-formed response header, yet returns FCP
+   application **`error=3, size=0`** — so the refusal is an **FCP-application-layer session block** from
+   command #0, not a dead/ignoring device (supported by the mailbox round-trip, NOT by the LED). The two
+   error fields differ: BAR `0x8028 = 0` but DMA `resp+8 = 3` (our `clarett_fcp` checks the BAR word, sees
+   0, so the seed's `-EIO` comes from the `size=0`/echo guard). Pre-mailbox register **values** banked
+   (cold 2Pre): `caps@0x0=0x032003fd`, `0x4=0x00000080`, `0x8=0x00002000` (= config size 8 KB?),
+   `0x514=0x00000847`, `0x58c=0`.
+
+   **→ error-code discrimination — first two runs INVALID (racy read); PROVISIONAL finding, re-test
+   pending `[TEST]` (July 10 2026).** Driver lever `error_probe=1` sends malformed/varied FCP commands and
+   reads the DMA response. The first run looked clean (valid `GET_DATA`→`err=3`; bad-offset/unknown→no
+   response) and was written up as "the device discriminates per-command; `err=3` is a specific
+   access-denied code." **The opcode-survey run then exposed a RACE that invalidates both runs:** a
+   `GET_DATA{0xc8}` line reported `echo=0x80005000` — CONFIG_PUSH's echo from the *previous* command — which
+   a GET_DATA can't legitimately produce. The device DMAs its response **asynchronously, a little after the
+   BAR done bit** `clarett_fcp` polls, so reading `resp_buf` immediately catches the *previous* command's
+   late response (shifted by ~one command). Per-command attribution in both runs is therefore unreliable
+   and the "discriminates / `err=3` is specific" conclusion is **withdrawn pending re-test** (do not rely on
+   it). What is still real: the device DMAs `err=3`/`size=0` response headers for *some* commands and none
+   for others — both behaviors occur — but which command maps to which was scrambled by the race.
+   **FIX (in tree):** `clarett_error_probe` polls `resp_buf` until the echoed opcode matches the command
+   just sent (50 ms timeout = genuine no-response), with `meter_poll_ms=0` required (else the meter worker
+   steals `resp_buf` and bumps `c->seq`, corrupting attribution — that was a *second* instrument bug behind
+   the racy runs).
+   **→ RESOLVED `[TEST]` (July 10 2026): BLANKET refusal — the device stamps `err=3` on EVERY command.**
+   Clean run (`error_probe=1 meter_poll_ms=0`, meter off, echo-matched): all eight commands returned
+   `echo=<own opcode>, err=3, size=0` — valid `GET_DATA{24,4}`, out-of-range `GET_DATA`, an **unknown opcode
+   `0x0000ff`** (echo `0x800000ff` — unforgeable, proves a real fresh response), `READ_SEG`, `GET_7.1`,
+   `GET_6.2`, `CONFIG_PUSH{0x1e}`, appspace `GET_DATA{0xc8}`. So the device does **NOT discriminate**: it
+   denies a nonsense opcode with the same `err=3` as a valid request. It echoes the opcode back (minimal
+   "received") but **does not echo our request seq** (writes `seq=0` on a refusal — a tell that this is a
+   stub refusal path, distinct from the vendor's seq-echoing `err=0` responses). ⇒ **`err=3` is a blanket,
+   out-of-band session-level refusal applied to the whole command stream regardless of content** — the
+   earlier "discriminates / `err=3` is specific" reading is **fully retracted** (it was the meter+async
+   race). This is the cleanest statement of the wall: the device receives and acks our FCP commands but
+   refuses the entire session with `err=3`, a decision made outside the command layer (consistent with the
+   pre-mailbox/attach-time localization and the cold ladder's "vendor gets `err=0` from command #0"). No
+   FCP-layer manipulation can cross it. (LESSON, and this session's running theme: THREE instrument bugs —
+   the `0x03` mis-calibration, the LED false alarm, and the async+meter read race — each produced a
+   plausible-looking wrong finding before hardware/clean-instrument re-test corrected it. Verify the
+   instrument first.)
+3. **WinDbg `ba w` watchpoints** on the offsets (2) shows changing, attributed by module range —
+   a `FocusritePCIe` CPU write into this buffer is protocol traffic invisible to all four §5 methods.
+4. Same instruments on the 16 KB descriptor CBs for the data-plane wall (pre-arm seeding; the
+   undecoded second structure past the descriptor terminator, data-plane §3c).

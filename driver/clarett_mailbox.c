@@ -12,8 +12,24 @@
 #include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/delay.h>
+#include <linux/module.h>
 #include <linux/string.h>
 #include "clarett.h"
+
+/*
+ * Manifestation-wall A/B — per-command response-buffer hygiene. The device provably reacts
+ * to host DMA-buffer *contents* (data-plane §9: the 0xAA RX pre-fill was the lone difference
+ * that made the engine clock), and this buffer is the only host address the device knows at
+ * init. FC's 4 KB common buffer arrives zeroed from Windows; ours is zeroed at alloc but then
+ * holds the previous response between commands. -1 = leave it alone (baseline); 0..255 = fill
+ * the whole buffer with that byte before every submit (0 mirrors FC's fresh common buffer;
+ * 170/0xAA restores the §5a emptiness instrument — any byte still 0xAA after completion was
+ * not written by the device).
+ */
+static int resp_prefill = -1;
+module_param(resp_prefill, int, 0444);
+MODULE_PARM_DESC(resp_prefill,
+	"Fill the response DMA buffer with this byte before each command (-1=off/baseline, 0=zero like FC's fresh buffer, 170=0xAA emptiness marker).");
 
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 {
@@ -27,6 +43,11 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	mutex_lock(&c->mbox_lock);
 
 	clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
+
+	if (resp_prefill >= 0) {
+		memset(c->resp_buf, resp_prefill & 0xff, c->resp_size);
+		dma_wmb();	/* fill visible to the device before the doorbell submit */
+	}
 
 	clarett_wl(c, REG_MBOX + MBOX_CMD, CMD_EXEC_FLAG | opcode);
 	clarett_wl(c, REG_MBOX + MBOX_SIZESEQ, ((u32)c->seq << 16) | len);

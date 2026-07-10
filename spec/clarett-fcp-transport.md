@@ -292,12 +292,37 @@ correction below the table:
 |---|---|---|
 | `+0` | echoed `cmd` (`CMD_EXEC_FLAG | opcode`) | e.g. `0x80800000` for a `GET_DATA` — guard on this |
 | `+4` | `size | seq` | echoed |
-| `+8` | status/error | observed `0x3` on success (low-nibble status, mirrors `0x400`) |
+| `+8` | **FCP error word** | **`0x00` = OK** (scarlett2 convention); **`0x3` = refusal — the walled-session code** `[CORRECTED July 9 2026, see below]` |
 | `+12` | pad | |
 | `+16 + i` | (`config[offset + i]` for a *working* device) | **for our driver this region stays empty** — see below |
 
+**⚠⚠ `+8` CORRECTION `[TRACE — July 9 2026]`: `0x3` is NOT "success"; it is an error/refusal code.**
+The original "`0x3` on success" reading was calibrated **entirely on walled responses** (our driver's —
+the only response headers ever seen before). Live pmemsave sampling of the **working** Windows session's
+response buffer (`spec/clarett-respbuf-plan.md`; S0 + 668-snapshot S1 burst, 460 distinct states) shows
+the working device writes **`+8 = 0x00` on every response, with real payload sizes** (`GET_METER`
+size=192, `GET_6.5` size=4 payload=48000, `SET_DATA` size=0 write-ack) — matching the scarlett2/FCP
+convention (error field, 0 = OK). Our device answers **every** command with `+8 = 0x3, size=0`: a named
+**refusal**, not "success with empty data". The manifestation wall restated: the device rejects our
+entire session with FCP error 3 from query #1 (wall spec §7). Bonus fact from the same capture:
+**`0x6005` = sample-rate query** (returns u32 rate; 48000 observed).
+
+#### Working-session response payloads — RECOVERED from the cold gdb ladder `[TRACE — July 10 2026]`
+The `doorbell_ladder.gdb` capture of a full cold vendor bring-up (`/tmp/ladder.bin`, 85 records) gives
+the device's real response to **every** init command (all `error=0`). Confirmed opcode semantics:
+- **`CONFIG_PUSH` (`0x5000`) is a per-id NAME QUERY**, not a config write. Each returns the port/source
+  name string: id list → `"Internal"`, `"S/PDIF"`, `"ADAT"` (clock sources); `"Output 1".."Output 4"`,
+  `"Input 1"/"Input 2"`, `"S/PDIF 1"/"2"`, `"Loop 1"/"2"`, `"ADAT 1".."ADAT 8"` (2Pre port names).
+- **`0x4001` = firmware SEGMENT query** — returns the segment names `App_Gold`, `App_Upgrade`,
+  `FPGA_Gold`, `FPGA_Upgrade`, `App_Env`, `App_Settings` (matches the macOS §5d capture), each with a
+  preceding `{u16 ver, u32 size}`-ish header.
+- **`GET_6.2` = sample-rate + width**: `80 bb 00 00 18 00 18 00` → rate `0xbb80 = 48000`, `0x18=24`.
+- **`GET_7.2`/`GET_7.3` = per-direction channel-count blocks** (`0x2b=43`, `0x0d=13`), aligning with
+  the data-plane geometry. `INIT_2` (`0x2`) returns an 88-byte device-info block (fw build/caps).
+These are the working answers to the *same* commands our driver issues; ours all return `size=0`.
+
 **⚠ For our driver, `GET_DATA` returns an EMPTY payload `[CORRECTED June 28 2026]`.** The header DMAs in
-fine (`resp[+0]=0x80800000` echo, `resp[+8]=0x03` success) but `size@+4 = 0` and the data region (`+16`
+fine (`resp[+0]=0x80800000` echo, `resp[+8]=0x03` **error — see the July 9 correction above**) but `size@+4 = 0` and the data region (`+16`
 onward) is never written — exhaustively confirmed on **both** 8PreX and 2Pre, at every offset, every
 length (4 / 0x3f8 / 92 / 32), with a 3 s settle, in FC's exact read window, and even in a genuine Mute
 notification context. So `resp[16+i] == config[off+i]` does **not** hold for us; the device's config

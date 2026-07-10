@@ -119,6 +119,19 @@ Never load this while the VM is using the device.
 - The GET-response DMA buffer address is programmed at `0x410` (low32) / `0x414`
   (high32) — `0x414` = address-high confirmed (hardcoding the trace's `0x2` faulted
   the IOMMU; the driver uses `upper_32_bits(resp_dma)`).
+  A/B lever `resp_prefill=` (-1/0..255): fill the response buffer with a byte before
+  every command submit — `0` mirrors FC's freshly-zeroed common buffer, `170` (0xAA)
+  restores the §5a emptiness marker, `-1` (default) leaves it untouched between
+  commands (baseline). Probes whether the device reads/reacts to this buffer's
+  contents (the only host address it knows at init).
+- **`premailbox_reads=` (default 1)**: replay the vendor driver's exact pre-mailbox
+  BAR0 **read** sequence at attach (caps, `0x4/0x8`, serial, `0x514`, `0x58c`, all
+  four cause blocks, the full `0x8000–0x801c` fw-info header) before the first FCP
+  command. The cold gdb ladder (2026-07-10) showed the working device answers
+  `error=0` from mailbox command #0, so the accept-vs-refuse gate is set *before* the
+  mailbox opens; pre-mailbox writes already match FC, so this read set is the sole
+  remaining host-visible pre-mailbox difference. Set `0` for the old read-minimal
+  probe to A/B whether the reads flip `GET_DATA` to `error=0`.
 - **Control changes don't physically manifest — a proven below-driver boundary** (the
   headline gap). After a correct bring-up, monitor `Mute`/`Dim` writes complete
   (`done=1, fcperr=0`) and `GET_DATA` returns empty (`size=0`) — the device backend is

@@ -81,6 +81,38 @@ MODULE_PARM_DESC(monitor_enables,
 		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
 		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
 
+static bool premailbox_reads = true;
+module_param(premailbox_reads, bool, 0444);
+MODULE_PARM_DESC(premailbox_reads,
+		 "Replay the vendor's exact pre-mailbox BAR0 READ sequence at attach (caps/serial/fw-header/"
+		 "cause-blocks/0x514/0x58c) before the first FCP command. Motivated by the July-10 2026 cold gdb "
+		 "ladder: the working device answers error=0 from mailbox command #0, so the accept-vs-refuse gate "
+		 "is set PRE-mailbox (manifestation-wall §7). Pre-mailbox WRITES already match FC byte-for-byte; "
+		 "this read set is the sole remaining host-visible pre-mailbox difference. Default true; set 0 for "
+		 "the old (walled) read-minimal probe to A/B whether the reads flip GET_DATA to error=0.");
+
+static bool error_probe;
+module_param(error_probe, bool, 0444);
+MODULE_PARM_DESC(error_probe,
+		 "Diagnostic (manifestation-wall §7): after bring-up, send a few deliberately MALFORMED FCP "
+		 "commands (bad offset, zero length, unknown opcode) alongside a valid GET_DATA and log each "
+		 "response's DMA error word (resp+8) + size. If the malformed commands return a DIFFERENT code "
+		 "than the valid one's error=3, the device parses per-command (error=3 = a specific semantic "
+		 "rejection); if ALL return error=3/size=0 identically, it is a blanket out-of-band session refusal. "
+		 "Off by default (sends junk commands). One-shot at probe. MUST be combined with meter_poll_ms=0: the "
+		 "meter-poll worker otherwise races the probe on the shared resp_buf and c->seq (its GET_METER "
+		 "responses land in the buffer and it bumps the seq), corrupting per-command attribution.");
+
+static bool premailbox_causes = true;
+module_param(premailbox_causes, bool, 0444);
+MODULE_PARM_DESC(premailbox_causes,
+		 "Within premailbox_reads, gate the four READ-TO-CLEAR cause-block reads (0x100/0x200/0x300/"
+		 "0x400). Bisection lever for the 2026-07-10 finding that premailbox_reads=1 makes the Analogue-2 "
+		 "gain LED flash red at probe (first-ever physical response). The info/version reads are "
+		 "side-effect-free; the cause-block reads are read-to-clear, so they are the prime suspect. Set 0 "
+		 "(with premailbox_reads=1) to drop just the cause reads and see if the LED flash stops — isolating "
+		 "whether a read-to-clear is the trigger. Default true.");
+
 static bool inject_clock = true;
 module_param(inject_clock, bool, 0444);
 MODULE_PARM_DESC(inject_clock,
@@ -138,38 +170,99 @@ static void clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
 
-	c->serial_lo = readl(bar + REG_SERIAL_LO);
-	c->serial_hi = readl(bar + REG_SERIAL_HI);
-	c->fw_app    = readl(bar + REG_INFO + 0);
-	c->fw_fpga   = readl(bar + REG_INFO + 4);
-
 	/*
-	 * Foundational device-enable writes — the VERY FIRST two writes the vendor driver issues at device
-	 * open, before the IRQ enable / DMA-buffer setup (full boot->stream capture lines 97-99: 0x510=0x8 then
-	 * 0x500=0x8). These sit outside both the FCP init replay (pre-mailbox) and the engine arm (not engine
-	 * regs), so every prior approach missed them. The engine raised period 0 but the period counter never
-	 * advanced (audio clock not running) without this; suspected global clock/converter-subsystem enable.
+	 * The pre-mailbox writes below (0x510/0x500 device-enable, DMA-response address, 0x104 cause latch)
+	 * match FC's cold attach byte-for-byte. What did NOT match, until premailbox_reads, is the vendor's
+	 * READ set at attach: the cold gdb ladder (2026-07-10; manifestation-wall §7) proved the working
+	 * device already answers FCP error=0 from mailbox command #0, so the accept/refuse gate is decided
+	 * BEFORE the first command — and the only host-visible pre-mailbox difference is that the vendor
+	 * reads caps/0x4/0x8/0x514/0x58c, all four cause blocks, and the full fw-info header, which our
+	 * read-minimal probe never issued. This branch replays the vendor's EXACT pre-mailbox read+write
+	 * order (from /tmp/ladder_trace.log) in case a status/version/read-to-clear-cause read is part of an
+	 * attach handshake. readl() returns are discarded except serial/fw (kept for dev_info).
+	 *
+	 * INTER-ACCESS TIMING is matched to the vendor too. The cold-ladder trace shows the vendor spaces
+	 * these register GROUPS by ~0.8-8 ms of real driver-side pause, reproduced below with usleep_range
+	 * (hw_init runs in probe/process context, so sleeping is fine). The ~17-20 us *intra*-burst spacing
+	 * in the trace is x-no-mmap trap overhead — a VM measurement artifact (~100 ns on native hardware) —
+	 * so those accesses are left back-to-back. Gaps vary boot-to-boot with scheduling; these are the
+	 * measured cold-boot representatives. Tests whether the pre-mailbox gate is timing-sensitive (the read
+	 * set alone, issued back-to-back, did not flip it — §7).
 	 */
-	clarett_wl(c, 0x510, 0x8);
-	clarett_wl(c, 0x500, 0x8);
-	/* (0x500 reads back 0x00ff0000 == the VM's value — converter/clock status reports ready.) */
+	if (premailbox_reads) {
+		u32 r000, r004, r008, r514, r58c_a, r58c_b;
 
-	/*
-	 * Program the GET-response DMA buffer address (init trace wrote
-	 * REG_DMA_ADDR_LO/HI). REG_DMA_ADDR_HI is the *high 32 bits* of the bus
-	 * address: confirmed when hardcoding the trace's 0x2 caused an IOMMU
-	 * IO_PAGE_FAULT at 0x2_xxxxxxxx (that 0x2 was the Windows buffer's high
-	 * bits, not a flag).
-	 */
-	clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
-	clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
+		readl(bar + REG_INFO);			/* 0x8000 — vendor's first touch */
+		r004 = readl(bar + 0x004);
+		r008 = readl(bar + 0x008);
+		r000 = readl(bar + REG_CAPS);		/* 0x000 */
+		c->serial_hi = readl(bar + REG_SERIAL_HI);	/* 0x014 (vendor reads hi before lo) */
+		c->serial_lo = readl(bar + REG_SERIAL_LO);	/* 0x010 */
+		usleep_range(7000, 7200);		/* vendor gap ~7.07 ms */
+		r514 = readl(bar + 0x514);
+		usleep_range(1300, 1400);		/* ~1.30 ms */
+		clarett_wl(c, 0x510, 0x8);
+		r58c_a = readl(bar + 0x58c);		/* ~21 us (native) — back-to-back */
+		usleep_range(780, 850);			/* ~0.78 ms */
+		clarett_wl(c, 0x500, 0x8);
+		usleep_range(880, 950);			/* ~0.88 ms */
+		clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);	/* 0x104 — vendor writes this BEFORE the DMA addr */
+		usleep_range(5640, 5800);		/* ~5.64 ms */
+		clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
+		usleep_range(1850, 1950);		/* ~1.85 ms */
+		clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
+		usleep_range(3200, 3350);		/* ~3.22 ms */
+		if (premailbox_causes) {
+			/*
+			 * Read-to-clear cause blocks — CONFIRMED trigger of the Analogue-2 gain LED flash
+			 * (premailbox_causes=0 → no flash). These are read-to-clear, so on a cold boot they
+			 * report (and clear) whatever the device latched at power-on. Log the values: the
+			 * pending cause here is the physical event the device signals, cleared by this read.
+			 * Vendor order is 0x100, 0x300, 0x200, 0x400.
+			 */
+			u32 c100 = readl(bar + REG_IRQ0_CAUSE);
+			u32 c300 = readl(bar + STREAM_BLK1);
+			u32 c200 = readl(bar + STREAM_BLK0);
+			u32 c400 = readl(bar + REG_NOTIFY_CAUSE);
+			u32 c500 = readl(bar + 0x500);
 
-	/* Latch interrupt causes (observed init value). Mailbox completion is still
-	 * polled (clarett_mailbox.c); MSI is used only for async notifications on
-	 * vec0 (clarett_setup_irq). Enabling causes here only latches status — the
-	 * device cannot raise MSI until pci_alloc_irq_vectors() configures it.
-	 */
-	clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);
+			dev_info(&c->pci->dev,
+				 "pre-mailbox causes: 0x100=0x%08x 0x300=0x%08x 0x200=0x%08x 0x400=0x%08x 0x500=0x%08x\n",
+				 c100, c300, c200, c400, c500);
+		} else {
+			readl(bar + 0x500);
+		}
+		usleep_range(8220, 8400);		/* ~8.22 ms */
+		r58c_b = readl(bar + 0x58c);
+		dev_info(&c->pci->dev,
+			 "pre-mailbox regs: caps(0x0)=0x%08x 0x4=0x%08x 0x8=0x%08x 0x514=0x%08x 0x58c=0x%08x/0x%08x\n",
+			 r000, r004, r008, r514, r58c_a, r58c_b);
+		c->fw_app  = readl(bar + REG_INFO + 0x00);	/* 0x8000 */
+		c->fw_fpga = readl(bar + REG_INFO + 0x04);	/* 0x8004 */
+		readl(bar + REG_INFO + 0x08);		/* rest of the 8-word fw-info header */
+		readl(bar + REG_INFO + 0x0c);
+		readl(bar + REG_INFO + 0x10);
+		readl(bar + REG_INFO + 0x14);
+		readl(bar + REG_INFO + 0x18);
+		readl(bar + REG_INFO + 0x1c);
+	} else {
+		/*
+		 * Read-minimal baseline (the known-walled probe). 0x510/0x500 are the vendor's first two
+		 * writes at device open (global clock/converter-subsystem enable); the DMA-response address
+		 * goes to REG_DMA_ADDR_LO/HI (HI = bus-address high32 — hardcoding the trace's 0x2 faulted the
+		 * IOMMU); 0x104 latches interrupt causes (completion is still polled, clarett_mailbox.c).
+		 */
+		c->serial_lo = readl(bar + REG_SERIAL_LO);
+		c->serial_hi = readl(bar + REG_SERIAL_HI);
+		c->fw_app    = readl(bar + REG_INFO + 0);
+		c->fw_fpga   = readl(bar + REG_INFO + 4);
+
+		clarett_wl(c, 0x510, 0x8);
+		clarett_wl(c, 0x500, 0x8);
+		clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
+		clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
+		clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);
+	}
 
 	memset(c->shadow, 0, sizeof(c->shadow));
 
@@ -233,6 +326,82 @@ static int clarett_arm_device(struct clarett *c)
 			 fails, c->model->n_init_steps);
 
 	return 0;
+}
+
+/*
+ * Error-code discrimination probe (manifestation-wall §7). Send a valid GET_DATA plus three
+ * deliberately malformed commands and log each response's DMA error word (resp+8) and size.
+ * Our walled device returns error=3/size=0 to valid commands; if the malformed ones return the
+ * SAME (error=3/size=0) the device blanket-refuses the session out-of-band (not parsing our
+ * commands), whereas a DIFFERENT code (or a no-response timeout, echo=0) means it parses each
+ * command and error=3 is a specific semantic rejection. Reads resp+8 directly because the BAR
+ * MBOX_ERROR word (which clarett_fcp's return reflects) reads 0 for us — the real error is in
+ * the DMAed response.
+ */
+static void clarett_error_probe(struct clarett *c)
+{
+	static const struct {
+		const char *name;
+		u32 opcode;
+		u8 data[8];
+		u16 len;
+	} cmds[] = {
+		/* Discrimination set (July 10): valid/zero-len GET_DATA → err=3 (real header);
+		 * bad-offset / unknown-opcode → NO DMA response (device parses + drops). Kept as controls. */
+		{ "GET_DATA{24,4} valid",     FCP_GET_DATA, { 24,0,0,0,  4,0,0,0 }, 8 },
+		{ "GET_DATA bad-offset",      FCP_GET_DATA, { 0,0,0xff,0xff, 4,0,0,0 }, 8 },
+		{ "unknown opcode 0x0000ff",  0x0000ff,     { 0 }, 0 },
+		/* Opcode survey: the vendor's cold ladder got err=0 + real data on ALL of these. Does the
+		 * device answer ANY of them for us (err=0), or is everything denied? READ_SEG is the segment
+		 * "open" the vendor issues at seq 0; the GET_7/GET_6 are device queries; CONFIG_PUSH{id} is the
+		 * per-id NAME query (vendor id 0x1e -> "ADAT 8"); GET_DATA{0xc8} hits the persistent appspace. */
+		{ "READ_SEG{0,8}",            FCP_READ_SEG, { 0,0,0,0,  8,0,0,0 }, 8 },
+		{ "GET_7.1{0}",               0x007001,     { 0 }, 1 },
+		{ "GET_6.2",                  0x006002,     { 0 }, 0 },
+		{ "CONFIG_PUSH{0x1e}",        0x005000,     { 0x1e, 0 }, 2 },
+		{ "GET_DATA{0xc8,8}",         FCP_GET_DATA, { 0xc8,0,0,0, 8,0,0,0 }, 8 },
+	};
+	const u8 *r = c->resp_buf;
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(cmds); i++) {
+		u32 exp_echo = CMD_EXEC_FLAG | cmds[i].opcode;
+		u16 exp_seq = c->seq;		/* the seq clarett_fcp will stamp on this command */
+		unsigned long deadline;
+		u32 echo = 0, err = 0;
+		u16 size = 0, rseq = 0;
+		bool landed = false;
+
+		/*
+		 * The device DMAs its response ASYNCHRONOUSLY, a little after the BAR done bit clarett_fcp
+		 * polls — so reading resp_buf immediately races and catches the PREVIOUS command's late
+		 * response. Wait for THIS command's response by matching the echoed opcode (unique per command
+		 * after the memset). NOTE (July 10): on a refusal the device writes err=3 and does NOT echo the
+		 * request seq (it writes seq=0), so we match echo ONLY; a timeout is a genuine no-response.
+		 * Requires meter_poll_ms=0 (else the meter worker steals resp_buf / bumps seq).
+		 */
+		memset(c->resp_buf, 0, 32);
+		ret = clarett_fcp(c, cmds[i].opcode, cmds[i].data, cmds[i].len);
+
+		deadline = jiffies + msecs_to_jiffies(50);
+		do {
+			dma_rmb();
+			echo = r[0] | r[1] << 8 | r[2] << 16 | r[3] << 24;
+			rseq = r[FCP_RESP_SEQ_OFF] | r[FCP_RESP_SEQ_OFF + 1] << 8;
+			if (echo == exp_echo) {
+				landed = true;
+				break;
+			}
+			usleep_range(200, 300);
+		} while (time_before(jiffies, deadline));
+
+		size = r[4] | r[5] << 8;
+		err  = r[8] | r[9] << 8 | r[10] << 16 | r[11] << 24;
+		dev_info(&c->pci->dev,
+			 "error_probe: %-20s fcp_ret=%d %s echo=0x%08x seq=%u(exp %u) err=%u size=%u payload=%*ph\n",
+			 cmds[i].name, ret, landed ? "RESP" : "NO-RESP",
+			 echo, rseq, exp_seq, err, size, 8, r + FCP_RESP_DATA_OFF);
+	}
 }
 
 /*
@@ -869,6 +1038,15 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_warn(&pci->dev,
 			 "config shadow seed failed (%d); leaving hardware mute/dim enables untouched\n",
 			 seeded);
+
+	/* Diagnostic: characterize the FCP error=3 refusal (blanket session block vs per-command).
+	 * Requires meter_poll_ms=0 so the meter worker doesn't race the shared resp_buf/seq (see param desc). */
+	if (error_probe) {
+		if (meter_poll_ms > 0)
+			dev_warn(&pci->dev,
+				 "error_probe needs meter_poll_ms=0 (meter worker races the shared response buffer); results unreliable\n");
+		clarett_error_probe(c);
+	}
 
 	err = clarett_create_controls(c);
 	if (err)
