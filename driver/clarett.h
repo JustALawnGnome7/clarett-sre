@@ -352,13 +352,19 @@ struct clarett {
 
 	u32 serial_lo, serial_hi, fw_app, fw_fpga;
 
-	/* MSI / async notifications (vec0). The mailbox stays polled — the ISR
-	 * deliberately does not touch the 0x100 mailbox cause (see clarett_main.c). */
+	/* MSI / async notifications (vec0). With the vendor mailbox cycle (default) the ISR
+	 * IS the completion path: while cmd_inflight it reads the 0x100 mailbox cause (the
+	 * vendor sweep's first read, MSI-paced) and completes mbox_done; clarett_fcp then
+	 * finishes the sweep. legacy_mbox_cycle=1 restores the pure polled mailbox, where
+	 * the ISR deliberately never touches 0x100. */
 	bool irq_ready;
+	bool ctl_ready;				/* controls registered; notify path may snd_ctl_notify */
 	int n_vec;				/* MSI vectors actually allocated (<= CLARETT_NUM_VECTORS) */
 	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
 	struct work_struct notify_work;
 	atomic_t notify_bits;
+	struct completion mbox_done;		/* completed by the vec0 ISR on mailbox DONE */
+	u32 mbox_cause;				/* 0x100 value the ISR consumed with DONE set */
 	/*
 	 * Set while a mailbox command is in flight (clarett_fcp submit->complete). vec0 fires on
 	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1

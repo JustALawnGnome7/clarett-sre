@@ -71,6 +71,14 @@ MODULE_PARM_DESC(dma_bits,
 		 "engine's burst-then-stall is sensitive to buffer address. Long shot: PTR advances at "
 		 "0xffe00000 with no fault, so the high address is not obviously the blocker.");
 
+static bool early_msi = true;
+module_param(early_msi, bool, 0444);
+MODULE_PARM_DESC(early_msi,
+		 "Enable MSI in the device's config space BEFORE any BAR access, matching the vendor's "
+		 "attach order (cold trace: MSI enable precedes the first pre-mailbox BAR write). The old "
+		 "order left MSI off through the whole arm + seed — a device-visible pre-command-#0 "
+		 "difference (wall spec §7). Default 1; set 0 for the old late enable (A/B).");
+
 static bool monitor_enables = true;
 module_param(monitor_enables, bool, 0444);
 MODULE_PARM_DESC(monitor_enables,
@@ -813,19 +821,38 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 	struct clarett *c = ic->c;
 
 	if (ic->idx == CLARETT_VEC_EVENT) {
+		bool inflight = atomic_read(&c->cmd_inflight);
+
+		/* Vendor mailbox cycle: a vec0 MSI during a command IS the completion signal. Read
+		 * the mailbox cause here (the vendor sweep's first, MSI-paced 0x100 read) and hand
+		 * the rest of the sweep to the waiting clarett_fcp. An in-command MSI without DONE
+		 * (e.g. a notification) is left to the waiter's timeout/poll fallback. */
+		if (inflight) {
+			u32 cause = readl(c->bar0 + REG_IRQ0_CAUSE);	/* read-to-clear */
+
+			if (cause & IRQ_DONE_BIT) {
+				c->mbox_cause = cause;
+				complete(&c->mbox_done);
+			}
+			return IRQ_HANDLED;
+		}
+
+		{
 		u32 cause = readl(c->bar0 + REG_NOTIFY_CAUSE);	/* 0x400, read-to-clear */
 		u32 ev = cause & NOTIFY_MONITOR_MASK;
-		bool inflight = atomic_read(&c->cmd_inflight);
 
 		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
 		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Skipping the notify path
 		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware July 6
 		 * 2026): this is minor — the bulk of the "notification retried indefinitely" storm is the
 		 * DEVICE genuinely re-asserting 0x3 (us-scale bursts, inflight=0) because our GET is empty;
-		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps. */
-		if (ev && !inflight) {
+		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps.
+		 * ctl_ready gates snd_ctl_notify: with the handlers now hooked BEFORE the controls
+		 * exist (early IRQ for MSI-paced completion), a pre-controls event must not notify. */
+		if (ev && READ_ONCE(c->ctl_ready)) {
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
+		}
 		}
 	} else if (ic->idx == 1 || ic->idx == 2) {	/* data-plane period IRQs (probe) */
 		readl(c->bar0 + (ic->idx == 1 ? STREAM_BLK0 : STREAM_BLK1));   /* read-to-clear/observe */
@@ -911,12 +938,18 @@ static void clarett_meter_work(struct work_struct *work)
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
 }
 
-/* Enable MSI and hook the notification vector. Best-effort: on failure the driver
- * still works (control plane, polled mailbox) but without async notifications. */
-static void clarett_setup_irq(struct clarett *c)
+/* Allocate MSI vectors. The config-space side effect is the point of doing this early:
+ * pci_alloc_irq_vectors() programs the device's MSI capability (address/data, MME) and
+ * sets the enable bit (plus INTx-disable), so the device's own config space flips to the
+ * vendor-observed 0x406+MSI-on state. The vendor enables MSI BEFORE its first BAR access
+ * (cold trace: MSI enable @.068, first pre-mailbox BAR write @.082, doorbell after) — our
+ * old order left MSI off for the whole arm + seed, a device-visible pre-command-#0
+ * difference (wall spec §7). Handlers hook later (clarett_setup_irq); the mailbox is
+ * polled, so unhandled-but-enabled MSI in between is harmless (edge-triggered). */
+static void clarett_enable_msi(struct clarett *c)
 {
 	struct pci_dev *pci = c->pci;
-	int i, nvec, err;
+	int nvec;
 
 	/* Request up to CLARETT_NUM_VECTORS but accept as few as 1: under vfio passthrough the guest
 	 * often cannot grant all 4 (seen: -ENOSPC for min=max=4), and hard-failing left us with ZERO
@@ -935,8 +968,20 @@ static void clarett_setup_irq(struct clarett *c)
 	 * the allocated vectors. Logged unconditionally so every run pins down what it actually got. */
 	dev_info(&pci->dev, "MSI: got %d/%d vectors%s\n", nvec, CLARETT_NUM_VECTORS,
 		 nvec < CLARETT_NUM_VECTORS ? " (causes funnel to the allocated ones)" : "");
+}
 
-	for (i = 0; i < nvec; i++) {
+/* Hook the notification handlers onto the already-allocated vectors. Best-effort: on
+ * failure the driver still works (control plane, polled mailbox) but without async
+ * notifications — and the vectors stay allocated so the device keeps seeing MSI enabled. */
+static void clarett_setup_irq(struct clarett *c)
+{
+	struct pci_dev *pci = c->pci;
+	int i, err;
+
+	if (!c->n_vec)	/* MSI alloc failed */
+		return;
+
+	for (i = 0; i < c->n_vec; i++) {
 		c->irq_ctx[i].c = c;
 		c->irq_ctx[i].idx = i;
 		err = request_irq(pci_irq_vector(pci, i), clarett_irq, 0,
@@ -947,7 +992,6 @@ static void clarett_setup_irq(struct clarett *c)
 				 i, err);
 			while (--i >= 0)
 				free_irq(pci_irq_vector(pci, i), &c->irq_ctx[i]);
-			pci_free_irq_vectors(pci);
 			return;
 		}
 	}
@@ -958,12 +1002,13 @@ static void clarett_teardown_irq(struct clarett *c)
 {
 	int i;
 
-	if (!c->irq_ready)
-		return;
-	for (i = 0; i < c->n_vec; i++)
-		free_irq(pci_irq_vector(c->pci, i), &c->irq_ctx[i]);
-	pci_free_irq_vectors(c->pci);
+	if (c->irq_ready)
+		for (i = 0; i < c->n_vec; i++)
+			free_irq(pci_irq_vector(c->pci, i), &c->irq_ctx[i]);
+	if (c->n_vec)
+		pci_free_irq_vectors(c->pci);
 	c->irq_ready = false;
+	c->n_vec = 0;
 }
 
 static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
@@ -985,6 +1030,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c->model = clarett_pick_model(ent);
 	dev_info(&pci->dev, "model: %s\n", c->model->name);
 	mutex_init(&c->mbox_lock);
+	init_completion(&c->mbox_done);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	INIT_DELAYED_WORK(&c->meter_work, clarett_meter_work);
 	atomic_set(&c->notify_bits, 0);
@@ -1016,6 +1062,19 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	if (!c->resp_buf) {
 		err = -ENOMEM;
 		goto err_free;
+	}
+	/* The §7 >4G lead: every working FC capture programs 0x414 != 0 (buffer above
+	 * 4 GiB); log our address so the A/B is visible without trace_regs. */
+	dev_info(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
+		 &c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
+
+	/* Vendor attach order: MSI is enabled in config space before the first BAR access,
+	 * so the device never sees a session start from a host without an interrupt path.
+	 * Handlers hook immediately too: with the vendor mailbox cycle the completion is
+	 * MSI-paced from command #0 of the arm (the notify path stays gated on ctl_ready). */
+	if (early_msi) {
+		clarett_enable_msi(c);
+		clarett_setup_irq(c);
 	}
 
 	clarett_hw_init(c);
@@ -1061,7 +1120,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 				 "could not enable monitor hardware mute/dim (%d)\n", err);
 	}
 
-	clarett_setup_irq(c);	/* best-effort; controls must exist first (snd_ctl_notify) */
+	if (!early_msi) {
+		clarett_enable_msi(c);	/* old order, for A/B */
+		clarett_setup_irq(c);
+	}
+	WRITE_ONCE(c->ctl_ready, true);	/* controls exist; the ISR notify path may fire */
 
 	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. Both
 	 * models use the per-direction descriptor path (geometry derived from channel counts), so no per-model

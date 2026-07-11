@@ -132,6 +132,13 @@ Never load this while the VM is using the device.
   mailbox opens; pre-mailbox writes already match FC, so this read set is the sole
   remaining host-visible pre-mailbox difference. Set `0` for the old read-minimal
   probe to A/B whether the reads flip `GET_DATA` to `error=0`.
+- **`early_msi=` (default 1)**: enable MSI in the device's **config space** before any
+  BAR access, matching the vendor's attach order. The cold trace shows Windows programs
+  the MSI capability and sets the enable bit (`@0x4a=0xa5`: enabled, 4 vectors) *before*
+  its first pre-mailbox BAR write; our old probe order left MSI disabled through the
+  entire 232-command arm + seed — a device-visible pre-command-#0 config-state
+  difference present in every walled run (including the Fedora-guest control), invisible
+  to the BAR-only pre-mailbox replay. Set `0` for the old late enable (A/B).
 - **Control changes don't physically manifest — a proven below-driver boundary** (the
   headline gap). After a correct bring-up, monitor `Mute`/`Dim` writes complete
   (`done=1, fcperr=0`) and `GET_DATA` returns empty (`size=0`) — the device backend is

@@ -31,6 +31,25 @@ module_param(resp_prefill, int, 0444);
 MODULE_PARM_DESC(resp_prefill,
 	"Fill the response DMA buffer with this byte before each command (-1=off/baseline, 0=zero like FC's fresh buffer, 170=0xAA emptiness marker).");
 
+static bool mbox_err_read;
+module_param(mbox_err_read, bool, 0444);
+MODULE_PARM_DESC(mbox_err_read,
+	"Read MBOX_ERROR (0x8028) after each command completion. The vendor driver NEVER reads any "
+	"mailbox register (cold trace: zero mailbox reads across the whole bring-up), and our read "
+	"lands while the device is still DMAing its async response — the sole per-command BAR-surface "
+	"difference from the vendor (wall spec 7). Default 0 = vendor-faithful (no read); 1 restores "
+	"the old readback for A/B.");
+
+static bool legacy_mbox_cycle;
+module_param(legacy_mbox_cycle, bool, 0444);
+MODULE_PARM_DESC(legacy_mbox_cycle,
+	"Use the old mailbox cycle: leading doorbell ACK + tight 0x100-only completion poll. The "
+	"vendor's cycle (default 0) is submit -> sweep ALL five cause blocks in order "
+	"0x100,0x300,0x200,0x400,0x500 until DONE -> one confirming sweep -> TRAILING ack. The old "
+	"cycle's leading ACK made our first-ever doorbell write to a fresh device an ack to a mailbox "
+	"that never carried a command — an out-of-protocol token the vendor never sends, at the exact "
+	"pre-command-#0 point where the session gate decides (wall spec 7).");
+
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 {
 	unsigned long deadline;
@@ -42,7 +61,11 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 
 	mutex_lock(&c->mbox_lock);
 
-	clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
+	/* Old cycle only: the leading ACK. The vendor NEVER acks before a submit — its ack
+	 * trails each completed command (below). On a fresh device the leading ACK was the
+	 * first doorbell token the device ever received from us: an ack with nothing to ack. */
+	if (legacy_mbox_cycle)
+		clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
 
 	if (resp_prefill >= 0) {
 		memset(c->resp_buf, resp_prefill & 0xff, c->resp_size);
@@ -66,24 +89,78 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 
 	/* Mark the command in flight BEFORE submitting: vec0 fires on mailbox-DONE, and the ISR must
 	 * suppress its notify path for our own completion (clarett_irq / the 0x400 note in clarett.h).
-	 * Held until just before mutex_unlock so it still covers a completion MSI delivered after the
-	 * poll below observes DONE. */
+	 * With the vendor cycle the ISR is also the completion consumer (reads 0x100, completes
+	 * mbox_done). Held until just before mutex_unlock so it still covers a completion MSI
+	 * delivered after the poll below observes DONE. */
+	reinit_completion(&c->mbox_done);
 	atomic_set(&c->cmd_inflight, 1);
 
 	clarett_wl(c, REG_DOORBELL, DOORBELL_SUBMIT);
 
 	deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
-	do {
-		cause = clarett_rl(c, REG_IRQ0_CAUSE);   /* read-to-clear */
-		if (!polls)
-			first_cause = cause;
-		polls++;
-		if (cause & IRQ_DONE_BIT)
-			break;
-		cpu_relax();
-	} while (time_before(jiffies, deadline));
+	if (legacy_mbox_cycle) {
+		do {
+			cause = clarett_rl(c, REG_IRQ0_CAUSE);   /* read-to-clear */
+			if (!polls)
+				first_cause = cause;
+			polls++;
+			if (cause & IRQ_DONE_BIT)
+				break;
+			cpu_relax();
+		} while (time_before(jiffies, deadline));
+	} else {
+		/* Vendor cycle (cold trace, every command): after submit the working driver's
+		 * first sweep (~40 us later) sees DONE in 0x100, sweeps the remaining four cause
+		 * blocks (order 0x300,0x200,0x400,0x500 — 0x400 reads the 0x3 command-phase value
+		 * and is read-to-cleared), does one confirming full sweep, then the TRAILING ack.
+		 * We reach DONE with the long-proven tight 0x100 poll and only then sweep: a
+		 * first-cut continuous five-block sweep DURING command processing hammered the
+		 * read-to-clear phase regs at bus speed and caused arm-command timeouts (-110) —
+		 * the one behavior change any lever ever produced; don't reintroduce it. */
+		static const u16 sweep[] = { REG_IRQ0_CAUSE, STREAM_BLK1, STREAM_BLK0,
+					     REG_NOTIFY_CAUSE, 0x500 };
+		int s;
 
-	fcperr = clarett_rl(c, REG_MBOX + MBOX_ERROR);
+		/* Completion discovery, vendor-style: wait for the vec0 MSI; the ISR performs
+		 * the sweep's first 0x100 read (MSI-paced — the vendor reads 0x100 exactly twice
+		 * per command; a tight poll here reads it dozens of times). Poll only as a
+		 * fallback (MSI not granted, or a lost/raced interrupt). polls==1 in the dev_dbg
+		 * line verifies the MSI path was taken. */
+		if (c->irq_ready &&
+		    wait_for_completion_timeout(&c->mbox_done,
+						msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS))) {
+			cause = c->mbox_cause;
+			first_cause = cause;
+			polls = 1;
+		}
+		if (!(cause & IRQ_DONE_BIT)) {
+			do {	/* >=1 read even if the MSI wait consumed the deadline */
+				cause = clarett_rl(c, REG_IRQ0_CAUSE);   /* fallback poll, read-to-clear */
+				if (!polls)
+					first_cause = cause;
+				polls++;
+				if (cause & IRQ_DONE_BIT)
+					break;
+				cpu_relax();
+			} while (time_before(jiffies, deadline));
+		}
+
+		if (cause & IRQ_DONE_BIT) {
+			for (s = 1; s < ARRAY_SIZE(sweep); s++)
+				clarett_rl(c, sweep[s]);	/* rest of the DONE sweep */
+			for (s = 0; s < ARRAY_SIZE(sweep); s++)
+				clarett_rl(c, sweep[s]);	/* confirming full sweep */
+			clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
+		}
+		/* on timeout: no ack — the vendor never acks an incomplete command */
+	}
+
+	/* Vendor-faithful default: NO mailbox read here. FC never reads any mailbox register;
+	 * this read raced the device's async response DMA on every command since day one
+	 * (fcperr always read 0 for us anyway — the real error channel is resp+8 in the DMA
+	 * buffer). Lever mbox_err_read=1 restores it. */
+	if (mbox_err_read)
+		fcperr = clarett_rl(c, REG_MBOX + MBOX_ERROR);
 
 	/* Per-transaction trace. dev_dbg (not dev_info): the GET_METER heartbeat runs at ~24 Hz, so
 	 * info-level here would flood the log. Enable via dynamic debug when diagnosing the mailbox. */

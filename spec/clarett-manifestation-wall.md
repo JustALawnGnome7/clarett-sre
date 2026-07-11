@@ -596,3 +596,119 @@ Planned instruments, cheap-first:
    a `FocusritePCIe` CPU write into this buffer is protocol traffic invisible to all four §5 methods.
 4. Same instruments on the 16 KB descriptor CBs for the data-plane wall (pre-arm seeding; the
    undecoded second structure past the descriptor terminator, data-plane §3c).
+5. **DMA addresses above 4 GiB — RUN, NEGATIVE `[TEST]` (July 10 2026).** The lead: every working
+   capture programs every DMA base with a nonzero high word — resp buffer `0x414` = `0x2` (2Pre ×4)
+   / `0x1` (8PreX, 4Pre), and the stream ring bases `0x214`/`0x314` = `0x2` — while our driver
+   (`dma_bits=32` default, **including the Fedora-guest control**) always programs `0x414 = 0`.
+   Addresses are the one value class a "byte-identical" trace comparison necessarily normalizes as
+   don't-care, and no prior test covered it (even `dma_bits=64` lands <4G: iommu-dma tries 32-bit
+   IOVA space first). Test on the AMD box (AMD-Vi, translated DMA-FQ domains): boot
+   `iommu.forcedac=1` (skips the 32-bit-first IOVA preference) + `insmod model=2pre dma_bits=34`
+   (34-bit mask so the top-down alloc lands just above 4G, inside the vendor-demonstrated range,
+   not at the ~48-bit aperture top). Instrument verified in-band: probe logged
+   `resp buffer dma addr 0x00000003fffff000 (0x414 high word 0x3)` (new unconditional `dev_info`),
+   and the pre-mailbox state matched the cold vendor baseline exactly (causes `0x100–0x400` = 0,
+   `0x500` = `0xff0000` — same value all three vendor cold captures read there; regs
+   `caps/0x4/0x8/0x514/0x58c` all match banked values). **Result: `config shadow seed failed (-5)`
+   — `GET_DATA` still refused; the wall does not gate on the DMA address being above 4 GiB.**
+   (Tested high word `0x3` vs vendor's `0x1`/`0x2` — any plausible "high address" predicate passes
+   at `0x3_fffff000`.) **Data-plane variant RUN, NEGATIVE (same day):** with rings
+   at `0x3_ffe00000` (>4G) the 2Pre capture engine reported `periods=2 ctr=0x0 wraps=0`; the <4G
+   control (`dma_bits=32`, rings at `0x0_ffe00000`, same boot, fresh power-cycle) reported the
+   **identical** `periods=2 ctr=0x0` — no address-range dependence in either plane, and no AMD-Vi
+   faults in either run. (An apparent ">4G made the engine stop clocking" delta died on the control
+   run — the 2Pre's PCM baseline is `periods=2 ctr=0x0` at ANY address. Side finding, separate from
+   the wall: the 8PreX-era one-ring-pass burst characterization — 248 periods, `ctr=0x1b3`, needing
+   contiguous buffer + full-duplex arm + 0xAA pre-fill — does NOT reproduce on the 2Pre with the
+   current per-model port; its `0x300` counter never advances at all. The 2Pre engine params likely
+   need re-deriving from the 2Pre stream captures, data-plane spec TODO.) With this negative, the remaining §7-style leads are:
+   (a) a **zero-normalization full-stream comparison audit** of cold-vendor vs cold-ours from
+   power-on to command #0 — access widths, read-to-clear read *counts*, config-vs-BAR interleave —
+   auditing the "byte-identical" claim itself as an instrument; and (b) a **vIOMMU on the Windows
+   guest** to observe device DMA-*read* addresses, the last never-observed input (weakened a priori
+   by macOS-works-under-strict-DART, which argues the device only reads driver-given addresses).
+6. **MSI-enable ordering — the config-space interleave hole `[PLAN → lever in tree]` (July 10 2026).**
+   Found by the first pass of the zero-normalization audit (access widths all confirmed 4-byte on both
+   sides — that sub-class is dead). The cold vendor trace interleaves config-space and BAR streams:
+   Windows programs the MSI capability and **sets the MSI enable bit before its first BAR access**
+   (`@0x4c=0xfee0100c` addr, `@0x54=0x49b4` data, `@0x4a=0xa5` = enable + MME=4, at `.068`; first
+   pre-mailbox BAR write `.082`; COMMAND=`0x406` mem+BM+DisINTx throughout). Our probe called
+   `pci_alloc_irq_vectors` at the END of probe — so the **entire arm (232 commands) and the seed
+   `GET_DATA` ran with MSI disabled in the device's own config space** (COMMAND=`0x006`, MSI off), in
+   every walled run **including the Fedora-guest control**. This is a genuine device-visible
+   pre-command-#0 difference the earlier eliminations missed: "config space matches" compared the SET
+   of config writes, not their POSITION relative to command #0, and the §7-item-2 pre-mailbox replay
+   only covered BAR traffic. Mechanistically plausible: the device signals response-DMA completion and
+   notifications by MSI; firmware may refuse a session for a host with no interrupt path. Driver
+   change (in tree): `clarett_enable_msi()` (vector alloc = config-space enable) now runs before
+   `clarett_hw_init`; handler hookup stays late; lever `early_msi` (default 1, `0` = old order for
+   A/B). **RUN, NEGATIVE (same day):** fresh power-cycle, `MSI: got 4/4 vectors` now precedes all BAR
+   traffic, cold baseline verified (causes 0, `0x500=0xff0000`), seed still `-5` — `GET_DATA` still
+   refused. MSI-enable ordering does not arm the session. Lever stays default-on (vendor-faithful
+   order costs nothing). Audit continues: remaining config-space deltas (e.g. the vendor's Device
+   Control write `@0x60=0x2910` — RO/no-snoop/MRRS attributes), read-to-clear counts, full interleave.
+7. **Config-space surface CLOSED byte-for-byte — RUN, NEGATIVE `[TEST]` (July 10 2026).** The audit
+   reconstructed the vendor's complete pre-doorbell config activity from the cold trace (cap chain
+   PM@0x40/MSI@0x48/PCIe@0x58; every write inventoried) and diffed it against our live post-probe
+   `lspci -xxx`: COMMAND ends `0x406` both sides, `DevCtl@0x60=0x2910` identical (RO+ExtTag+NoSnoop,
+   MPS128, MRRS512), LnkCtl=0 both, PMCSR final `0x8` both, MSI ctrl `0xa5` both (addr/data per-boot).
+   Sole persistent visible diff: the INT-line scratch byte `@0x3c` (vendor writes `0x00`, BIOS default
+   `0xff` on bare metal) + two transient W1C clear events (`@0x06=0xf900`, `@0x44=0x8008`×3).
+   Replicated all three via setpci on a fresh power-cycled device before insmod: seed still `-5`.
+   **The entire PCI config-space surface — values, order, W1C events — is now matched/inert.**
+   Remaining audit surface: the BAR stream itself (read-to-clear counts, full sequence alignment).
+8. **Per-command mailbox READ — the BAR-stream audit's find `[PLAN → lever in tree]` (July 10 2026).**
+   Full structural alignment of the vendor cold BAR stream vs ours: header writes match (vendor writes
+   the full 16-byte header `0x8020/24/28/2c` per command, like us), doorbell submit/ack pattern matches
+   (one `0x408<-2` + one `0x408<-1` per command), cause-sweep polls covered by `drain_causes`. **The
+   sole remaining per-command difference: we READ `MBOX_ERROR @0x8028` after every completion; the
+   vendor reads NO mailbox register, ever** (its only `0x8xxx` reads are the attach-time fw header
+   `0x8000–0x801c`; ours = `0x8028` × once per command, since day one). Timing makes it a live
+   candidate: the device DMAs its response asynchronously AFTER the BAR done bit (§7 error_probe race),
+   so our command-#0 read lands while firmware is composing response #0 — a session poisoned by a
+   mailbox read on the first command is indistinguishable from the ladder's "attach-time gate"
+   signature, and the read (always returning 0 for us) was never suspected because every elimination
+   diffed writes and attach-reads only. Lever `mbox_err_read` (default 0 = vendor-faithful, no read;
+   1 = old behavior) in `clarett_mailbox.c`; functionally free (our BAR fcperr was always 0; the real
+   error channel is resp+8). **RUN, NEGATIVE (same day):** fresh power-cycle, no mailbox reads issued,
+   seed still `-5`. The read was not the gate — but removing it stays default (vendor-faithful).
+9. **Doorbell ACK PHASE + completion sweep — the sequence-alignment find `[PLAN → lever in tree]`
+   (July 10 2026).** Exact per-command event dump of the vendor cold trace shows the cycle:
+   header writes → `0x408<-1` submit → sweep ALL FIVE cause blocks in order
+   `0x100,0x300,0x200,0x400,0x500` (first sweep ~40 µs after submit already sees `DONE`; `0x400`
+   reads `0x3` during every command and is read-to-cleared by the sweep) → one confirming sweep →
+   **`0x408<-2` ack TRAILING the command**. Our cycle acked FIRST (start of each `clarett_fcp` call)
+   and polled `0x100` alone. Same per-command ack COUNT — so every count-based comparison cancelled
+   the difference — but the first doorbell token our driver ever sends a fresh device is `2` (an ack
+   with nothing to ack), where the vendor's is `1` (submit): **an out-of-protocol token at the exact
+   pre-command-#0 boundary where the ladder localized the gate** (`VENDOR: 1,2,1,2,1…` vs
+   `OURS: 2,1,2,1,2…`). Present in every walled run ever (all platforms, warm+cold, both controls).
+   Also fixes: our last command was never acked, and the vendor-style sweep consumes the `0x400=0x3`
+   phase value per command (we never did). Lever `legacy_mbox_cycle` (default 0 = vendor cycle:
+   no leading ack, five-block sweep, confirming sweep, trailing ack on DONE only; 1 = old cycle).
+   **RUN, NEGATIVE (July 10 2026):** first attempt (continuous five-block sweep during processing)
+   caused arm timeouts (-110 on 2/152) — **the first device-side behavior change any lever ever
+   produced; the read-to-clear phase regs are LIVE mid-command** (instrument bug, not a finding:
+   hammering 0x400 at bus speed breaks the phase handshake). Paced re-run (tight 0x100 poll, then
+   DONE-sweep + confirming sweep + trailing ack): arm 152/152 clean, seed still `-5`. The ack phase
+   and sweep are not the gate; the vendor cycle stays default. Remaining per-command difference:
+   completion DISCOVERY — vendor waits for the MSI (reads 0x100 exactly 2×/cmd), we tight-poll it.
+10. **MSI-paced completion — RUN, NEGATIVE; THE HOST-VISIBLE SURFACE IS NOW EXHAUSTED AT MAXIMAL RIGOR
+   `[TEST]` (July 10 2026).** ISR vec0 consumes the 0x100 cause and completes the waiting `clarett_fcp`
+   (handlers hooked before any BAR access; notify path gated on `ctl_ready`). Verified in-band: every
+   command of the full bring-up logged `polls=1` (`dyndbg=+p`) — 0x100 read counts now vendor-identical
+   (2×/command: ISR + confirming sweep). Arm 152/152, seed still `-5`.
+   **Milestone summary — one day's eliminations (all `[TEST]`, all negative on the gate):** access
+   widths (all 4-byte both sides); DMA addresses >4G (both planes); MSI-enable ordering; config space
+   byte-for-byte incl. `@0x3c` scratch + W1C events; per-command mailbox read (removed); doorbell ack
+   phase (leading→trailing); five-block cause sweeps; MSI-paced completion. Combined with everything
+   prior: **the complete host-visible surface — config values/order/W1C, MSI state, DMA address classes,
+   buffer contents, every BAR write/read, their order, phase, counts, and attach timing — is matched,
+   and the device still stamps `err=3` from command #0.** (Inter-command pacing still differs, but by
+   causality it cannot explain the refusal of command #0 itself, which precedes any pacing signal.)
+   Byproduct wins: first-ever device behavior change (phase regs are live mid-command, §7 item 9);
+   mailbox now MSI-driven (a real driver improvement); vendor-faithful cycle throughout.
+   **Remaining software instrument: exactly one — vIOMMU on the Windows guest** to observe the working
+   session's device-initiated DMA reads (mappings + faults become guest-visible/QEMU-traceable), the
+   only input channel never observed. Weakened a priori by macOS-works-under-strict-DART but now the
+   sole survivor. After that: non-software paths (Focusrite/community) or accepting the wall.
