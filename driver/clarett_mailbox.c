@@ -52,36 +52,24 @@ MODULE_PARM_DESC(legacy_mbox_cycle,
 	"pre-command-#0 point where the session gate decides (wall spec 7).");
 
 /*
- * Timing exercise (wall spec §7, July 16 2026). The trailing doorbell ack is the one write
- * in the cycle whose meaning is an acknowledgement, and the one whose precondition the
- * dilated traces cannot reveal: under ~20 us/access MMIO trapping the response DMA had
- * ALWAYS landed by ack time (>=242 us after submit in every vendor capture), while at
- * native speed our ack provably precedes the landing (the error_probe race: resp_buf read
- * right after DONE still holds the PREVIOUS response). If the ack asserts "response
- * consumed, buffer free", we have been acking responses that had not arrived — on every
- * command of every session, including #0 (whose response, per our_arm_resp.log, may never
- * arrive at all; the vendor never acks an incomplete command).
- *
- * gated_ack: withhold the trailing ack until THIS command's response lands (echo word
- * matches; the header is zeroed pre-submit so repeated opcodes cannot false-match on a
- * stale response), up to CLARETT_MBOX_TIMEOUT_MS from DONE. A response that never arrives
- * is never acked. Zeroing the header is a host write to the DMA buffer pre-submit — same
- * class as resp_prefill (existing lever; FC's buffer arrives zeroed from Windows anyway).
+ * THE WALL CROSSING (wall spec §8, July 16 2026) — why the trailing ack is gated on the
+ * response landing. The trailing doorbell ack (0x408=2) means "response consumed, buffer
+ * free", NOT "completion observed": the device DMAs its response asynchronously AFTER the
+ * BAR DONE bit, and acking before it lands is a protocol violation the device answers with
+ * a blanket err=3 refusal of the whole session from command #0. No trace could show this —
+ * every vendor capture ran under ~20 us/access MMIO trapping, so the response had always
+ * landed by ack time (>=242 us after submit); our native-speed ack fired ~us after DONE.
+ * The gated cycle below is therefore the DEFAULT, not a lever: pre-submit, zero the
+ * response header (so repeated opcodes cannot false-match a stale echo — and FC's buffer
+ * arrives zeroed from Windows anyway); after the DONE sweep, wait for THIS command's
+ * echoed opcode in resp_buf; only then ack. A response that never arrives is never acked
+ * (the vendor never acks an incomplete command). Confirmed 3/3 on fresh DC power-cycles:
+ * gated arms (err=0 + physical manifestation), ungated walls (seed -5).
  *
  * resp_trace: one log line per command — DONE latency, response-landing latency, echoed
- * opcode/seq, FCP status word (resp+8), size. This is the onset instrument for the wall:
- * on repeated fresh-boot bring-ups it shows the FIRST command whose status goes nonzero
- * and whether that onset is stable across byte-identical runs (an unstable onset on a
- * fixed input stream means the failure is not a function of the bytes). Combine with
- * meter_poll_ms=0 for a readable log (GET_METER otherwise adds ~24 lines/s).
+ * seq, FCP status word (resp+8), size. The wall's onset instrument; kept as the mailbox's
+ * one diagnostic lever. (GET_METER adds ~24 lines/s; meter_poll_ms=0 for a readable log.)
  */
-static bool gated_ack;
-module_param(gated_ack, bool, 0444);
-MODULE_PARM_DESC(gated_ack,
-	"Withhold each command's trailing doorbell ack (0x408=2) until the response DMA has "
-	"actually landed (echoed opcode matches; up to 100 ms); never ack a response that never "
-	"arrived. Default 0 = ack right after the DONE sweep, as reconstructed from the traces.");
-
 static bool resp_trace;
 module_param(resp_trace, bool, 0444);
 MODULE_PARM_DESC(resp_trace,
@@ -145,12 +133,10 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		memset(c->resp_buf, resp_prefill & 0xff, c->resp_size);
 		dma_wmb();	/* fill visible to the device before the doorbell submit */
 	}
-	if (gated_ack || resp_trace) {
-		/* zero the response header so clarett_resp_wait can't match a stale echo
-		 * (the arm repeats opcodes back-to-back, CONFIG_PUSH x122) */
-		memset(c->resp_buf, 0, FCP_RESP_DATA_OFF);
-		dma_wmb();
-	}
+	/* zero the response header so clarett_resp_wait can't match a stale echo
+	 * (the arm repeats opcodes back-to-back, CONFIG_PUSH x122) */
+	memset(c->resp_buf, 0, FCP_RESP_DATA_OFF);
+	dma_wmb();
 
 	clarett_wl(c, REG_MBOX + MBOX_CMD, CMD_EXEC_FLAG | opcode);
 	clarett_wl(c, REG_MBOX + MBOX_SIZESEQ, ((u32)c->seq << 16) | len);
@@ -232,10 +218,9 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 				clarett_rl(c, sweep[s]);	/* rest of the DONE sweep */
 			for (s = 0; s < ARRAY_SIZE(sweep); s++)
 				clarett_rl(c, sweep[s]);	/* confirming full sweep */
-			if (gated_ack || resp_trace)
-				resp_echo = clarett_resp_wait(c, CMD_EXEC_FLAG | opcode,
-							      t_submit, &land_us);
-			if (!gated_ack || resp_echo)
+			resp_echo = clarett_resp_wait(c, CMD_EXEC_FLAG | opcode,
+						      t_submit, &land_us);
+			if (resp_echo)
 				clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
 			else
 				dev_warn_ratelimited(&c->pci->dev,
@@ -270,9 +255,8 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 				 r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8);
 		else
 			dev_info(&c->pci->dev,
-				 "FCPr op=0x%06x seq=%u done=%lldus resp=NONE%s\n",
-				 opcode, c->seq, done_us,
-				 gated_ack ? " (ack withheld)" : "");
+				 "FCPr op=0x%06x seq=%u done=%lldus resp=NONE (ack withheld)\n",
+				 opcode, c->seq, done_us);
 	}
 
 	if (!(cause & IRQ_DONE_BIT))

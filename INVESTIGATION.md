@@ -338,19 +338,19 @@ event (the response DMA landing) and a visible write (the ack)**, which the inst
 side effect of its own overhead in every working capture. Byte-identical traffic under a time-dilating
 instrument is not identical behavior.
 
-*(Attribution caveat, in the spirit of the rest of this report: the first working run combined the
-landed-gated ack with the pre-submit header clear and per-command logging overhead. The gated ack is
-the mechanism with independent supporting evidence; a clean isolation matrix across fresh power
-cycles is queued to close the attribution formally.)*
+*(Attribution: closed, 3-for-3 deterministic across fresh device power-cycles — two gated runs arm
+cleanly with matching latency profiles and no onset variability; a levers-off control run on an
+equally fresh power-cycle is refused exactly as before. The landed-gated ack (with the pre-submit
+header clear that makes the landing detectable) is the driver's unconditional default cycle.)*
 
 ---
 
 ## 9. Current state and remaining work
 
 - **Control plane: working.** Bring-up, configuration reads, mixer/preamp/monitor writes with
-  physical manifestation, async notifications. Next: isolate the exact minimal fix (see caveat
-  above), make it the unconditional default, and re-audit the driver paths that were written for a
-  refused session (shadow refresh, notification handling).
+  physical manifestation, async notifications. The landed-gated ack is the unconditional default
+  mailbox cycle (attribution closed — see §8). Next: re-audit the driver paths that were written
+  for a refused session (shadow refresh, notification handling, the meter-poll hypothesis).
 - **Data plane: re-opened.** The burst-then-stall was attributed to the same "below-driver"
   differentiator — that attribution is now void. The streaming cause blocks are serviced at native
   speed too, so the same class of violation is the first suspect; retesting on an armed session is
@@ -382,9 +382,10 @@ The project is a self-contained clean-room record:
 - **`spec/clarett-macos-dtrace-plan.md`**, **`spec/clarett-windbg-plan.md`** — the two cross-platform
   confirmation passes (methods, runbooks, results).
 - **`driver/`** — the out-of-tree `snd-clarett` module (control plane + experimental capture PCM).
-  The timing instruments from §8 are the `gated_ack` / `resp_trace` / `mmio_dilate_us` module
-  parameters (`resp_trace` logs per-command DONE and response-landing latencies plus the FCP status
-  word — the onset instrument that characterized the refusal properly for the first time).
+  The landed-gated ack is the default mailbox cycle; the timing instruments from §8 are the
+  `resp_trace` / `mmio_dilate_us` module parameters (`resp_trace` logs per-command DONE and
+  response-landing latencies plus the FCP status word — the onset instrument that characterized
+  the refusal properly for the first time).
 - **`tools/`** — `fcp_decode.py` (trace → FCP transactions), `bar_profile.py` (register-activity
   profiler), `notify_correlate.py` (cause-register correlation).
 - **`captures/`** — the trace and guest-RAM captures the conclusions rest on.

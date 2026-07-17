@@ -756,13 +756,20 @@ cycle acked those more than half a millisecond before the response landed. **PHY
 CONFIRMED by the user: Mode and Air toggles in alsamixer move the front-panel LEDs and audibly switch
 the relays.** `[TEST]`
 
-**Open items before this section is final:**
-1. **Attribution matrix** (fresh DC power-cycle per run): the winning run confounds (a) the
-   landed-gated ack, (b) the pre-submit header zero (a buffer-content change), (c) ~90 µs/cmd of
-   logging pacing. Isolate, then bake the winning mechanism into the default cycle and drop the
-   levers.
-2. **Control run** (levers off) on a fresh cycle → expect `err=3`, proving the lever and not the
-   boot.
+**Attribution matrix — CLOSED, 3/3 deterministic `[TEST]` (July 16 2026, fresh DC power-cycle per
+run, user-confirmed):** run #1 (`resp_trace=1`) armed + manifested physically; run #2
+(`resp_trace=1`) armed with a matching latency profile (err=0 from seq 0, no onset variability —
+the fixed input stream now has a *fixed* healthy response, closing the onset-stability question);
+run #3 (levers off) **walled** (`config shadow seed failed (-5)`) exactly as predicted. The gated
+cycle is the mechanism, not the boot. **Consequence: the landed-gated ack + pre-submit header zero
+are now the unconditional default mailbox cycle** — `gated_ack` is retired, `resp_trace` remains as
+telemetry, and a response that never lands is never acked. (The finer gated-wait-vs-header-zero
+split was not run and is moot: the header zero is what makes the landing detectable; they are one
+mechanism.) Side observation: the ~24 Hz meter poll interleaves cleanly with the echo-matched wait,
+and `GET_METER` now returns real data (size=192) — the `meter_poll_ms` "heartbeat required to apply
+writes" hypothesis was a walled-device artifact and needs re-audit.
+
+**Open items:**
 3. **Data-plane retest** on an armed session: the PCM burst-then-stall was attributed to the same
    "below-driver" differentiator — that attribution is now void. The stall may be the same class of
    violation on the stream cause blocks (`0x200/0x300` are read-to-clear and were serviced at native

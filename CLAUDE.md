@@ -20,10 +20,11 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
 - **Control plane** — **WORKS ON REAL HARDWARE**: full 232-command arm + seed answer `err=0` with
   real data (seq echoed, CONFIG_PUSH port names, 8 KB config read full, serial/fw answered), and
   **control writes manifest physically** — user-confirmed Mode/Air toggles from alsamixer move the
-  2Pre's front-panel LEDs and switch its relays. **PENDING:** attribution matrix (gated ack vs
-  header zero vs logging pacing — one fresh DC power-cycle each), a levers-off control run, then
-  bake the winning mechanism into the default cycle; re-audit the shadow/`GET_DATA` refresh paths
-  now that GETs return real data.
+  2Pre's front-panel LEDs and switch its relays. **Attribution matrix CLOSED 3/3 (July 16, fresh DC
+  power-cycle each): two gated runs arm clean, the levers-off control run walls (seed `-5`) — the
+  landed-gated ack + pre-submit header zero are now the unconditional default cycle** (`gated_ack`
+  lever retired; `resp_trace` kept as telemetry). **PENDING:** re-audit the shadow/`GET_DATA`
+  refresh paths and the `meter_poll_ms` "heartbeat" hypothesis (both written for a walled device).
 - **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
@@ -202,12 +203,13 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA`. Transport spec §8.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/clarett-manifestation-wall.md` §8).**
-  With the response-landed-gated trailing ack (`gated_ack`/`resp_trace` levers), the full bring-up
-  answers `err=0` with real data and alsamixer toggles physically move the 2Pre (LEDs + relays).
-  TODO: run the attribution matrix (gated ack vs pre-submit header zero vs logging pacing, fresh DC
-  power-cycle each) + a levers-off control run; bake the winning mechanism into the default mailbox
-  cycle and drop the levers; then re-audit everything written for a walled device (shadow-refresh
-  paths, the `err=3`/notification-storm handling, meter-poll hypothesis in `meter_poll_ms` desc).
+  The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
+  mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
+  retired, `resp_trace` telemetry kept). The full bring-up answers `err=0` with real data and
+  alsamixer toggles physically move the 2Pre (LEDs + relays). TODO: re-audit everything written for
+  a walled device (shadow-refresh paths, the `err=3`/notification-storm handling, meter-poll
+  hypothesis in `meter_poll_ms` desc); untested whether re-arming an already-armed device still
+  wedges `GET_DATA` (that finding predates the gated ack).
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
 
 ## Clean-room discipline
