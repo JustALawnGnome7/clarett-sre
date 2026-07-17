@@ -551,3 +551,44 @@ and is still untraced — but note the engine streamed in `8prex_full_init_mute.
 *register* writes (no new mailbox clock command was needed beyond the bring-up we already replay), so
 clocking may already be covered by `clarett_arm_device`. Confirm during step 1; if the engine won't
 start, capture an FC sample-rate change to find the clock command.
+
+---
+
+## 10. Armed-session retest + the steady-state sweep find (July 16–17 2026) `[TEST]`/`[TRACE]`
+
+First data-plane test on an ARMED session (wall crossed, manifestation-wall §8; the old "same
+below-BAR wall" attribution for the stall is void). Result: **the engine is no longer dead after one
+pass, but it does not stream** — and the working captures reveal a per-period host obligation our
+servicer never met.
+
+**Our armed 2Pre (`enable_pcm=1`, gated-ack default cycle):**
+- Stream handshake all `err=0` (`SET_CLOCK{48000,24}=0 CONFIG_PUSH=18(err=0) 0x6004=0/0 0x6005=0`).
+- After arm, `0x300` asserts bit31 **continuously at ~14 Hz with ctr=0x0, indefinitely** (2131
+  events / 151 s under a PipeWire-held session; old walled baseline: 2 events then dead forever).
+  A ctr=0 heartbeat, not streaming.
+- `arecord` (14ch S32_LE @48k) → EIO after 2 events (`periods=2 ctr=0x0`).
+
+**The working stream, measured (`2pre_stream.log`, 31.4 s window, 7836 events):**
+- `0x300` period events every **4.00 ms** (250/s); ctr advances **+0xc (12) per event** (7462/7462
+  steady-state steps), wrapping at a small modulus (~0xf0) — **373 wraps in 31 s: "wraps" are normal
+  modulo behavior, NOT ring passes**. 12 units/4 ms = 192 frames/event at 48k ⇒ **one ctr unit =
+  16 frames**; the driver's one-tick-= 4-frames copy model in `clarett_pcm_tick` is wrong.
+- **The host writes NOTHING during streaming** — the only writes in the whole window are the
+  one-time arm (bases/sizes/ctrl + `0x110`/`0x100` ack). No produce pointer, no per-period doorbell.
+  The engine free-runs on the descriptor rings.
+- **The steady-state cycle is a five-block read sweep, `0x100` FIRST:** every ~4 ms (MSI-paced) FC
+  reads `0x100,0x300,0x200,0x400,0x500`, and **`0x100` reads `0x80000000` — vec0's cause asserts
+  bit31 on every streaming period** and is read-to-cleared by the sweep. Our servicer read only
+  `0x200/0x300/0x500`, deliberately skipping `0x100` (mailbox race) and `0x400` (notify): an
+  **unserviced read-to-clear ack channel on every period — the same violation class as the
+  manifestation wall.** Under trapping the vendor cleared it every cycle; we never did.
+
+**Fix (in tree):** `clarett_stream_service` now performs the exact vendor sweep
+(`0x100` guarded by `cmd_inflight` so the mailbox ISR keeps its DONE bit; `0x400` swept too —
+caveat: may starve the monitor-notify refresh during capture, revisit). First 8 events of each
+session log raw `0x300` values at info to derive this model's ctr unit/modulus empirically.
+
+**Next:** rerun `arecord` with the sweep. If ctr advances, rewrite `clarett_pcm_tick` to advance by
+ctr-delta × 16 frames (modulo the observed wrap) instead of 4 frames/event, then validate audio
+content. Note the reload path re-arms an already-armed device — the old "re-arm wedges GET_DATA"
+finding predates the gated ack and gets tested implicitly (DC power-cycle if it wedges).

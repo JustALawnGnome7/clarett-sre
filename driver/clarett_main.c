@@ -619,14 +619,32 @@ static int clarett_stream_service(void *data)
 		}
 
 		/*
-		 * Mirror Windows' cause-block poll: read 0x200/0x300/0x500 each loop. We skip 0x100 (mailbox
-		 * cause — read-to-clear, racing clarett_fcp's poll) and 0x400 (notify).
+		 * Mirror the vendor's steady-state sweep EXACTLY (2pre_stream.log): every ~4 ms period
+		 * cycle FC reads 0x100,0x300,0x200,0x400,0x500 — all five blocks, 0x100 FIRST, and 0x100
+		 * reads 0x80000000 (bit31 asserted per period, read-to-clear). Our old sweep skipped
+		 * 0x100 and 0x400 to avoid racing the mailbox/notify paths — leaving a read-to-clear ack
+		 * channel unserviced, the same violation class as the manifestation wall (an armed 2Pre
+		 * emitted only a ctr=0 heartbeat at ~14 Hz vs the vendor's 250 Hz advancing counter).
+		 * 0x100 is skipped only while a mailbox command is in flight (the ISR owns its DONE bit);
+		 * the meter poll sets cmd_inflight around each GET_METER so the guard covers streaming.
+		 * Caveat: eating 0x400 here can starve the ISR's monitor-notify refresh during capture —
+		 * cosmetic, revisit once the engine streams.
 		 */
+		if (!atomic_read(&c->cmd_inflight))
+			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 per-period cause (bit31), read-to-clear */
+		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period event + counter */
 		readl(bar + STREAM_BLK0);		/* 0x200 TX cause */
-		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period ack */
+		readl(bar + REG_NOTIFY_CAUSE);		/* 0x400 */
 		readl(bar + 0x500);			/* 0x500 IRQ summary */
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
+
+			/* First events of a session at info: raw counter values to derive the ctr
+			 * unit/modulus on this model (FC 2Pre: +12/event every 4 ms, wraps ~0xf0 —
+			 * the old one-tick-= 4-frames model is wrong; see data-plane spec). */
+			if (atomic_read(&c->stream_periods) < 8)
+				dev_info(&c->pci->dev, "stream-ev[%d]: 0x300=0x%08x\n",
+					 atomic_read(&c->stream_periods), c2);
 
 			if (seen && ctr < c->stream_ctr)
 				wraps++;
