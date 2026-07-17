@@ -164,14 +164,36 @@ static const struct clarett_model *clarett_pick_model(const struct pci_device_id
 	return (const struct clarett_model *)ent->driver_data;
 }
 
+/*
+ * Timing exercise (wall spec §7): every "known-good" vendor trace was captured under
+ * x-no-mmap MMIO trapping, which dilates every BAR access to ~20 us; our replay issues
+ * the same byte sequence at native speed (~100 ns/access). The trace records the byte
+ * order, not which host actions were semantically conditioned on asynchronous device
+ * events — in the dilated environment those events had always completed. This lever
+ * re-creates the dilated timing wholesale: delay after EVERY BAR access. If the wall
+ * moves under dilation, bisect which access needs the time. udelay (not usleep):
+ * clarett_wl/rl run in the ISR too.
+ */
+static uint mmio_dilate_us;
+module_param(mmio_dilate_us, uint, 0444);
+MODULE_PARM_DESC(mmio_dilate_us,
+		 "Delay (us) after every BAR access, re-creating the MMIO-trap dilation (~20) every "
+		 "working vendor capture executed under. 0 = native speed (default).");
+
 void clarett_wl(struct clarett *c, u32 off, u32 val)
 {
 	writel(val, c->bar0 + off);
+	if (mmio_dilate_us)
+		udelay(mmio_dilate_us);
 }
 
 u32 clarett_rl(struct clarett *c, u32 off)
 {
-	return readl(c->bar0 + off);
+	u32 val = readl(c->bar0 + off);
+
+	if (mmio_dilate_us)
+		udelay(mmio_dilate_us);
+	return val;
 }
 
 static void clarett_hw_init(struct clarett *c)

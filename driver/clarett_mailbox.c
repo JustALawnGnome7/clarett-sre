@@ -12,6 +12,7 @@
 #include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/delay.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/string.h>
 #include "clarett.h"
@@ -50,10 +51,83 @@ MODULE_PARM_DESC(legacy_mbox_cycle,
 	"that never carried a command — an out-of-protocol token the vendor never sends, at the exact "
 	"pre-command-#0 point where the session gate decides (wall spec 7).");
 
+/*
+ * Timing exercise (wall spec §7, July 16 2026). The trailing doorbell ack is the one write
+ * in the cycle whose meaning is an acknowledgement, and the one whose precondition the
+ * dilated traces cannot reveal: under ~20 us/access MMIO trapping the response DMA had
+ * ALWAYS landed by ack time (>=242 us after submit in every vendor capture), while at
+ * native speed our ack provably precedes the landing (the error_probe race: resp_buf read
+ * right after DONE still holds the PREVIOUS response). If the ack asserts "response
+ * consumed, buffer free", we have been acking responses that had not arrived — on every
+ * command of every session, including #0 (whose response, per our_arm_resp.log, may never
+ * arrive at all; the vendor never acks an incomplete command).
+ *
+ * gated_ack: withhold the trailing ack until THIS command's response lands (echo word
+ * matches; the header is zeroed pre-submit so repeated opcodes cannot false-match on a
+ * stale response), up to CLARETT_MBOX_TIMEOUT_MS from DONE. A response that never arrives
+ * is never acked. Zeroing the header is a host write to the DMA buffer pre-submit — same
+ * class as resp_prefill (existing lever; FC's buffer arrives zeroed from Windows anyway).
+ *
+ * resp_trace: one log line per command — DONE latency, response-landing latency, echoed
+ * opcode/seq, FCP status word (resp+8), size. This is the onset instrument for the wall:
+ * on repeated fresh-boot bring-ups it shows the FIRST command whose status goes nonzero
+ * and whether that onset is stable across byte-identical runs (an unstable onset on a
+ * fixed input stream means the failure is not a function of the bytes). Combine with
+ * meter_poll_ms=0 for a readable log (GET_METER otherwise adds ~24 lines/s).
+ */
+static bool gated_ack;
+module_param(gated_ack, bool, 0444);
+MODULE_PARM_DESC(gated_ack,
+	"Withhold each command's trailing doorbell ack (0x408=2) until the response DMA has "
+	"actually landed (echoed opcode matches; up to 100 ms); never ack a response that never "
+	"arrived. Default 0 = ack right after the DONE sweep, as reconstructed from the traces.");
+
+static bool resp_trace;
+module_param(resp_trace, bool, 0444);
+MODULE_PARM_DESC(resp_trace,
+	"Log per-command response telemetry: DONE and response-landing latencies, echo, FCP "
+	"status (resp+8), size. For mapping the wall's onset across fresh boots. Use with "
+	"meter_poll_ms=0. Default 0.");
+
+/*
+ * Wait for THIS command's response to land in resp_buf. Returns the matched echo word
+ * (CMD_EXEC_FLAG | opcode — never zero), or 0 if nothing landed before the deadline;
+ * *land_us gets the submit->landing latency (-1 on timeout). Spins briefly (a landing,
+ * when it happens, is expected within ~150 us), then backs off to sleeps; called under
+ * mbox_lock, sleeping is fine.
+ */
+static u32 clarett_resp_wait(struct clarett *c, u32 exp_echo, ktime_t t_submit, s64 *land_us)
+{
+	const u8 *r = c->resp_buf;
+	unsigned long deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
+	ktime_t spin_until = ktime_add_us(ktime_get(), 500);
+	u32 echo;
+
+	for (;;) {
+		dma_rmb();	/* order the DMAed response before we read resp_buf */
+		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
+		       r[FCP_RESP_ECHO_OFF + 2] << 16 | (u32)r[FCP_RESP_ECHO_OFF + 3] << 24;
+		if (echo == exp_echo) {
+			*land_us = ktime_us_delta(ktime_get(), t_submit);
+			return echo;
+		}
+		if (time_after(jiffies, deadline)) {
+			*land_us = -1;
+			return 0;
+		}
+		if (ktime_before(ktime_get(), spin_until))
+			cpu_relax();
+		else
+			usleep_range(20, 50);
+	}
+}
+
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 {
 	unsigned long deadline;
-	u32 cause = 0, first_cause = 0, fcperr = 0;
+	u32 cause = 0, first_cause = 0, fcperr = 0, resp_echo = 0;
+	ktime_t t_submit;
+	s64 done_us = -1, land_us = -1;
 	int i, ret = 0, polls = 0;
 
 	if (len > CLARETT_MBOX_DATA_MAX)
@@ -70,6 +144,12 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	if (resp_prefill >= 0) {
 		memset(c->resp_buf, resp_prefill & 0xff, c->resp_size);
 		dma_wmb();	/* fill visible to the device before the doorbell submit */
+	}
+	if (gated_ack || resp_trace) {
+		/* zero the response header so clarett_resp_wait can't match a stale echo
+		 * (the arm repeats opcodes back-to-back, CONFIG_PUSH x122) */
+		memset(c->resp_buf, 0, FCP_RESP_DATA_OFF);
+		dma_wmb();
 	}
 
 	clarett_wl(c, REG_MBOX + MBOX_CMD, CMD_EXEC_FLAG | opcode);
@@ -95,6 +175,7 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	reinit_completion(&c->mbox_done);
 	atomic_set(&c->cmd_inflight, 1);
 
+	t_submit = ktime_get();
 	clarett_wl(c, REG_DOORBELL, DOORBELL_SUBMIT);
 
 	deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
@@ -146,11 +227,20 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 		}
 
 		if (cause & IRQ_DONE_BIT) {
+			done_us = ktime_us_delta(ktime_get(), t_submit);
 			for (s = 1; s < ARRAY_SIZE(sweep); s++)
 				clarett_rl(c, sweep[s]);	/* rest of the DONE sweep */
 			for (s = 0; s < ARRAY_SIZE(sweep); s++)
 				clarett_rl(c, sweep[s]);	/* confirming full sweep */
-			clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
+			if (gated_ack || resp_trace)
+				resp_echo = clarett_resp_wait(c, CMD_EXEC_FLAG | opcode,
+							      t_submit, &land_us);
+			if (!gated_ack || resp_echo)
+				clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
+			else
+				dev_warn_ratelimited(&c->pci->dev,
+					"FCP op=0x%06x seq=%u: response never landed; ack withheld\n",
+					opcode, c->seq);
 		}
 		/* on timeout: no ack — the vendor never acks an incomplete command */
 	}
@@ -167,6 +257,23 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	dev_dbg(&c->pci->dev,
 		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x\n",
 		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr);
+
+	if (resp_trace) {
+		const u8 *r = c->resp_buf;
+
+		if (resp_echo)
+			dev_info(&c->pci->dev,
+				 "FCPr op=0x%06x seq=%u done=%lldus resp=%lldus rseq=%u err=%u size=%u\n",
+				 opcode, c->seq, done_us, land_us,
+				 r[FCP_RESP_SEQ_OFF] | r[FCP_RESP_SEQ_OFF + 1] << 8,
+				 r[FCP_RESP_STATUS_OFF],
+				 r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8);
+		else
+			dev_info(&c->pci->dev,
+				 "FCPr op=0x%06x seq=%u done=%lldus resp=NONE%s\n",
+				 opcode, c->seq, done_us,
+				 gated_ack ? " (ack withheld)" : "");
+	}
 
 	if (!(cause & IRQ_DONE_BIT))
 		ret = -ETIMEDOUT;
