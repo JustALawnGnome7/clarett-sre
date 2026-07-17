@@ -886,6 +886,27 @@ void clarett_engine_stop(struct clarett *c)
 }
 
 /*
+ * Deregister the response-buffer owner and stop the device mastering the bus.
+ * REG_DMA_ADDR_LO/HI are a standing registration — the armed device keeps the
+ * host address and DMAs responses into it asynchronously, and nothing in the
+ * protocol expires it. Left in place across an unload it is a dangling DMA
+ * target (freed memory) for the rest of the power cycle. Bus master goes off
+ * first so the device cannot issue a write to a half-zeroed (torn) address;
+ * the zeroed registration is what the next same-power-cycle session inherits.
+ * Call only after all mailbox traffic has stopped — a command issued after
+ * this can never have its response land (the gated cycle times out).
+ */
+static void clarett_quiesce_dma(struct pci_dev *pci, void __iomem *bar0)
+{
+	pci_clear_master(pci);
+	if (!bar0)
+		return;
+	writel(0, bar0 + REG_DMA_ADDR_LO);
+	writel(0, bar0 + REG_DMA_ADDR_HI);
+	readl(bar0 + REG_DMA_ADDR_LO);	/* flush posted writes before the buffer is freed */
+}
+
+/*
  * MSI handler. One Linux IRQ per MSI vector, dispatched by vector index (dev_id).
  * The device signals control-plane events on vec0; we check the notification cause
  * (0x400) there. We must NOT read the mailbox cause (0x100) — that is read-to-clear
@@ -1266,6 +1287,7 @@ err_free:
 	clarett_engine_stop(c);			/* halt DMA before the ring buffer is freed */
 	clarett_teardown_irq(c);		/* no-op unless setup_irq() succeeded */
 	cancel_work_sync(&c->notify_work);
+	clarett_quiesce_dma(pci, c->bar0);	/* bar0 may still be NULL here */
 	snd_card_free(card);
 	return err;
 }
@@ -1274,14 +1296,35 @@ static void clarett_remove(struct pci_dev *pci)
 {
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct clarett *c = card->private_data;
+	void __iomem *bar0 = c->bar0;
 
 	cancel_delayed_work_sync(&c->meter_work);	/* stop the heartbeat poll */
 	clarett_engine_stop(c);			/* halt streaming DMA before the buffer is freed */
 	writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
 	clarett_teardown_irq(c);		/* free MSI vectors / IRQ handlers */
 	cancel_work_sync(&c->notify_work);	/* flush any in-flight notification work */
-	snd_card_free(card);
+	snd_card_free(card);			/* disconnects userspace — last possible mailbox traffic (frees c) */
+	/* Devres releases in REVERSE order after remove returns: the response buffer is
+	 * freed (and IOMMU-unmapped) BEFORE pcim's disable clears bus master — so without
+	 * an explicit quiesce the device holds a live registration to freed memory. */
+	clarett_quiesce_dma(pci, bar0);
 	/* BAR mapping, DMA buffer and device enable are devres-managed */
+}
+
+/* remove() never runs on reboot/kexec; without this the device enters the next kernel
+ * still bus-mastering with the old kernel's response buffer registered. */
+static void clarett_shutdown(struct pci_dev *pci)
+{
+	struct snd_card *card = pci_get_drvdata(pci);
+	struct clarett *c;
+
+	if (!card)
+		return;
+	c = card->private_data;
+	cancel_delayed_work_sync(&c->meter_work);
+	clarett_engine_stop(c);
+	writel(0, c->bar0 + REG_IRQ0_ENABLE);
+	clarett_quiesce_dma(pci, c->bar0);
 }
 
 /* --- per-model descriptors ---------------------------------------------- */
@@ -1485,6 +1528,7 @@ static struct pci_driver clarett_driver = {
 	.id_table = clarett_ids,
 	.probe = clarett_probe,
 	.remove = clarett_remove,
+	.shutdown = clarett_shutdown,
 };
 module_pci_driver(clarett_driver);
 
