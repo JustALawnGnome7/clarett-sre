@@ -334,6 +334,7 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 		return err;
 
 	c->shadow[offset] = val;
+	set_bit(offset, c->shadow_known);	/* write-through: the shadow now matches hardware */
 	return 0;
 }
 

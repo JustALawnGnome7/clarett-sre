@@ -112,7 +112,14 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 		return -EINVAL;
 	}
 
-	if (dev == old)
+	/*
+	 * Skip a redundant write only when the shadow is KNOWN to match hardware. For a control the
+	 * device does not report back (preamp Mode/Air), the seed leaves the shadow at 0, so a genuine
+	 * "set to 0" (e.g. Air off, or Mode→Line which maps to a non-zero byte only by luck) would be
+	 * silently dropped against the fictional 0. The first put of such a control always writes,
+	 * establishing a real hardware value; write-through then makes the byte known for later skips.
+	 */
+	if (dev == old && test_bit(d->offset, c->shadow_known))
 		return 0;
 
 	err = clarett_write_u8(c, d->offset, dev, d->activate);

@@ -10,6 +10,7 @@
 #define CLARETT_H
 
 #include <linux/types.h>
+#include <linux/bitmap.h>		/* DECLARE_BITMAP, set_bit/test_bit — shadow_known */
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/atomic.h>
@@ -308,6 +309,9 @@ struct clarett_model {
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region (MBOX_END - MBOX_DATA); SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */
+#define CLARETT_APPSPACE_SIZE    8392    /* full persistent config/appspace: the arm's bulk
+					  * GET_DATA reads span exactly [0, 8392) and its
+					  * writebacks fall inside that range */
 
 /* --- mixer control descriptor ------------------------------------------- */
 enum clarett_ctl_type {
@@ -426,6 +430,15 @@ struct clarett {
 	 * so those reflect live hardware state. Other bytes remain write-through.
 	 */
 	u8 shadow[CLARETT_CONFIG_SIZE];
+	/*
+	 * Per-byte "the shadow is known to match hardware" flags. A shadow byte is
+	 * only authoritative once we've written it (write-through) or read it from a
+	 * trusted live source (the 24/28/112 monitor refresh). The put handler's
+	 * skip-if-unchanged optimisation is sound ONLY for known bytes: for a control
+	 * the device does not report back (preamp Mode@166/Air@174), the seed leaves
+	 * the shadow at 0, and skipping "set to 0" would silently drop a real change.
+	 */
+	DECLARE_BITMAP(shadow_known, CLARETT_CONFIG_SIZE);
 };
 
 static inline void clarett_put_le32(u8 *p, u32 v)
@@ -434,6 +447,11 @@ static inline void clarett_put_le32(u8 *p, u32 v)
 	p[1] = v >> 8;
 	p[2] = v >> 16;
 	p[3] = v >> 24;
+}
+
+static inline u32 clarett_get_le32(const u8 *p)
+{
+	return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24;
 }
 
 /*

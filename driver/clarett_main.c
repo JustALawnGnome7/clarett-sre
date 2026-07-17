@@ -15,6 +15,7 @@
 #include <linux/workqueue.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/bitmap.h>
 #include <linux/string.h>
 #include <linux/jiffies.h>
 #include <sound/core.h>
@@ -354,18 +355,39 @@ static void clarett_hw_init(struct clarett *c)
 /*
  * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
  * (8prex_full_init_mute.log), regenerated into clarett_init_8prex.h by `fcp_decode.py --emit-init`:
- * every non-meter command up to the monitor-mute write, minus the bulk 8 KB config read/writeback.
- * Self-boot does NOT arm config access (GET_DATA fails); this host init arms it. Must run against a
- * device in its fresh power-on state — re-initializing an already-armed device wedges it instead.
+ * every non-meter command up to the monitor-mute write. Self-boot does NOT arm config access
+ * (GET_DATA fails); this host init arms it. Must run against a device in its fresh power-on state —
+ * re-initializing an already-armed device wedges it instead.
  * Best-effort: failures are logged and the sequence continues.
+ *
+ * State-preserving writeback: the vendor cycle is read-modify-writeback — the arm's bulk GET_DATA
+ * steps read the whole persistent appspace before the SET_DATA steps write it back. The blob's
+ * SET_DATA payloads are the CAPTURE-DAY bytes; replaying them verbatim overwrites whatever state
+ * the device restored from flash at power-on (post-crossing these writes manifest physically). So
+ * the GET responses are captured into a staging image and substituted into each writeback whose
+ * range was fully read — the replay echoes THIS boot's device state, byte geometry unchanged.
+ * Allocation failure degrades to the verbatim replay.
  */
 static int clarett_arm_device(struct clarett *c)
 {
-	int i, err, fails = 0;
+	int i, err, fails = 0, echoed = 0, verbatim = 0;
 	bool clk_sent = false;
+	unsigned long *have = NULL;
+	u8 *cfg, *wb = NULL;
+
+	cfg = kmalloc(CLARETT_APPSPACE_SIZE, GFP_KERNEL);
+	if (cfg) {
+		have = bitmap_zalloc(CLARETT_APPSPACE_SIZE, GFP_KERNEL);
+		wb = kmalloc(CLARETT_MBOX_DATA_MAX, GFP_KERNEL);	/* largest possible SET_DATA */
+		if (!have || !wb) {
+			kfree(cfg);
+			cfg = NULL;
+		}
+	}
 
 	for (i = 0; i < c->model->n_init_steps; i++) {
 		const struct clarett_init_step *s = &c->model->init_seq[i];
+		const u8 *payload = c->model->init_blob + s->off;
 
 		/*
 		 * SET_CLOCK before CONFIG_PUSH. FC issues 0x6003 at device-open, ahead of the config/routing
@@ -384,17 +406,67 @@ static int clarett_arm_device(struct clarett *c)
 			clk_sent = true;
 		}
 
-		err = clarett_fcp(c, s->opcode, c->model->init_blob + s->off, s->len);
+		/* Substitute the device's own bytes into this writeback if its whole range was
+		 * captured from earlier GET responses; otherwise fall back to the capture bytes. */
+		if (cfg && s->opcode == FCP_SET_DATA && s->len >= 8) {
+			u32 tgt  = clarett_get_le32(payload);
+			u32 tlen = clarett_get_le32(payload + 4);
+
+			if (tlen == (u32)s->len - 8 && tgt + tlen <= CLARETT_APPSPACE_SIZE &&
+			    find_next_zero_bit(have, tgt + tlen, tgt) >= tgt + tlen) {
+				memcpy(wb, payload, 8);
+				memcpy(wb + 8, cfg + tgt, tlen);
+				payload = wb;
+				echoed++;
+			} else {
+				dev_info(&c->pci->dev,
+					 "arm[%d]: SET_DATA{%u,%u} range not captured; replaying capture-day bytes\n",
+					 i, tgt, tlen);
+				verbatim++;
+			}
+		}
+
+		err = clarett_fcp(c, s->opcode, payload, s->len);
 		if (err) {
 			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
 				 i, s->opcode, err);
 			fails++;
 		}
+
+		/* Capture GET_DATA responses into the staging image. The gated-ack cycle means the
+		 * response has landed (or was reported missing) by the time clarett_fcp returns; the
+		 * echo+size guard rejects refusal stubs so a walled read can't taint the image. No
+		 * resp_buf race here: the meter heartbeat only starts after the arm completes. */
+		if (cfg && !err && s->opcode == FCP_GET_DATA && s->len >= 8) {
+			u32 tgt  = clarett_get_le32(payload);
+			u32 tlen = clarett_get_le32(payload + 4);
+			const u8 *r = c->resp_buf;
+
+			if (tgt + tlen <= CLARETT_APPSPACE_SIZE) {
+				u32 echo;
+				u16 size;
+
+				dma_rmb();	/* order the DMAed response before reading it */
+				echo = clarett_get_le32(r + FCP_RESP_ECHO_OFF);
+				size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+				if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= tlen) {
+					memcpy(cfg + tgt, r + FCP_RESP_DATA_OFF, tlen);
+					bitmap_set(have, tgt, tlen);
+				}
+			}
+		}
 	}
 	if (fails)
 		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
 			 fails, c->model->n_init_steps);
+	if (cfg)
+		dev_info(&c->pci->dev,
+			 "arm: writeback echoed live device state (%d echoed, %d verbatim)\n",
+			 echoed, verbatim);
 
+	kfree(wb);
+	bitmap_free(have);
+	kfree(cfg);
 	return 0;
 }
 
@@ -475,34 +547,40 @@ static void clarett_error_probe(struct clarett *c)
 }
 
 /*
- * Seed the config shadow from the device. clarett_hw_init() zeroes the shadow, but the
- * command-3 enable bytes (72/73) pack one bit per output, so toggling the monitor outputs'
- * bits needs the real current bytes for a safe read-modify-write. GET the monitoring region
- * (offset 24, 92 bytes — covers 24/28/52/72-74/112) and copy the DMAed response in. The first
- * GET after programming the DMA address can come back empty (echo word 0), so retry briefly.
- * Guard on BOTH the echo word AND the response size: our device returns the header with size=0
- * and no payload (config backend dormant — see manifestation wall), and copying that would seed
- * the shadow with stale buffer bytes. Require size >= the bytes we read.
+ * Seed the whole config shadow from the device. clarett_hw_init() zeroes the shadow; without a
+ * full seed every control outside the monitor region (Air @174+i, Mode @166+i, output gains)
+ * REPORTS a default the hardware may not be in, and the first put() writes that fiction to the
+ * device — post-crossing that physically overwrites the state the device restored from flash.
+ * One GET of the full shadow window [0, CLARETT_CONFIG_SIZE) makes alsamixer (and an alsactl
+ * store) reflect the device's actual state at load. It also covers the command-3 enable bytes
+ * (72/73), whose packed bits need real values for a safe read-modify-write.
+ * The first GET after programming the DMA address can come back empty (echo word 0), so retry
+ * briefly. Guard on BOTH the echo word AND the response size: a walled device returns the
+ * header with size=0 and no payload, and copying that would seed stale buffer bytes.
  */
 static int clarett_seed_shadow(struct clarett *c)
 {
 	const u8 *r = c->resp_buf;
 	u32 echo;
 	u16 size;
-	int err, attempt, i;
+	int err, attempt;
 
 	for (attempt = 0; attempt < 3; attempt++) {
-		err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
+		err = clarett_get_data(c, 0, CLARETT_CONFIG_SIZE);
 		if (err)
 			return err;
 
 		dma_rmb();	/* order the DMAed response before we read resp_buf */
-		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
-		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
+		echo = clarett_get_le32(r + FCP_RESP_ECHO_OFF);
 		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= MONITOR_CFG_LEN) {
-			for (i = 0; i < MONITOR_CFG_LEN; i++)
-				c->shadow[MONITOR_CFG_OFFSET + i] = r[FCP_RESP_DATA_OFF + i];
+		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= CLARETT_CONFIG_SIZE) {
+			memcpy(c->shadow, r + FCP_RESP_DATA_OFF, CLARETT_CONFIG_SIZE);
+			/* Only 24/28/112 are confirmed to read back live (same three the notify refresh
+			 * trusts); mark just those known. The rest of the seed — preamp Mode/Air in
+			 * particular — is not device-reported, so it stays unknown and its first put writes. */
+			set_bit(24,  c->shadow_known);
+			set_bit(28,  c->shadow_known);
+			set_bit(112, c->shadow_known);
 			return 0;
 		}
 	}
@@ -997,10 +1075,15 @@ static void clarett_notify_work(struct work_struct *work)
 		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= MONITOR_CFG_LEN) {
 			const u8 *data = r + FCP_RESP_DATA_OFF;
 
-			/* data[i] == config[MONITOR_CFG_OFFSET + i] */
+			/* data[i] == config[MONITOR_CFG_OFFSET + i]. These three read back live, so
+			 * mark them known: the put skip is sound for them (no spurious relay click on a
+			 * no-op mute/dim toggle), unlike the bytes the device never reports. */
 			c->shadow[24]  = data[24  - MONITOR_CFG_OFFSET];
 			c->shadow[28]  = data[28  - MONITOR_CFG_OFFSET];
 			c->shadow[112] = data[112 - MONITOR_CFG_OFFSET];
+			set_bit(24,  c->shadow_known);
+			set_bit(28,  c->shadow_known);
+			set_bit(112, c->shadow_known);
 		} else {
 			/* Empty/absent payload — keep the write-through shadow. On our device this is
 			 * the normal case (echo present, size=0: config backend dormant); echo=0 is the
@@ -1218,6 +1301,12 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_warn(&pci->dev,
 			 "config shadow seed failed (%d); leaving hardware mute/dim enables untouched\n",
 			 seeded);
+	else
+		/* One-shot at probe (not the meter flood): dump the seeded preamp region so the
+		 * Mode (166+i) / Air (174+i) bytes the driver actually read are visible — resp_trace
+		 * caps its payload at 32 bytes (offsets 0-31) and can never reach these. */
+		dev_info(&pci->dev,
+			 "seeded shadow [160,192)=%*ph\n", 32, c->shadow + 160);
 
 	/* Diagnostic: characterize the FCP error=3 refusal (blanket session block vs per-command).
 	 * Requires meter_poll_ms=0 so the meter worker doesn't race the shared resp_buf/seq (see param desc). */
