@@ -2,11 +2,14 @@
 
 > **Scope:** applies to the whole Clarett Thunderbolt line; established on the 8PreX and 2Pre.
 
-**Status:** **Blocked at a proven boundary.** The control plane is fully reverse-engineered and our
-driver reproduces Focusrite Control's (FC) wire traffic on *every traceable surface*, yet control
-changes that physically manifest for FC do **not** manifest for our driver. This document records the
-elimination that establishes the boundary, so the conclusion is not re-litigated. Tags: `[TRACE]` =
-confirmed from a capture; `[TEST]` = confirmed by an A/B on real hardware; `[CONCLUSION]`.
+**Status: THE WALL IS CROSSED (July 16 2026 — see §8).** The refusal was never below the driver: it
+was the **trailing doorbell ack racing the device's asynchronous response DMA**, a precondition no
+dilated trace could reveal. With the ack gated on the response actually landing, the same byte stream
+arms the session (`err=0` + real data from command #0) and **control writes manifest physically**
+(LEDs move, relays click) — user-confirmed on the 2Pre. Sections 1–7 are preserved as the historical
+elimination record: every negative in them is a true fact; only the "below-driver/off-wire"
+localization they pointed to was wrong. Tags: `[TRACE]` = confirmed from a capture; `[TEST]` =
+confirmed by an A/B on real hardware; `[CONCLUSION]`.
 
 Investigated on the **Clarett 2Pre** (bare metal + Linux-guest passthrough), June 2026. The 8PreX
 shares the protocol and PCIe interface, so the conclusion is expected to carry across the line.
@@ -712,3 +715,62 @@ Planned instruments, cheap-first:
    session's device-initiated DMA reads (mappings + faults become guest-visible/QEMU-traceable), the
    only input channel never observed. Weakened a priori by macOS-works-under-strict-DART but now the
    sole survivor. After that: non-software paths (Focusrite/community) or accepting the wall.
+
+---
+
+## 8. THE WALL IS CROSSED — the trailing ack raced the response DMA `[TEST]` (July 16 2026)
+
+**The user's reframing that broke it:** stop comparing what the sessions *say* (byte streams) and ask
+what the measurement apparatus did to *time*. Every "known-good" vendor capture was taken under
+x-no-mmap MMIO trapping — ~20 µs per BAR access — and the working driver **executed under that
+dilation in every captured session**. A trace records byte order, not which host actions are
+semantically conditioned on asynchronous device events: in the dilated environment those events had
+always completed. Our replay issued the identical bytes at native speed (~100 ns/access).
+
+**The cycle walk (exercise):** the mailbox transaction contains exactly one write whose meaning is an
+acknowledgement — the trailing `0x408<-2`. What it might acknowledge: (a) the completion cause
+(waited for — MSI-paced), or (b) **the response DMA consumed/buffer free (never waited for)**. The
+traces cannot distinguish the two: every vendor ack sat ≥242 µs after submit (measured across
+`2pre_cold_boot2.log`, all 114 commands), so the response had always landed by ack time. At native
+speed ours fired ~µs after DONE — and the §7 `error_probe` race had already proven the response lands
+*after* that (a resp_buf read right after DONE still holds the previous command's response). In
+`our_arm_resp.log`, arm[0]'s response never arrived at all and the cycle acked it anyway. So on every
+command of every walled session we acked a response that had not arrived — and the device's answer
+was the blanket `err=3` session refusal from command #0, indistinguishable from an attach-time gate
+(§5c's "THE GATE IS PRE-MAILBOX" was this masquerade: the localization assumed intra-command timing
+was inert).
+
+**The fix** (`clarett_mailbox.c`): pre-submit, zero the 16-byte response header (so repeated opcodes
+can't match a stale echo); after the DONE sweep, `clarett_resp_wait()` polls resp+0 for THIS
+command's echoed opcode (up to `CLARETT_MBOX_TIMEOUT_MS`) **before** the trailing ack; a response
+that never arrives is never acked. Levers: `gated_ack` (withhold ack on no-response), `resp_trace`
+(per-command onset/latency telemetry — NOTE: as first implemented it also performs the landed-wait
+before the ack), `mmio_dilate_us` (wholesale dilation re-creation, `clarett_main.c`).
+
+**Result (2Pre, bare metal):** the full 232-command arm + seed answered **`err=0` with real data from
+command #0** — the device echoes our request seq (a refusal writes seq=0), `CONFIG_PUSH` returns the
+port-name strings, the 8 KB config read returns 8×1016 real bytes, and the serial/fw query answers
+(serial `000012345678abcd`, fw app `0x04061973`, fpga `0x18101966`). Response-landing telemetry:
+64–110 µs typical, ~173 µs for the 1016-byte GETs, **631–698 µs for `DATA_CMD` activates** — the old
+cycle acked those more than half a millisecond before the response landed. **PHYSICAL MANIFESTATION
+CONFIRMED by the user: Mode and Air toggles in alsamixer move the front-panel LEDs and audibly switch
+the relays.** `[TEST]`
+
+**Open items before this section is final:**
+1. **Attribution matrix** (fresh DC power-cycle per run): the winning run confounds (a) the
+   landed-gated ack, (b) the pre-submit header zero (a buffer-content change), (c) ~90 µs/cmd of
+   logging pacing. Isolate, then bake the winning mechanism into the default cycle and drop the
+   levers.
+2. **Control run** (levers off) on a fresh cycle → expect `err=3`, proving the lever and not the
+   boot.
+3. **Data-plane retest** on an armed session: the PCM burst-then-stall was attributed to the same
+   "below-driver" differentiator — that attribution is now void. The stall may be the same class of
+   violation on the stream cause blocks (`0x200/0x300` are read-to-clear and were serviced at native
+   speed), or may simply resolve.
+4. Propagate: CLAUDE.md status, data-plane spec preamble, INVESTIGATION.md (currently documents a
+   terminus that no longer exists).
+
+**Method lesson (the one to carry):** when a replay of a traced protocol fails, audit every host
+action whose meaning asserts that something *finished* — an instrument that dilates time makes every
+async precondition invisibly true. Characterize failures by their onset (first bad response), not
+their endpoint.

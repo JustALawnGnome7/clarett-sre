@@ -7,68 +7,49 @@ session (or contributor) can continue without the original chat history.
 
 ## Goal & status
 
-Build an in-kernel ALSA driver for the Clarett 8PreX. Both planes are blocked at the
-**same off-wire/below-BAR wall** — our driver's observable traffic matches Focusrite
-Control byte-for-byte, yet neither plane functions. This is the central unsolved problem
-(`spec/clarett-manifestation-wall.md`).
-- **Control plane** (mixer/routing/preamp/clock/notifications) — **protocol fully
-  reverse-engineered**; every encoding confirmed against live FC traffic. The driver
-  (`driver/`) is **structurally complete**: loads and probes on real hardware, registers
-  ALSA mixer controls, the FCP mailbox transport round-trips (`done=1`), and async
-  notifications fire. **But it does NOT functionally control the device** — control writes
-  complete yet don't manifest (front-panel state frozen), and `GET_DATA` comes back empty
-  (`size=0`), so the mixer "get" is an in-memory **shadow**, not hardware state. The config
-  backend is dormant for our driver despite a correct, FC-identical command stream.
+Build an in-kernel ALSA driver for the Clarett line (2Pre/4Pre/8PreX).
+**THE MANIFESTATION WALL IS CROSSED (July 16 2026 — `spec/clarett-manifestation-wall.md` §8).**
+The year-defining "off-wire/below-driver wall" was a **timing artifact of the measurement
+apparatus**: every "known-good" vendor trace ran under x-no-mmap MMIO trapping (~20 µs/access),
+under which the device's asynchronous response DMA had always landed before the trailing doorbell
+ack (`0x408=2`); our native-speed replay acked ~µs after DONE, **before the response landed** — a
+protocol violation the device answers with a blanket `err=3` session refusal from command #0 (which
+masqueraded as an attach-time gate). Gating the ack on the response actually landing
+(`clarett_resp_wait` in `clarett_mailbox.c` + pre-submit response-header zero; levers
+`gated_ack`/`resp_trace`/`mmio_dilate_us`) arms the session.
+- **Control plane** — **WORKS ON REAL HARDWARE**: full 232-command arm + seed answer `err=0` with
+  real data (seq echoed, CONFIG_PUSH port names, 8 KB config read full, serial/fw answered), and
+  **control writes manifest physically** — user-confirmed Mode/Air toggles from alsamixer move the
+  2Pre's front-panel LEDs and switch its relays. **PENDING:** attribution matrix (gated ack vs
+  header zero vs logging pacing — one fresh DC power-cycle each), a levers-off control run, then
+  bake the winning mechanism into the default cycle; re-audit the shadow/`GET_DATA` refresh paths
+  now that GETs return real data.
 - **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
-  sustain past one ring pass** (flags period 0, the `0x300` counter never advances). Same
-  off-wire/below-BAR wall. Details: `spec/clarett-data-plane.md`.
-- **Environment is RULED OUT, not a remaining path.** Our driver was run in a Fedora guest with
-  the device vfio-passed-through — the *same* path FC uses (Windows guest + passthrough) — and it
-  **still fails** (control writes don't manifest). FC-in-passthrough works, our-driver-in-the-same-
-  passthrough fails ⇒ the blocker is **not** host/IOMMU/VM/bare-metal environment; it is **our driver
-  vs Focusrite Control**, specifically off-wire **bus-master DMA** the device acts on that we don't
-  replicate (firmware-upload, extra DMA region, and CONFIG_PUSH-as-pointers all separately disproven).
-- **Method caveat + status (wall confirmed below-driver on four independent methods; the last open lead — a cold-boot capture — is now RUN and NEGATIVE on all three surfaces, so clean-room software RE is at its terminus):** the `x-no-mmap` BAR trace is
-  **blind to sample DMA** and to bus-master DMA generally — both planes were RE'd by triangulating BAR
-  setup registers (`tools/bar_profile.py`) + guest-RAM dumps + period-IRQ correlation (`fcp_decode.py
-  --async`). That same blindness is where both walls hide. **Every reachable observation method is now
-  exhausted and the wall is confirmed on THREE platforms** (Windows/vfio, macOS, our Linux driver):
-  - the black-box MMIO+FCP+config method (Windows/vfio) matches FC byte-for-byte on every surface;
-  - **DTrace of the working macOS vendor stack** (the Clarett runs on the user's M1) showed the vendor's
-    user-space→kext commands are **byte-identical to ours** AND the device returns **rich real data**
-    (caps/firmware/serial/config) to the *same* `GET_DATA` requests that return empty for us — but DTrace
-    **could not see inside the kext** (stripped, address-redacted release binary → no `fbt`, unattributable
-    stack frames), and its user-space, runtime-DMA, and boot-time captures are all exhausted
-    (`spec/clarett-manifestation-wall.md §5d`, `spec/clarett-macos-dtrace-plan.md`).
-  The differentiator sits **below the driver**, in off-wire transport/IOMMU-mapping semantics no software
-  trace has reached. **The last reachable lead — WinDbg kernel-debug of the working Windows driver — is now
-  RUN (July 2 2026) and confirms the anticlimax** (`spec/clarett-windbg-plan.md`, `manifestation-wall.md`
-  §5e): breakpointing the symbolicated MS DMA APIs `FocusritePCIe.sys` calls (`MmAllocatePagesForMdlEx`,
-  `WdfCommonBufferCreateWithConfig`, `HalAllocateCommonBuffer`), attributed by **module range** (never
-  disassembling the `.sys`), showed its **entire** init DMA footprint = two {16 KB SG-descriptor common
-  buffer + 2 MB scattered sample MDL} stream blocks + one 4 KB response common buffer, all **cached-coherent,
-  64-bit, no address ceiling** — attribute-for-attribute **equivalent to our driver's**
-  `dma_alloc_coherent`/descriptor layout, with **nothing extra programmed to the device at init** (only
-  `0x410`; the `0x210/0x310` engine arm is stream-time) and **no mailbox pointer-push**. So the vendor's
-  driver-level DMA construction equals ours; the wall is **confirmed below the driver** by a fourth
-  independent method (after Windows/vfio MMIO, macOS DTrace, our Linux replay). **The last state-dependent
-  software lead — a cold-boot capture — is now RUN and NEGATIVE on all three surfaces (July 3 + 6 2026),
-  closing it.** A VM reboot keeps the device's own DC power on (the 2Pre is not bus-powered, so a TB-cable unplug
-  alone won't reset it); only a **device DC power-cycle** is cold. On a genuinely cold 2Pre: the vfio mailbox
-  trace matches warm (no `INIT_1`/`REBOOT`/firmware burst — and `INIT_1` is absent warm too, so not a skipped
-  step); the WinDbg DMA-allocation footprint matches warm (siblings do zero DMA); and the **DMA buffer contents
-  are zero** — both 2 MB sample MDLs, captured cold and read at the freshest post-init instant, are all-zero with
-  every Xilinx firmware search (`00 09 0f f0`, `aa 99 55 66`, `"tb_top"`) empty. **Firmware-over-DMA is disproven**
-  (the FPGA self-boots from flash), and no once-per-power-cycle bring-up is missing from `clarett_arm_device`.
-  (`manifestation-wall.md` §5f, `spec/clarett-windbg-plan.md` cold runbook.) **This is the terminus of clean-room
-  software RE: every host-visible surface, warm and cold, is exhausted; the differentiator sits below the driver
-  in TB/PCIe transport or a device-init handshake no permitted method can reach.** Realistic paths from here are
-  non-technical (Focusrite/community) or accepting the wall.
-  Excluded / done: a Thunderbolt/PCIe **bus analyzer** (**ruled out by the user**), **disassembling the vendor
-  driver/kext** (**clean-room no-go**), host-env work, more *warm* Windows/vfio MMIO captures, and driver-revive
-  experiments — all out of scope or done/negative.
+  sustain past one ring pass** (flags period 0, the `0x300` counter never advances).
+  **Its "same below-BAR wall" attribution is now VOID** — retest on an armed session; the stall
+  may be the same ack-timing class on the stream cause blocks, or may resolve outright.
+  Details: `spec/clarett-data-plane.md`.
+- **How the wall was crossed (method lesson — carry this):** the wall had been "confirmed
+  below-driver" by four independent methods (Windows/vfio MMIO, macOS DTrace, our Linux replay,
+  WinDbg of `FocusritePCIe.sys`) — every host-visible surface, warm and cold, matched the vendor
+  byte-for-byte, and clean-room RE was declared at its terminus. All those negatives were **true
+  facts but the localization was wrong**: byte-identical traffic under a time-dilating instrument
+  is not identical behavior. The traces couldn't show that the vendor's trailing ack was (in
+  effect) conditioned on the response DMA having landed, because under trapping it always had
+  (≥242 µs after submit in every capture). The exercise that found it: walk the transaction cycle
+  asking, for each host action, "is this valid the instant the previous MMIO completes, or is it
+  semantically conditioned on something the device does asynchronously?" — and be suspicious of
+  every write whose meaning is an acknowledgement. Characterize failures by their **onset**
+  (`resp_trace` per-command telemetry), not their endpoint.
+- **Historical eliminations that remain true** (kept in `manifestation-wall.md` §§1–7, macOS/WinDbg
+  plans): vendor init DMA footprint == ours (2×{16 KB descriptor CB + 2 MB sample MDL} + 4 KB
+  response CB, nothing extra programmed at init, no mailbox pointer-push); cold boot == warm on all
+  three surfaces; **firmware-over-DMA disproven** (FPGA self-boots from flash); config space
+  byte-for-byte; MSI ordering/counts matched; environment ruled out (Fedora-guest passthrough);
+  `0x400` is a 2-bit command-phase register, not an event queue. Still excluded: bus analyzer
+  (user ruled out), disassembling the vendor driver/kext (clean-room no-go).
 
 ## Method (how the RE is done)
 
@@ -151,8 +132,8 @@ spec/clarett-control-plane.md       Authored control-plane spec (offsets, opcode
 spec/clarett-fcp-transport.md       Mailbox/transport framing; confirmed reg map.
 spec/clarett-data-plane.md          PCM-DMA RE: method, recovered register/descriptor maps, and the
                                     validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
-spec/clarett-manifestation-wall.md  Proven boundary: control writes complete but don't manifest;
-                                    every traceable surface (BAR0 + PCI config) matches FC → off-wire DMA.
+spec/clarett-manifestation-wall.md  The wall: full elimination record (§§1–7) + §8 THE CROSSING —
+                                    trailing-ack-vs-response-DMA race; landed-gated ack arms the session.
 spec/clarett-macos-dtrace-plan.md   DTrace of the working macOS driver (device runs on the M1): RUN and
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
 spec/clarett-windbg-plan.md         RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
@@ -220,19 +201,13 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   from `8prex_full_init_mute.log`): `CONFIG_PUSH`×122, subsystem enables `0x000001`, count queries,
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA`. Transport spec §8.
-- **Control plane is complete but its effects don't physically manifest — BLOCKED at a proven boundary
-  (`spec/clarett-manifestation-wall.md`).** After a correct bring-up, control writes complete
-  (`done=1, fcperr=0`) but the front-panel state doesn't move. The earlier guess that this needs the
-  **data plane** (streaming) is **DISPROVEN**: FC moves the same LEDs at idle, no stream/engine. This
-  session eliminated *every traceable surface*: our FCP command stream is a faithful **subset** of FC's
-  (init, 8 KB writeback content, per-toggle bytes, control regs all byte-identical), MSI is ruled out
-  (FC polls all five cause blocks in lockstep, like us), and PCI config space matches (standard
-  enumeration + MSI + bus-master). Disabling our only extras (`inject_clock=0 monitor_enables=0`,
-  `drain_causes` A/B) changed nothing. **The sole remaining differentiator is bus-master DMA
-  payload/timing, invisible to both the `vfio_region` and `vfio_pci_config` traces** — the same off-wire
-  wall the data plane hit. Only remaining path: capture FC's DMA via guest-RAM dump (`pmemsave`), with a
-  clean-room caveat that an FPGA/firmware blob may not be legally sourceable. Not a control-plane
-  protocol bug — the encodings are confirmed correct.
+- **Control plane WORKS (July 16 2026 — wall crossed, `spec/clarett-manifestation-wall.md` §8).**
+  With the response-landed-gated trailing ack (`gated_ack`/`resp_trace` levers), the full bring-up
+  answers `err=0` with real data and alsamixer toggles physically move the 2Pre (LEDs + relays).
+  TODO: run the attribution matrix (gated ack vs pre-submit header zero vs logging pacing, fresh DC
+  power-cycle each) + a levers-off control run; bake the winning mechanism into the default mailbox
+  cycle and drop the levers; then re-audit everything written for a walled device (shadow-refresh
+  paths, the `err=3`/notification-storm handling, meter-poll hypothesis in `meter_poll_ms` desc).
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
 
 ## Clean-room discipline
