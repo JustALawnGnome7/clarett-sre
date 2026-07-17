@@ -1195,11 +1195,37 @@ static void clarett_teardown_irq(struct clarett *c)
 	c->n_vec = 0;
 }
 
+/*
+ * card->private_free: runs inside snd_card_free AFTER userspace is disconnected and the
+ * last file handle has closed — after the final possible mailbox transaction — but before
+ * c (card private data) is freed, and with the MSI completion path still hooked, so those
+ * last transactions ran the normal MSI-paced cycle rather than the 100 ms degraded wait
+ * the old remove order imposed. Must tolerate a partially initialized card (probe error
+ * paths reach here through the same snd_card_free).
+ */
+static void clarett_card_free(struct snd_card *card)
+{
+	struct clarett *c = card->private_data;
+
+	WRITE_ONCE(c->ctl_ready, false);	/* stop the ISR queueing new notify work */
+	cancel_delayed_work_sync(&c->meter_work);
+	cancel_work_sync(&c->notify_work);
+	clarett_engine_stop(c);			/* halt streaming DMA before devres frees the ring */
+	if (c->bar0)
+		writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
+	clarett_teardown_irq(c);		/* syncs any in-flight ISR */
+	/* An ISR already past its ctl_ready check when the flag flipped may have queued one
+	 * more notify after the cancel above; re-cancel now that free_irq has synced them all
+	 * (a straggler that already started runs its GET on the poll fallback — harmless). */
+	cancel_work_sync(&c->notify_work);
+}
+
 static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
 	const struct clarett_model *forced;
+	void __iomem *bar0;
 	int err, seeded;
 
 	err = snd_card_new(&pci->dev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1,
@@ -1226,6 +1252,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	INIT_DELAYED_WORK(&c->stream_report, clarett_stream_report);
 	atomic_set(&c->period_irqs[1], 0);
 	atomic_set(&c->period_irqs[2], 0);
+	/* Teardown lives in private_free so snd_card_free sequences it after the last
+	 * userspace handle closes but before c is freed (works are all INIT'd above). */
+	card->private_free = clarett_card_free;
 
 	err = pcim_enable_device(pci);
 	if (err)
@@ -1372,12 +1401,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	return 0;
 
 err_free:
-	cancel_delayed_work_sync(&c->meter_work);	/* stop the heartbeat before teardown */
-	clarett_engine_stop(c);			/* halt DMA before the ring buffer is freed */
-	clarett_teardown_irq(c);		/* no-op unless setup_irq() succeeded */
-	cancel_work_sync(&c->notify_work);
-	clarett_quiesce_dma(pci, c->bar0);	/* bar0 may still be NULL here */
-	snd_card_free(card);
+	bar0 = c->bar0;			/* may still be NULL; c is freed by snd_card_free */
+	snd_card_free(card);		/* clarett_card_free() runs the full teardown */
+	clarett_quiesce_dma(pci, bar0);
 	return err;
 }
 
@@ -1387,12 +1413,10 @@ static void clarett_remove(struct pci_dev *pci)
 	struct clarett *c = card->private_data;
 	void __iomem *bar0 = c->bar0;
 
-	cancel_delayed_work_sync(&c->meter_work);	/* stop the heartbeat poll */
-	clarett_engine_stop(c);			/* halt streaming DMA before the buffer is freed */
-	writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
-	clarett_teardown_irq(c);		/* free MSI vectors / IRQ handlers */
-	cancel_work_sync(&c->notify_work);	/* flush any in-flight notification work */
-	snd_card_free(card);			/* disconnects userspace — last possible mailbox traffic (frees c) */
+	/* Blocks: disconnect → wait for the last userspace handle to close (the final
+	 * mailbox transactions run the normal MSI-paced cycle) → clarett_card_free()
+	 * teardown → frees c. Only then is the device quiesced. */
+	snd_card_free(card);
 	/* Devres releases in REVERSE order after remove returns: the response buffer is
 	 * freed (and IOMMU-unmapped) BEFORE pcim's disable clears bus master — so without
 	 * an explicit quiesce the device holds a live registration to freed memory. */
