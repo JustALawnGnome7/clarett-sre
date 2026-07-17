@@ -44,16 +44,20 @@ sudo insmod snd-clarett.ko
 
 `make KDIR=/path/to/kernel` to build against another tree.
 
-## Model selection (`model=`)
+## Model selection (auto-detected; `model=` overrides)
 
-The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` **and** presents a
-byte-identical PCIe interface — every MMIO register, FCP query response, config-space
-read, and even the dummy serial is the same across models (verified on real 8PreX and
-2Pre hardware). So the driver **cannot auto-detect the model** and takes a parameter:
+The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` and presents a
+byte-identical **pre-mailbox** surface — every MMIO register, config-space read, the
+fw-info header, and even the dummy serial are the same across models (verified on real
+2Pre/4Pre/8PreX hardware). But once armed, the device reports its own stream geometry:
+`GET_7.1{band 0}` answers `{u16 playback_channels, u16 capture_channels}`, a pair unique
+per model (live-confirmed `(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). The bring-up
+itself is model-agnostic (the same blob armed all three bench units), so the driver arms
+first, asks second:
 
 ```sh
-sudo insmod snd-clarett.ko                # defaults to model=2pre
-sudo insmod snd-clarett.ko model=8prex    # or model=4pre / model=8pre / model=2pre
+sudo insmod snd-clarett.ko                # auto-detects the model from the armed device
+sudo insmod snd-clarett.ko model=8prex    # or force: model=2pre / model=4pre / model=8pre
 ```
 
 The **4Pre** descriptor is built from the device XML and cross-checked against a live capture:

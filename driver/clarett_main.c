@@ -135,20 +135,23 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
 
 /*
  * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
- * byte-identical PCIe interface (MMIO regs, FCP query responses, config-space, even the dummy serial),
- * so the model is NOT auto-detectable from the device — it must be named. Default 2Pre (the primary
- * bench/RE unit). There is no userspace shortcut either: the line is entirely Thunderbolt 2 (discontinued
- * before any TB3 model), and TB2 units are firmware-tunneled rather than enumerated as kernel-managed TB
- * routers, so they never expose a DROM device_name in sysfs to disambiguate by.
+ * byte-identical PRE-MAILBOX surface (MMIO regs, config space, the fw-info header, even the dummy
+ * serial — checked across 2Pre/4Pre/8PreX captures), and there is no userspace shortcut either:
+ * the line is entirely Thunderbolt 2, firmware-tunneled rather than enumerated as kernel-managed
+ * TB routers, so no DROM device_name appears in sysfs. But an ARMED device reports its own stream
+ * geometry: GET_7.1{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model —
+ * live-confirmed (4,14) 2Pre and (8,20) 4Pre, July 17 2026 — and the bring-up itself is
+ * model-agnostic (the same blob arms all three bench units). So the model is auto-detected after
+ * the arm (clarett_detect_model); model= forces it instead.
  */
 static char *model;
 module_param(model, charp, 0444);
 MODULE_PARM_DESC(model,
-		 "Force interface model: \"2pre\" (default), \"4pre\", \"8pre\", or \"8prex\". All Clarett "
-		 "Thunderbolt units share PCI id 1cb5:0002 and are indistinguishable from the PCIe side, so the "
-		 "model must be specified explicitly (e.g. via /etc/modprobe.d/).");
+		 "Force interface model: \"2pre\", \"4pre\", \"8pre\", or \"8prex\", overriding auto-detection "
+		 "(the device reports its stream geometry once armed; unset = detect).");
 
-static const struct clarett_model *clarett_pick_model(const struct pci_device_id *ent)
+/* Returns the model forced by model=, or NULL to auto-detect (the default). */
+static const struct clarett_model *clarett_pick_model(void)
 {
 	if (model) {
 		if (sysfs_streq(model, "2pre"))
@@ -159,9 +162,46 @@ static const struct clarett_model *clarett_pick_model(const struct pci_device_id
 			return &clarett_8pre;
 		if (sysfs_streq(model, "8prex"))
 			return &clarett_8prex;
-		pr_warn("snd_clarett: unknown model=\"%s\"; falling back to default\n", model);
+		pr_warn("snd_clarett: unknown model=\"%s\"; auto-detecting instead\n", model);
 	}
-	return (const struct clarett_model *)ent->driver_data;
+	return NULL;
+}
+
+/*
+ * Ask the armed device who it is: GET_7.1{band 0} returns {u16 playback_ch, u16 capture_ch}
+ * (+16 more bytes, meaning open), a pair unique per model. Runs before the meter heartbeat
+ * starts, so nothing else touches resp_buf between the (landed-gated) completion and the parse.
+ * Returns NULL if the query fails or the pair matches no known model (new hardware — warn and
+ * let the caller keep its default).
+ */
+static const struct clarett_model *clarett_detect_model(struct clarett *c)
+{
+	static const struct clarett_model *const models[] = {
+		&clarett_2pre, &clarett_4pre, &clarett_8pre, &clarett_8prex,
+	};
+	static const u8 band0;
+	const u8 *r = c->resp_buf;
+	u16 pb, cap, size;
+	int i;
+
+	if (clarett_fcp(c, FCP_GET_71, &band0, 1))
+		return NULL;
+	dma_rmb();	/* order the DMAed response before we read resp_buf */
+	size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+	if (r[FCP_RESP_STATUS_OFF] != FCP_RESP_ERR_OK || size < 4)
+		return NULL;
+	pb  = r[FCP_RESP_DATA_OFF]     | r[FCP_RESP_DATA_OFF + 1] << 8;
+	cap = r[FCP_RESP_DATA_OFF + 2] | r[FCP_RESP_DATA_OFF + 3] << 8;
+
+	for (i = 0; i < ARRAY_SIZE(models); i++)
+		if (models[i]->playback_channels == pb &&
+		    models[i]->capture_channels == cap)
+			return models[i];
+
+	dev_warn(&c->pci->dev,
+		 "unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
+		 pb, cap);
+	return NULL;
 }
 
 /*
@@ -1055,6 +1095,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
+	const struct clarett_model *forced;
 	int err, seeded;
 
 	err = snd_card_new(&pci->dev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1,
@@ -1065,10 +1106,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c = card->private_data;
 	c->card = card;
 	c->pci = pci;
-	/* Shared PCI id across the line → the match can't pick the model; the model= param does
-	 * (clarett_pick_model), defaulting to the id_table's 2Pre. See clarett_pick_model(). */
-	c->model = clarett_pick_model(ent);
-	dev_info(&pci->dev, "model: %s\n", c->model->name);
+	/* Shared PCI id across the line → the match can't pick the model. model= forces it;
+	 * otherwise the id_table's 2Pre stands in through the (model-agnostic) arm, and
+	 * clarett_detect_model asks the armed device below. */
+	forced = clarett_pick_model();
+	c->model = forced ? forced : (const struct clarett_model *)ent->driver_data;
+	if (forced)
+		dev_info(&pci->dev, "model: %s (forced by model=)\n", c->model->name);
 	mutex_init(&c->mbox_lock);
 	init_completion(&c->mbox_done);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
@@ -1122,6 +1166,22 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	/* Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
 	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled. */
 	clarett_arm_device(c);
+
+	/* The armed device can say who it is; everything model-dependent (mixer, PCM geometry,
+	 * card names) comes after this point. Must precede the meter heartbeat: detection parses
+	 * resp_buf after its command returns, and the meter worker shares that buffer. */
+	if (!forced) {
+		const struct clarett_model *det = clarett_detect_model(c);
+
+		if (det)
+			c->model = det;
+		else
+			dev_warn(&pci->dev,
+				 "model auto-detect failed; assuming %s (override with model=)\n",
+				 c->model->name);
+		dev_info(&pci->dev, "model: %s%s\n", c->model->name,
+			 det ? " (auto-detected)" : "");
+	}
 
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
 	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the

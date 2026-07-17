@@ -246,13 +246,21 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	if (resp_trace) {
 		const u8 *r = c->resp_buf;
 
-		if (resp_echo)
+		if (resp_echo) {
+			u32 size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+
 			dev_info(&c->pci->dev,
 				 "FCPr op=0x%06x seq=%u done=%lldus resp=%lldus rseq=%u err=%u size=%u\n",
 				 opcode, c->seq, done_us, land_us,
 				 r[FCP_RESP_SEQ_OFF] | r[FCP_RESP_SEQ_OFF + 1] << 8,
-				 r[FCP_RESP_STATUS_OFF],
-				 r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8);
+				 r[FCP_RESP_STATUS_OFF], size);
+			/* Payload head for every answered non-meter command: the raw material for
+			 * cross-model diffing (model auto-detect: which query's answer encodes the
+			 * model?). 32 bytes is enough to see counts/ids; GET_METER excluded (24 Hz). */
+			if (size && opcode != FCP_GET_METER)
+				dev_info(&c->pci->dev, "FCPr   payload=%*ph\n",
+					 (int)min(size, 32u), r + FCP_RESP_DATA_OFF);
+		}
 		else
 			dev_info(&c->pci->dev,
 				 "FCPr op=0x%06x seq=%u done=%lldus resp=NONE (ack withheld)\n",
