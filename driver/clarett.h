@@ -171,6 +171,12 @@ struct snd_pcm_substream;
 #define FCP_GET_METER            0x001001
 #define CLARETT_METER_POLL_MS    40
 
+/* Debounced flash persist: after a control change, schedule a single DATA_CMD{PERSIST} this many ms
+ * later (cancel+reschedule on each change) so a burst coalesces into one NVRAM write. Matches the
+ * upstream scarlett2 driver's 2 s save debounce, and FC's own traced behaviour (a monitor change
+ * emits a standalone DATA_CMD{5} on a debounce). See clarett_save_work() / FCP_ACTIVATE_PERSIST. */
+#define CLARETT_SAVE_DELAY_MS    2000
+
 /* SET_CLOCK (TRACE-CONFIRMED, control-plane §7): payload {u32 sample_rate, u32 clock_source}. */
 #define FCP_SET_CLOCK            0x006003
 #define CLARETT_CLOCK_INTERNAL   24
@@ -366,6 +372,7 @@ struct clarett {
 	int n_vec;				/* MSI vectors actually allocated (<= CLARETT_NUM_VECTORS) */
 	struct clarett_irqctx irq_ctx[CLARETT_NUM_VECTORS];
 	struct work_struct notify_work;
+	struct delayed_work save_work;		/* debounced DATA_CMD{PERSIST}; see CLARETT_SAVE_DELAY_MS */
 	atomic_t notify_bits;
 	struct completion mbox_done;		/* completed by the vec0 ISR on mailbox DONE */
 	u32 mbox_cause;				/* 0x100 value the ISR consumed with DONE set */

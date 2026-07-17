@@ -1044,6 +1044,23 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
  * On a notification (front-panel button), mirror the vendor flow: re-read the
  * monitor config region, then tell userspace the monitor controls may have changed.
  */
+/*
+ * Debounced flash-persist worker. clarett_write_u8 schedules this CLARETT_SAVE_DELAY_MS after a
+ * control change (cancel+reschedule, so a burst coalesces into one save); it issues the single
+ * DATA_CMD{PERSIST} that writes the device's live config to its own NVRAM. This is the device-owns-
+ * the-state model (the upstream scarlett2 policy): settings survive a power cycle without the host
+ * having to re-apply them. Debouncing keeps a slider drag from hammering the flash.
+ */
+static void clarett_save_work(struct work_struct *work)
+{
+	struct clarett *c = container_of(work, struct clarett, save_work.work);
+	int err = clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
+
+	if (err)
+		dev_warn_ratelimited(&c->pci->dev, "config persist (DATA_CMD{%u}) failed: %d\n",
+				     FCP_ACTIVATE_PERSIST, err);
+}
+
 static void clarett_notify_work(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, notify_work);
@@ -1209,6 +1226,12 @@ static void clarett_card_free(struct snd_card *card)
 
 	WRITE_ONCE(c->ctl_ready, false);	/* stop the ISR queueing new notify work */
 	cancel_delayed_work_sync(&c->meter_work);
+	/* Flush a pending debounced persist so a change made within the last CLARETT_SAVE_DELAY_MS
+	 * still reaches NVRAM. Done here — after the meter worker is stopped (it shares the mailbox
+	 * resp_buf) but while the MSI completion path is still hooked — so the DATA_CMD completes
+	 * normally. cancel_delayed_work_sync returns true only if a save was actually queued. */
+	if (cancel_delayed_work_sync(&c->save_work))
+		clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
 	cancel_work_sync(&c->notify_work);
 	clarett_engine_stop(c);			/* halt streaming DMA before devres frees the ring */
 	if (c->bar0)
@@ -1246,6 +1269,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	mutex_init(&c->mbox_lock);
 	init_completion(&c->mbox_done);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
+	INIT_DELAYED_WORK(&c->save_work, clarett_save_work);
 	INIT_DELAYED_WORK(&c->meter_work, clarett_meter_work);
 	atomic_set(&c->notify_bits, 0);
 	atomic_set(&c->cmd_inflight, 0);
@@ -1435,6 +1459,9 @@ static void clarett_shutdown(struct pci_dev *pci)
 		return;
 	c = card->private_data;
 	cancel_delayed_work_sync(&c->meter_work);
+	/* Persist a just-made change before the reboot tears the device down (mailbox still up). */
+	if (cancel_delayed_work_sync(&c->save_work))
+		clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
 	clarett_engine_stop(c);
 	writel(0, c->bar0 + REG_IRQ0_ENABLE);
 	clarett_quiesce_dma(pci, c->bar0);

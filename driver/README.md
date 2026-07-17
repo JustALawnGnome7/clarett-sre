@@ -165,11 +165,36 @@ Never load this while the VM is using the device.
   Monitor Out 1-2 mute+dim enables are now set at probe (read-modify-write of bytes
   72/73 via `clarett_write_bits`), but they are not exposed as controls, and the
   gain enables (byte 52) and the Line 3-10 enables are still neither set nor exposed.
-- **Settings are not persisted across a power cycle.** Each control commits live
-  (`DATA_CMD{activate}`) but RAM-only; the device persists via a separate
-  `DATA_CMD{5}` flash-commit (command 5), which the driver intentionally does not
-  issue — auto-persisting every change would wear the flash. See
-  `FCP_ACTIVATE_PERSIST` in `clarett.h` to add a deliberate "save" action.
+## Settings persistence & `alsactl` (device-owns-the-state)
+
+This driver follows the same policy as the in-kernel scarlett2 / 4th-gen Scarlett
+driver: **the device owns its settings.** They live in the interface's own NVRAM
+and survive power cycles, reboots, and moving to another host — the driver does
+not need to re-apply them.
+
+- **The driver auto-persists changes, debounced.** Each control commits live
+  (`DATA_CMD{activate}`) and then, ~2 s after the last change, a single
+  `DATA_CMD{FCP_ACTIVATE_PERSIST}` (command 5) writes the config to NVRAM
+  (`clarett_save_work` / `CLARETT_SAVE_DELAY_MS`). The debounce coalesces a burst
+  (e.g. a volume drag) into one flash write, matching scarlett2's 2 s save and
+  FC's own traced behaviour. A pending save is flushed at unload/reboot.
+- **Disable `alsactl` restore for this card**, or it will overwrite the device's
+  own stored state on every load. The `alsa-state`/`alsa-restore` services save
+  ALSA control state to `/var/lib/alsa/asound.state` and replay it on card add —
+  and because the preamp Mode/Air state is **not readable back from the device**,
+  a replayed snapshot is a fiction that fights the hardware. This is the same
+  issue the scarlett2 FAQ documents. If no other card needs the service:
+  ```sh
+  sudo systemctl mask alsa-state alsa-restore
+  sudo systemctl stop alsa-state alsa-restore
+  sudo rm /var/lib/alsa/asound.state
+  ```
+  To verify: toggle the `Inst`/`Air` of an input, power-cycle the unit, reload —
+  the setting should stay as the device had it, not snap back to a saved state.
+- **Note: the driver cannot display the boot preamp state.** The device restores
+  Mode/Air to the hardware from NVRAM but does not report those bytes back over
+  `GET_DATA`, so `alsamixer` may show the wrong Mode/Air until you set it. The
+  hardware itself is left untouched at load.
 - Single-card only; no module params for index/id (but see `model=` above).
 - **2Pre: experimental flat-buffer capture PCM** (`enable_pcm=1`). A RAM dump of the live
   2Pre stream showed it streams a **flat contiguous sample ring** at `0x210`/`0x310` with no

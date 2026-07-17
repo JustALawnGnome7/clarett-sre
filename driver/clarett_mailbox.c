@@ -335,6 +335,14 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 
 	c->shadow[offset] = val;
 	set_bit(offset, c->shadow_known);	/* write-through: the shadow now matches hardware */
+
+	/* Persist to the device's NVRAM on a debounce so the change survives a power cycle (device
+	 * owns the state). Gated on ctl_ready: the arm replay and the probe-time monitor-enable RMW
+	 * run before the card is up and must NOT trigger a flash write on every load. mod_delayed_work
+	 * pushes the single save out to CLARETT_SAVE_DELAY_MS after the LAST change, coalescing bursts. */
+	if (READ_ONCE(c->ctl_ready))
+		mod_delayed_work(system_wq, &c->save_work,
+				 msecs_to_jiffies(CLARETT_SAVE_DELAY_MS));
 	return 0;
 }
 
