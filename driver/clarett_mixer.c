@@ -177,8 +177,12 @@ int clarett_create_controls(struct clarett *c)
 	scnprintf(d->name, sizeof(d->name), "Dim Playback Switch");
 
 	d = &c->ctls[n++];
-	*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = 112, .activate = 2 };
-	scnprintf(d->name, sizeof(d->name), "Master Playback Volume");
+	/* Read-only reflection of the hardware monitor-volume knob: offset 112 is one of the monitor
+	 * bytes (24/28/112) the device refreshes into the shadow on a front-panel notification, and the
+	 * knob is the master — software can't override it. Named/typed to match the in-kernel scarlett2
+	 * driver's "Master HW Playback Volume" (its R/O SCARLETT2_CONFIG_MASTER_VOLUME control). */
+	*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = 112, .activate = 2, .readonly = 1 };
+	scnprintf(d->name, sizeof(d->name), "Master HW Playback Volume");
 
 	for (i = 0; i < m->n_out_gains; i++) {
 		d = &c->ctls[n++];
@@ -205,19 +209,23 @@ int clarett_create_controls(struct clarett *c)
 
 	for (i = 0; i < n; i++) {
 		struct snd_kcontrol *kctl;
+		bool ro = c->ctls[i].readonly;
 		struct snd_kcontrol_new kn = {
 			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 			.name = c->ctls[i].name,
 			.info = clarett_ctl_info,
 			.get = clarett_ctl_get,
-			.put = clarett_ctl_put,
+			.put = ro ? NULL : clarett_ctl_put,
 			.private_value = (unsigned long)&c->ctls[i],
 		};
 
 		if (c->ctls[i].type == CT_GAIN) {
-			kn.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			kn.access = (ro ? SNDRV_CTL_ELEM_ACCESS_READ
+					: SNDRV_CTL_ELEM_ACCESS_READWRITE) |
 				    SNDRV_CTL_ELEM_ACCESS_TLV_READ;
 			kn.tlv.p = clarett_gain_tlv;
+		} else if (ro) {
+			kn.access = SNDRV_CTL_ELEM_ACCESS_READ;
 		}
 
 		kctl = snd_ctl_new1(&kn, c);

@@ -332,6 +332,7 @@ struct clarett_ctl {
 	u32 offset;			/* config-space byte offset (SET_DATA target) */
 	u8  activate;			/* DATA_CMD activate code (XML "command")     */
 	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
+	u8  readonly;			/* read-only reflection of a hardware control (e.g. Master HW) */
 	const char * const *texts;	/* CT_ENUM                                    */
 	int n_texts;
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */

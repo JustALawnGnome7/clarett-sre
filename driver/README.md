@@ -23,7 +23,9 @@ Built from the clean-room notes in `../spec/`.
 - FCP mailbox transport: `SET_DATA` / `DATA_CMD` / poll-for-completion.
 - ALSA mixer controls (all confirmed single-byte fields):
   - `Mute` / `Dim` (monitor section, named to match the USB unit) and
-    `Master Playback Volume` (monitor section gain)
+    `Master HW Playback Volume` — a **read-only** reflection of the hardware
+    monitor-volume knob (offset 112, refreshed from the device on notifications),
+    named/typed to match the scarlett2 driver's `Master HW Playback Volume`
   - 10 analogue output volumes (Monitor 1–2, Line 3–10), 1 dB/step, −127..0 dB TLV
   - per analogue input 1–8: `Air` switch + `Mode` enum (Mic/Line[/Inst])
 - **Device session bring-up** at probe (`clarett_arm_device`): replays the 232-command
@@ -98,7 +100,7 @@ this driver on the **host**, the device must be free for `snd-clarett` to claim:
    re-grabs the device at boot.)
 3. Verify: `amixer -c <n> contents`, and test a control:
    ```sh
-   amixer -c <n> sset 'Mute' toggle      # also 'Dim', 'Master Playback Volume', etc.
+   amixer -c <n> sset 'Mute' toggle      # also 'Dim', input Air/Mode, etc.
    ```
    (Note: writes complete but won't change the hardware yet — see the ⚠️ at the top.)
 
