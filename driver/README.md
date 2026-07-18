@@ -26,8 +26,15 @@ Built from the clean-room notes in `../spec/`.
     `Master HW Playback Volume` — a **read-only** reflection of the hardware
     monitor-volume knob (offset 112, refreshed from the device on notifications),
     named/typed to match the scarlett2 driver's `Master HW Playback Volume`
-  - 10 analogue output volumes (Monitor 1–2, Line 3–10), 1 dB/step, −127..0 dB TLV
-  - per analogue input 1–8: `Air` switch + `Mode` enum (Mic/Line[/Inst])
+  - per-output analogue volumes, 1 dB/step, −127..0 dB TLV
+  - per analogue input: `Air` switch + input-mode enum
+- **Control names match the in-kernel scarlett2 driver** for the models with a USB
+  sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
+  `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`
+  (e.g. `Line 01 (Monitor L) Playback Volume`), so `alsactl`/`alsa-scarlett-gui` see
+  the same names as on the USB units. The **8PreX** has no USB sibling and a richer
+  Mic/Line/Inst mode, so it keeps `Analogue N Air/Mode ...` and `Monitor 1-2` /
+  `Line 3-10` output names.
 - **Device session bring-up** at probe (`clarett_arm_device`): replays the 232-command
   vendor init from `clarett_init_8prex.h` (`CONFIG_PUSH`×122, subsystem enables, 8 KB config
   sync, `SET_MIX`×16 + `SET_MUX`×3). Required on a **fresh** device — a self-booted 8PreX

@@ -190,11 +190,13 @@ int clarett_create_controls(struct clarett *c)
 		scnprintf(d->name, sizeof(d->name), "%s Playback Volume", m->out_gains[i].name);
 	}
 
-	/* Air @ 174+i and Mode @ 166+i are shared bases across models (XML diff). */
+	/* Air @ 174+i and Mode @ 166+i are shared bases across models (XML diff). Names follow the
+	 * per-model scheme (m->in_prefix / m->mode_label): the USB models match scarlett2's
+	 * "Line In N Air/Level ..."; the 8PreX keeps "Analogue N Air/Mode ...". */
 	for (i = 0; i < m->n_analogue; i++) {
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_SWITCH, .offset = 174 + i, .activate = 7 };
-		scnprintf(d->name, sizeof(d->name), "Analogue %d Air Capture Switch", i + 1);
+		scnprintf(d->name, sizeof(d->name), "%s %d Air Capture Switch", m->in_prefix, i + 1);
 	}
 
 	for (i = 0; i < m->n_analogue; i++) {
@@ -204,7 +206,8 @@ int clarett_create_controls(struct clarett *c)
 		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = 166 + i, .activate = 6,
 			.texts = m->analogue[i].mode_texts, .n_texts = m->analogue[i].n_modes,
 			.values = m->analogue[i].mode_values };
-		scnprintf(d->name, sizeof(d->name), "Analogue %d Mode Capture Enum", i + 1);
+		scnprintf(d->name, sizeof(d->name), "%s %d %s Capture Enum",
+			  m->in_prefix, i + 1, m->mode_label);
 	}
 
 	for (i = 0; i < n; i++) {

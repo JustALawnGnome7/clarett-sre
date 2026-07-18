@@ -1504,6 +1504,8 @@ static const struct clarett_model clarett_8prex = {
 	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
 	.n_analogue = 8,
 	.analogue = clarett_8prex_preamps,
+	.in_prefix = "Analogue",		/* no USB sibling; richer Mic/Line/Inst mode */
+	.mode_label = "Mode",
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.stream_frag = STREAM_SIZE_VAL,
@@ -1528,8 +1530,11 @@ static const struct clarett_model clarett_8prex = {
  * TX 4ch / RX 14ch: periods 0x40 / 0xe0, descriptor fragments 0x100 / 0x700 (clarett_frag_bytes). The 2Pre's
  * descriptor geometry is INFERRED (the VM uses flat mode for it); see clarett.h / spec §9 step 5.
  */
+/* Names mirror scarlett2's Clarett 2Pre USB line_out_descrs (Monitor L/R, Headphones L/R);
+ * the "Line NN" number is 1-based output index, matching scarlett2's "Line %02d (%s)". */
 static const struct clarett_out_gain clarett_2pre_gains[] = {
-	{ "Monitor 1", 32 }, { "Monitor 2", 33 }, { "Line 3", 36 }, { "Line 4", 37 },
+	{ "Line 01 (Monitor L)", 32 }, { "Line 02 (Monitor R)", 33 },
+	{ "Line 03 (Headphones L)", 36 }, { "Line 04 (Headphones R)", 37 },
 };
 
 /*
@@ -1560,6 +1565,8 @@ static const struct clarett_model clarett_2pre = {
 	.n_out_gains = ARRAY_SIZE(clarett_2pre_gains),
 	.n_analogue = 2,
 	.analogue = clarett_2pre_preamps,
+	.in_prefix = "Line In",			/* match scarlett2 Clarett 2Pre USB */
+	.mode_label = "Level",
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
@@ -1591,10 +1598,12 @@ static const struct clarett_model clarett_2pre = {
  *   [XML]   output gains (cmd 1, 8-bit): Monitor 1-2 @ 32/33, Line 3-4 @ 36/37, Headphone 2 L/R @ 40/41.
  *           S/PDIF outputs carry no gain. Six gains total (no 44/45 pair on this model).
  */
-static const struct clarett_out_gain clarett_4pre_gains[] = {		/* [XML] */
-	{ "Monitor 1", 32 }, { "Monitor 2", 33 },
-	{ "Line 3", 36 }, { "Line 4", 37 },
-	{ "Headphone 2 L", 40 }, { "Headphone 2 R", 41 },
+/* Names mirror scarlett2's Clarett 4Pre USB line_out_descrs (Monitor L/R, Headphones 1 L/R,
+ * Headphones 2 L/R). [XML] offsets. */
+static const struct clarett_out_gain clarett_4pre_gains[] = {
+	{ "Line 01 (Monitor L)", 32 }, { "Line 02 (Monitor R)", 33 },
+	{ "Line 03 (Headphones 1 L)", 36 }, { "Line 04 (Headphones 1 R)", 37 },
+	{ "Line 05 (Headphones 2 L)", 40 }, { "Line 06 (Headphones 2 R)", 41 },
 };
 
 /* [XML] Analogue 1-2 Line/Inst (combo jack auto-detects Mic; Analogue-1 also [TRACE]-confirmed); 3-4 air-only (n_modes=0). */
@@ -1619,6 +1628,8 @@ static const struct clarett_model clarett_4pre = {
 	.n_out_gains = ARRAY_SIZE(clarett_4pre_gains),
 	.n_analogue = 4,
 	.analogue = clarett_4pre_preamps,
+	.in_prefix = "Line In",			/* match scarlett2 Clarett 4Pre USB */
+	.mode_label = "Level",
 	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
 	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
 	.stream_frag = 0,			/* PCM uses clarett_frag_bytes() per direction (asymmetric) */
@@ -1645,8 +1656,9 @@ static const struct clarett_model clarett_4pre = {
  *     the 1/4" path; Mic is jack-auto, not a software option) @ 166/167 (cmd 6); Analogue 3-8 are
  *     air-only. (The 8PreX, with discrete ports, exposes software Mic/Line[/Inst] on all 8.)
  *   - streams: 20 playback / 20 record (the 8PreX is 28/28 — the 8Pre has a single ADAT bank).
- *   - outputs: IDENTICAL 10-gain map to the 8PreX (Monitor 1-2 @ 32/33, Line 3-10 @ 36..49), so the
- *     clarett_8prex_gains[] table is reused verbatim.
+ *   - outputs: same 10-gain offsets as the 8PreX (Monitor @ 32/33, then 36..49), but named to
+ *     mirror scarlett2's Clarett 8Pre USB line_out_descrs (Monitor L/R, Line 03-06 unlabelled,
+ *     Headphones 1/2), so it gets its own gain table rather than reusing the 8PreX's.
  */
 static const struct clarett_preamp clarett_8pre_preamps[] = {	/* [XML] 1-2 Line/Inst, 3-8 air-only */
 	{ clarett_mode_li, clarett_mode_li_vals, 2 },
@@ -1656,12 +1668,22 @@ static const struct clarett_preamp clarett_8pre_preamps[] = {	/* [XML] 1-2 Line/
 	{ NULL, NULL, 0 }, { NULL, NULL, 0 },
 };
 
+/* scarlett2 Clarett 8Pre USB line_out_descrs: Monitor L/R, four unlabelled line outs, Headphones 1/2. */
+static const struct clarett_out_gain clarett_8pre_gains[] = {
+	{ "Line 01 (Monitor L)", 32 }, { "Line 02 (Monitor R)", 33 },
+	{ "Line 03", 36 }, { "Line 04", 37 }, { "Line 05", 40 }, { "Line 06", 41 },
+	{ "Line 07 (Headphones 1 L)", 44 }, { "Line 08 (Headphones 1 R)", 45 },
+	{ "Line 09 (Headphones 2 L)", 48 }, { "Line 10 (Headphones 2 R)", 49 },
+};
+
 static const struct clarett_model clarett_8pre = {
 	.name = "Clarett 8Pre",
-	.out_gains = clarett_8prex_gains,	/* [XML] identical 10-output gain map to the 8PreX */
-	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
+	.out_gains = clarett_8pre_gains,
+	.n_out_gains = ARRAY_SIZE(clarett_8pre_gains),
 	.n_analogue = 8,
 	.analogue = clarett_8pre_preamps,
+	.in_prefix = "Line In",			/* match scarlett2 Clarett 8Pre USB */
+	.mode_label = "Level",
 	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
 	.stream_frag = 0,
