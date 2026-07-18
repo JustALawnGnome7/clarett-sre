@@ -354,6 +354,7 @@ struct clarett_ctl {
 	int n_texts;
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
 	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
+	struct clarett_ctl *vol_link;	/* SW/HW enum only: the volume fader it makes R/O when set to HW */
 };
 
 struct clarett;

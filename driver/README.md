@@ -28,7 +28,8 @@ Built from the clean-room notes in `../spec/`.
     named/typed to match the scarlett2 driver's `Master HW Playback Volume`
   - per-output analogue volumes, 1 dB/step, −127..0 dB TLV, plus a per-output
     `Line Out NN Volume Control Playback Enum` (`SW`/`HW` — the `enable-hardware-gain`
-    bit: `HW` follows the hardware monitor knob)
+    bit: `HW` follows the hardware monitor knob). As on scarlett2, an output's volume
+    fader goes **read-only while its select is `HW`** (the knob owns the level)
   - per analogue input: `Air` switch + input-mode enum
   - `S/PDIF Source Capture Enum` (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
 - **Control names match the in-kernel scarlett2 driver.** For the models with a USB

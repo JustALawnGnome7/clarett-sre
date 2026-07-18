@@ -91,6 +91,24 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 	return 0;
 }
 
+/*
+ * Follow scarlett2: an output's volume fader is read-only while its SW/HW select is HW (the hardware
+ * monitor knob owns the level). Flip the fader kctl's WRITE access and notify userspace on change.
+ * Safe before snd_card_register (empty notify list) and before the kctl exists (no-op).
+ */
+static void clarett_set_fader_writable(struct clarett *c, struct clarett_ctl *vd, bool writable)
+{
+	struct snd_kcontrol *k = vd ? vd->kctl : NULL;
+
+	if (!k || !!(k->vd[0].access & SNDRV_CTL_ELEM_ACCESS_WRITE) == writable)
+		return;
+	if (writable)
+		k->vd[0].access |= SNDRV_CTL_ELEM_ACCESS_WRITE;
+	else
+		k->vd[0].access &= ~SNDRV_CTL_ELEM_ACCESS_WRITE;
+	snd_ctl_notify(c->card, SNDRV_CTL_EVENT_MASK_INFO, &k->id);
+}
+
 static int clarett_ctl_put(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *uc)
 {
@@ -149,6 +167,10 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	if (err)
 		return err;
 
+	/* SW/HW select changed: make the governed fader read-only in HW, writable in SW. */
+	if (d->vol_link)
+		clarett_set_fader_writable(c, d->vol_link, !(dev & d->mask));
+
 	/*
 	 * NOTE: this is byte-identical to Focusrite Control's per-toggle sequence (SET_DATA +
 	 * DATA_CMD{activate}; FC's standalone DATA_CMD{5} is a once-at-end debounced persist, not
@@ -167,7 +189,7 @@ int clarett_create_controls(struct clarett *c)
 	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
 			  (m->has_spdif_source ? 1 : 0);
 	struct clarett_ctl *d;
-	int i, n = 0, err;
+	int i, n = 0, err, gain_base;
 
 	c->ctls = devm_kcalloc(&c->pci->dev, total, sizeof(*c->ctls), GFP_KERNEL);
 	if (!c->ctls)
@@ -196,6 +218,7 @@ int clarett_create_controls(struct clarett *c)
 	*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = 112, .activate = 2, .readonly = 1 };
 	scnprintf(d->name, sizeof(d->name), "Master HW Playback Volume");
 
+	gain_base = n;				/* volume fader for output i is at ctls[gain_base + i] */
 	for (i = 0; i < m->n_out_gains; i++) {
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = m->out_gains[i].offset, .activate = 1 };
@@ -212,7 +235,8 @@ int clarett_create_controls(struct clarett *c)
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = HWEN_GAIN_OFFSET + (i / 2) * 4,
 			.mask = 1 << (i % 2), .activate = HWEN_ACTIVATE,
-			.texts = swhw_texts, .n_texts = ARRAY_SIZE(swhw_texts) };
+			.texts = swhw_texts, .n_texts = ARRAY_SIZE(swhw_texts),
+			.vol_link = &c->ctls[gain_base + i] };
 		scnprintf(d->name, sizeof(d->name),
 			  "Line Out %02d Volume Control Playback Enum", i + 1);
 	}
@@ -278,6 +302,13 @@ int clarett_create_controls(struct clarett *c)
 		c->ctls[i].kctl = kctl;			/* for snd_ctl_notify() */
 	}
 	c->n_ctls = n;
+
+	/* Initial fader writability from the seeded SW/HW state: HW -> the fader is read-only. All
+	 * kctls now exist and the shadow is seeded (seed runs before create_controls in probe). */
+	for (i = 0; i < n; i++)
+		if (c->ctls[i].vol_link)
+			clarett_set_fader_writable(c, c->ctls[i].vol_link,
+						   !(c->shadow[c->ctls[i].offset] & c->ctls[i].mask));
 
 	return 0;
 }
