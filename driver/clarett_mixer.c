@@ -151,9 +151,10 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 int clarett_create_controls(struct clarett *c)
 {
 	const struct clarett_model *m = c->model;
-	/* monitor + gains + air(per input) + mode(per input). Upper bound: some inputs are air-only
-	 * (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so the actual count <= total. */
-	const int total = 3 + m->n_out_gains + 2 * m->n_analogue;
+	/* monitor(3) + gains + air(per input) + mode(per input) + optional S/PDIF source. Upper bound:
+	 * some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so
+	 * the actual count <= total. */
+	const int total = 3 + m->n_out_gains + 2 * m->n_analogue + (m->has_spdif_source ? 1 : 0);
 	struct clarett_ctl *d;
 	int i, n = 0, err;
 
@@ -208,6 +209,19 @@ int clarett_create_controls(struct clarett *c)
 			.values = m->analogue[i].mode_values };
 		scnprintf(d->name, sizeof(d->name), "%s %d %s Capture Enum",
 			  m->in_prefix, i + 1, m->mode_label);
+	}
+
+	/* S/PDIF input source (XML <spdif-mode>): 2-bit field @132, DATA_CMD activate 4. Enum and name
+	 * match scarlett2's Clarett "S/PDIF Source Capture Enum" ({None, Optical, RCA} = values 0/1/2). */
+	if (m->has_spdif_source) {
+		static const char * const spdif_src_texts[] = { "None", "Optical", "RCA" };
+		static const u8 spdif_src_vals[] = { 0, 1, 2 };
+
+		d = &c->ctls[n++];
+		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = SPDIF_SOURCE_OFFSET,
+			.activate = SPDIF_SOURCE_ACTIVATE, .texts = spdif_src_texts,
+			.n_texts = ARRAY_SIZE(spdif_src_texts), .values = spdif_src_vals };
+		scnprintf(d->name, sizeof(d->name), "S/PDIF Source Capture Enum");
 	}
 
 	for (i = 0; i < n; i++) {

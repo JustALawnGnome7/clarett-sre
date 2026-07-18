@@ -1508,6 +1508,7 @@ static const struct clarett_model clarett_8prex = {
 	.analogue = clarett_8prex_preamps,
 	.in_prefix = "Line In",			/* match the USB models' input naming */
 	.mode_label = "Mode",			/* but keep "Mode": Mic/Line/Inst is richer than "Level" */
+	.has_spdif_source = true,
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.stream_frag = STREAM_SIZE_VAL,
@@ -1632,6 +1633,7 @@ static const struct clarett_model clarett_4pre = {
 	.analogue = clarett_4pre_preamps,
 	.in_prefix = "Line In",			/* match scarlett2 Clarett 4Pre USB */
 	.mode_label = "Level",
+	.has_spdif_source = true,
 	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
 	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
 	.stream_frag = 0,			/* PCM uses clarett_frag_bytes() per direction (asymmetric) */
@@ -1686,6 +1688,7 @@ static const struct clarett_model clarett_8pre = {
 	.analogue = clarett_8pre_preamps,
 	.in_prefix = "Line In",			/* match scarlett2 Clarett 8Pre USB */
 	.mode_label = "Level",
+	.has_spdif_source = true,
 	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
 	.stream_frag = 0,

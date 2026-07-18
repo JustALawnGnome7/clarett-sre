@@ -155,6 +155,11 @@ struct snd_pcm_substream;
 #define HWEN_MONITOR_MUTE_MASK   0x03    /* Monitor Out 1-2 mute enables */
 #define HWEN_MONITOR_DIM_MASK    0x0c    /* Monitor Out 1-2 dim enables  */
 
+/* S/PDIF input source select (XML <spdif-mode> <input>): 2-bit field, DATA_CMD activate 4.
+ * Same offset/command across 4Pre/8Pre/8PreX. Enum None=0 / Optical=1 / RCA=2 (matches scarlett2). */
+#define SPDIF_SOURCE_OFFSET      132
+#define SPDIF_SOURCE_ACTIVATE    4
+
 /* FCP "big" opcodes (low bits of cmd) — confirmed; == scarlett2 USB values */
 #define FCP_GET_DATA             0x800000
 #define FCP_SET_DATA             0x800001
@@ -267,6 +272,10 @@ struct clarett_model {
 	 * Output-gain names carry the full "Line NN (descr)" string per model in out_gains[].name. */
 	const char *in_prefix;			/* "Line In" (all models) */
 	const char *mode_label;			/* "Level" (USB models) or "Mode" (8PreX) */
+	/* "S/PDIF Source Capture Enum" (None/Optical/RCA @ SPDIF_SOURCE_OFFSET). Present where the
+	 * device has a selectable S/PDIF input — 4Pre/8Pre/8PreX. The 2Pre has optical only (one
+	 * option), so it gets no control, matching scarlett2 (which omits it for the 2Pre). */
+	bool has_spdif_source;
 
 	/* data plane / PCM geometry */
 	u8 capture_channels;			/* block-1 RX stream width */
