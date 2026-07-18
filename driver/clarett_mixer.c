@@ -71,6 +71,11 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 	const struct clarett_ctl *d = (const void *)kc->private_value;
 	u8 dev = c->shadow[d->offset];
 
+	/* Sub-byte control: reduce the masked bit to a 0/1 the switch below treats as the device value
+	 * (single-bit enums like SW/HW use identity texts, so item 0/1 falls straight out). */
+	if (d->mask)
+		dev = !!(dev & d->mask);
+
 	switch (d->type) {
 	case CT_SWITCH:
 		uc->value.integer.value[0] = d->invert ? !dev : !!dev;
@@ -121,6 +126,11 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 		return -EINVAL;
 	}
 
+	/* Sub-byte control: merge the computed 0/1 into just the masked bit, preserving the rest of the
+	 * byte (byte 52+ pack two outputs' SW/HW bits). dev is 0/1 here for masked switch/enum. */
+	if (d->mask)
+		dev = (old & ~d->mask) | (dev ? d->mask : 0);
+
 	/*
 	 * Skip a redundant write only when the shadow is KNOWN to match hardware. For a control the
 	 * device does not report back (preamp Mode/Air), the seed leaves the shadow at 0, so a genuine
@@ -154,7 +164,8 @@ int clarett_create_controls(struct clarett *c)
 	/* monitor(3) + gains + air(per input) + mode(per input) + optional S/PDIF source. Upper bound:
 	 * some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so
 	 * the actual count <= total. */
-	const int total = 3 + m->n_out_gains + 2 * m->n_analogue + (m->has_spdif_source ? 1 : 0);
+	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
+			  (m->has_spdif_source ? 1 : 0);
 	struct clarett_ctl *d;
 	int i, n = 0, err;
 
@@ -189,6 +200,21 @@ int clarett_create_controls(struct clarett *c)
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = m->out_gains[i].offset, .activate = 1 };
 		scnprintf(d->name, sizeof(d->name), "%s Playback Volume", m->out_gains[i].name);
+	}
+
+	/* Per-output SW/HW volume-control select (XML <enable-hardware-gain>; scarlett2 SW_HW_SWITCH).
+	 * Bit set = HW (output follows the hardware monitor knob), clear = SW. The bit lives at
+	 * HWEN_GAIN_OFFSET + (i/2)*4, bit i%2 — two outputs share each byte, so it is a bit-RMW (mask).
+	 * Enum {SW, HW} identity, matching scarlett2's "Line Out NN Volume Control Playback Enum". */
+	for (i = 0; i < m->n_out_gains; i++) {
+		static const char * const swhw_texts[] = { "SW", "HW" };
+
+		d = &c->ctls[n++];
+		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = HWEN_GAIN_OFFSET + (i / 2) * 4,
+			.mask = 1 << (i % 2), .activate = HWEN_ACTIVATE,
+			.texts = swhw_texts, .n_texts = ARRAY_SIZE(swhw_texts) };
+		scnprintf(d->name, sizeof(d->name),
+			  "Line Out %02d Volume Control Playback Enum", i + 1);
 	}
 
 	/* Air @ 174+i and Mode @ 166+i are shared bases across models (XML diff). Names follow the

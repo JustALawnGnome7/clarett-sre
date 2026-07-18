@@ -150,6 +150,7 @@ struct snd_pcm_substream;
  *   byte 73: enable-hardware-dim  (Monitor Out 1 = bit2, Monitor Out 2 = bit3)
  */
 #define HWEN_ACTIVATE            3
+#define HWEN_GAIN_OFFSET         52    /* enable-hardware-gain (SW/HW) base; byte 52+(out/2)*4, bit out%2 */
 #define HWEN_MUTE_OFFSET         72
 #define HWEN_DIM_OFFSET          73
 #define HWEN_MONITOR_MUTE_MASK   0x03    /* Monitor Out 1-2 mute enables */
@@ -348,6 +349,7 @@ struct clarett_ctl {
 	u8  activate;			/* DATA_CMD activate code (XML "command")     */
 	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
 	u8  readonly;			/* read-only reflection of a hardware control (e.g. Master HW) */
+	u8  mask;			/* != 0: operate on these bits of shadow[offset] (RMW), not the whole byte */
 	const char * const *texts;	/* CT_ENUM                                    */
 	int n_texts;
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
