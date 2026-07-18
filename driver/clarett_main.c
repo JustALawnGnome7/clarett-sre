@@ -1481,10 +1481,12 @@ static void clarett_shutdown(struct pci_dev *pci)
 
 /* --- per-model descriptors ---------------------------------------------- */
 
+/* "Line NN (descr)" format matching the USB models; the 8PreX has no USB sibling, so only the
+ * monitor pair carries a descr (outputs 3-10 are generic line outs per its XML). */
 static const struct clarett_out_gain clarett_8prex_gains[] = {
-	{ "Monitor 1", 32 }, { "Monitor 2", 33 },
-	{ "Line 3", 36 }, { "Line 4", 37 }, { "Line 5", 40 }, { "Line 6", 41 },
-	{ "Line 7", 44 }, { "Line 8", 45 }, { "Line 9", 48 }, { "Line 10", 49 },
+	{ "Line 01 (Monitor L)", 32 }, { "Line 02 (Monitor R)", 33 },
+	{ "Line 03", 36 }, { "Line 04", 37 }, { "Line 05", 40 }, { "Line 06", 41 },
+	{ "Line 07", 44 }, { "Line 08", 45 }, { "Line 09", 48 }, { "Line 10", 49 },
 };
 
 static const char * const clarett_mode_mli[] = { "Mic", "Line", "Inst" };
@@ -1504,8 +1506,8 @@ static const struct clarett_model clarett_8prex = {
 	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
 	.n_analogue = 8,
 	.analogue = clarett_8prex_preamps,
-	.in_prefix = "Analogue",		/* no USB sibling; richer Mic/Line/Inst mode */
-	.mode_label = "Mode",
+	.in_prefix = "Line In",			/* match the USB models' input naming */
+	.mode_label = "Mode",			/* but keep "Mode": Mic/Line/Inst is richer than "Level" */
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.stream_frag = STREAM_SIZE_VAL,

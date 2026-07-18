@@ -261,12 +261,11 @@ struct clarett_model {
 	int n_out_gains;
 	int n_analogue;				/* preamp count (air + mode controls) */
 	const struct clarett_preamp *analogue;	/* [n_analogue] */
-	/* Input-control naming. The USB Clarett models (2Pre/4Pre/8Pre) mirror the in-kernel
-	 * scarlett2 driver's names for their USB siblings: in_prefix "Line In", mode_label "Level"
-	 * (its Line/Inst switch). The 8PreX has no USB sibling and a richer Mic/Line/Inst mode, so it
-	 * keeps in_prefix "Analogue", mode_label "Mode". Output-gain names carry the full scarlett2
-	 * string per model in out_gains[].name. */
-	const char *in_prefix;			/* "Line In" (USB models) or "Analogue" (8PreX) */
+	/* Input-control naming. All models use in_prefix "Line In" (matching the scarlett2 names for
+	 * the USB siblings). mode_label is "Level" for the USB models (their Line/Inst switch) but
+	 * "Mode" for the 8PreX, whose Mic/Line/Inst mode is richer than scarlett2's Line/Inst "Level".
+	 * Output-gain names carry the full "Line NN (descr)" string per model in out_gains[].name. */
+	const char *in_prefix;			/* "Line In" (all models) */
 	const char *mode_label;			/* "Level" (USB models) or "Mode" (8PreX) */
 
 	/* data plane / PCM geometry */
