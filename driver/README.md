@@ -181,9 +181,11 @@ not need to re-apply them.
 - **Disable `alsactl` restore for this card**, or it will overwrite the device's
   own stored state on every load. The `alsa-state`/`alsa-restore` services save
   ALSA control state to `/var/lib/alsa/asound.state` and replay it on card add —
-  and because the preamp Mode/Air state is **not readable back from the device**,
-  a replayed snapshot is a fiction that fights the hardware. This is the same
-  issue the scarlett2 FAQ documents. If no other card needs the service:
+  and since the device already restored the true state from its own NVRAM, a
+  replayed snapshot just fights the hardware (worse: preamp Mode/Air don't read
+  back reliably across a cold boot — see the limitation below — so the snapshot
+  can be stale). This is the same issue the scarlett2 FAQ documents. If no other
+  card needs the service:
   ```sh
   sudo systemctl mask alsa-state alsa-restore
   sudo systemctl stop alsa-state alsa-restore
@@ -191,10 +193,21 @@ not need to re-apply them.
   ```
   To verify: toggle the `Inst`/`Air` of an input, power-cycle the unit, reload —
   the setting should stay as the device had it, not snap back to a saved state.
-- **Note: the driver cannot display the boot preamp state.** The device restores
-  Mode/Air to the hardware from NVRAM but does not report those bytes back over
-  `GET_DATA`, so `alsamixer` may show the wrong Mode/Air until you set it. The
-  hardware itself is left untouched at load.
+- **Known limitation: preamp Mode/Air display can be wrong after a cold boot.**
+  The preamp config bytes (Mode `166+i`, Air `174+i`) *are* `GET_DATA`-readable and
+  read back correctly at their write offset **within a powered session** — so the
+  display is accurate after any control change, and across a warm `rmmod`/`insmod`.
+  But on a **cold boot** the device restores the Mode/Air state to the *hardware*
+  from NVRAM (front-panel LEDs are correct) while bringing the host-readable
+  appspace up at a fixed default that does **not** mirror it. So right after a
+  power cycle `alsamixer` may show a default (both Inst+Air) that disagrees with
+  the LEDs, until you touch a control — from then on it tracks correctly. This is
+  the device's *host-authored appspace* behaviour (the same reason `alsactl`
+  restore fights it, above), not a driver bug; there is no reliable read of the
+  true preamp state on a fresh boot from this region. The hardware is always
+  correct regardless — the mismatch is display-only and self-heals on first touch.
+  Diagnostic levers for any future dig: `seed_dump=1` (one-shot full `[0,256)`
+  shadow dump at probe) and `put_trace=1` (log each control write's offset/value).
 - Single-card only; no module params for index/id (but see `model=` above).
 - **2Pre: experimental flat-buffer capture PCM** (`enable_pcm=1`). A RAM dump of the live
   2Pre stream showed it streams a **flat contiguous sample ring** at `0x210`/`0x310` with no

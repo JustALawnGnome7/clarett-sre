@@ -15,7 +15,16 @@
  */
 #include <sound/control.h>
 #include <sound/tlv.h>
+#include <linux/moduleparam.h>
 #include "clarett.h"
+
+/* Log each control put's actual SET_DATA{offset,value}. For correlating the write side with the
+ * seed_dump read side: toggle each preamp control once with this on, then reload with seed_dump=1
+ * and diff — reveals the true per-input read/write offset map (and any write off-by-one). */
+static bool put_trace;
+module_param(put_trace, bool, 0444);
+MODULE_PARM_DESC(put_trace,
+		 "Log each mixer put's control name, SET_DATA offset, and byte value. Default 0.");
 
 /* 7-bit attenuation code == |dB|, 1 dB/step, 0x00 = 0 dB .. 0x7f = -127 dB */
 static const DECLARE_TLV_DB_SCALE(clarett_gain_tlv, -12700, 100, 0);
@@ -121,6 +130,10 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	 */
 	if (dev == old && test_bit(d->offset, c->shadow_known))
 		return 0;
+
+	if (put_trace)
+		dev_info(&c->pci->dev, "put: %-32s offset=%u dev=0x%02x (old=0x%02x activate=%u)\n",
+			 d->name, d->offset, dev, old, d->activate);
 
 	err = clarett_write_u8(c, d->offset, dev, d->activate);
 	if (err)

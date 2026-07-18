@@ -90,6 +90,13 @@ MODULE_PARM_DESC(monitor_enables,
 		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
 		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
 
+static bool seed_dump;
+module_param(seed_dump, bool, 0444);
+MODULE_PARM_DESC(seed_dump,
+		 "One-shot dump of the full seeded config shadow [0,256) at probe (16 lines). For locating "
+		 "the device's read-back offset of preamp Mode/Air: diff the dump between two known input "
+		 "states. Default 0.");
+
 static bool premailbox_reads = true;
 module_param(premailbox_reads, bool, 0444);
 MODULE_PARM_DESC(premailbox_reads,
@@ -1354,12 +1361,17 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_warn(&pci->dev,
 			 "config shadow seed failed (%d); leaving hardware mute/dim enables untouched\n",
 			 seeded);
-	else
-		/* One-shot at probe (not the meter flood): dump the seeded preamp region so the
-		 * Mode (166+i) / Air (174+i) bytes the driver actually read are visible — resp_trace
-		 * caps its payload at 32 bytes (offsets 0-31) and can never reach these. */
-		dev_info(&pci->dev,
-			 "seeded shadow [160,192)=%*ph\n", 32, c->shadow + 160);
+	else if (seed_dump) {
+		/* One-shot full [0,256) seeded-shadow dump (gated on seed_dump so normal loads stay
+		 * quiet). scarlett2 reads Air/Level via GET_DATA at SMALL offsets (0x09..0x8c), not the
+		 * XML write-offset 174 — so the readable preamp state, if any, is somewhere in this window
+		 * we never inspected. Dump the lot to locate it (diff two known input states). */
+		int off;
+
+		for (off = 0; off < CLARETT_CONFIG_SIZE; off += 16)
+			dev_info(&pci->dev, "seeded shadow [%3d]=%*ph\n",
+				 off, 16, c->shadow + off);
+	}
 
 	/* Diagnostic: characterize the FCP error=3 refusal (blanket session block vs per-command).
 	 * Requires meter_poll_ms=0 so the meter worker doesn't race the shared resp_buf/seq (see param desc). */
