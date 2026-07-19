@@ -46,6 +46,7 @@ static int clarett_ctl_info(struct snd_kcontrol *kc,
 		ui->value.integer.max = CLARETT_GAIN_MAX;
 		return 0;
 	case CT_ENUM:
+	case CT_ROUTE:
 		return snd_ctl_enum_info(ui, 1, d->n_texts, d->texts);
 	}
 	return -EINVAL;
@@ -86,6 +87,9 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 		break;
 	case CT_ENUM:
 		uc->value.enumerated.item[0] = clarett_enum_item(d, dev);
+		break;
+	case CT_ROUTE:
+		uc->value.enumerated.item[0] = d->route_val;	/* read-only, fixed at probe */
 		break;
 	}
 	return 0;
@@ -180,14 +184,149 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	return 1;
 }
 
+/* --- Read-only routing (mux) view — Phase 1 -------------------------------------------------------
+ * Decode the model's default routing from the init blob's band-0 SET_MUX and expose each OUTPUT
+ * destination (analogue / S/PDIF / ADAT out) as a read-only enum showing its source. No mux writes
+ * yet (Phase 2). Pins are direction-scoped 12-bit values; entry = (src_pin << 12) | dst_pin. Source
+ * names come from the confident, XML-verified ranges (0x408/9 as a *source* is S/PDIF in, etc.).
+ */
+static void clarett_mux_src_name(u16 pin, char *buf, size_t len)
+{
+	if (!pin)
+		strscpy(buf, "Off", len);
+	else if (pin >= 0x400 && pin <= 0x407)
+		scnprintf(buf, len, "Analogue %u", pin - 0x400 + 1);
+	else if (pin == 0x408 || pin == 0x409)
+		scnprintf(buf, len, "S/PDIF %u", pin - 0x408 + 1);
+	else if (pin >= 0x200 && pin <= 0x20f)
+		scnprintf(buf, len, "ADAT %u", pin - 0x200 + 1);
+	else if (pin >= 0x300 && pin <= 0x30f)
+		scnprintf(buf, len, "Mix %c", 'A' + (pin - 0x300));
+	else if (pin >= 0x600 && pin <= 0x61f)
+		scnprintf(buf, len, "Playback %u", pin - 0x600 + 1);
+	else
+		scnprintf(buf, len, "0x%03x", pin);
+}
+
+/* Output-destination name (XML-accurate). Returns false for non-output dsts (PCM capture 0x6xx and
+ * mixer-input 0x3xx dsts are deferred to a later increment). */
+static bool clarett_mux_out_dst_name(u16 pin, char *buf, size_t len)
+{
+	if (pin == 0x408 || pin == 0x409)
+		scnprintf(buf, len, "Monitor Output %u", pin - 0x408 + 1);
+	else if (pin >= 0x400 && pin <= 0x407)
+		scnprintf(buf, len, "Line Output %u", pin - 0x400 + 3);
+	else if (pin == 0x186 || pin == 0x187)
+		scnprintf(buf, len, "S/PDIF Output %u", pin - 0x186 + 1);
+	else if (pin >= 0x200 && pin <= 0x20f)
+		scnprintf(buf, len, "ADAT Output %u", pin - 0x200 + 1);
+	else
+		return false;
+	return true;
+}
+
+/* Locate the model's band-0 SET_MUX payload in the init blob; return the entry array + count. */
+static const u8 *clarett_band0_mux(const struct clarett_model *m, u32 *n_entries)
+{
+	int i;
+
+	for (i = 0; i < m->n_init_steps; i++) {
+		const struct clarett_init_step *s = &m->init_seq[i];
+		const u8 *p = m->init_blob + s->off;
+
+		if (s->opcode == FCP_SET_MUX && s->len >= 4 && (clarett_get_le32(p) >> 16) == 0) {
+			*n_entries = (s->len - 4) / 4;
+			return p + 4;
+		}
+	}
+	return NULL;
+}
+
+/* Number of routing view controls this model will add (output destinations in the band-0 table). */
+static int clarett_count_routing(const struct clarett_model *m)
+{
+	u32 n_mux = 0, i;
+	const u8 *mux = clarett_band0_mux(m, &n_mux);
+	char nm[24];
+	int cnt = 0;
+
+	for (i = 0; mux && i < n_mux; i++) {
+		u32 e = clarett_get_le32(mux + i * 4);
+
+		if (e && clarett_mux_out_dst_name(e & 0xfff, nm, sizeof(nm)))
+			cnt++;
+	}
+	return cnt;
+}
+
+/* Append the read-only routing controls to c->ctls, advancing *np. Best-effort: on alloc failure
+ * it simply adds fewer (the array was sized for the full count). */
+static void clarett_create_routing_ctls(struct clarett *c, int *np)
+{
+	const struct clarett_model *m = c->model;
+	u32 n_mux = 0, i, j, n_src = 0;
+	const u8 *mux = clarett_band0_mux(m, &n_mux);
+	u16 srcs[80];
+	const char **texts;
+	char nm[24];
+	int n = *np;
+
+	if (!mux)
+		return;
+
+	/* Collect the distinct sources feeding output destinations -> the shared enum item list. */
+	for (i = 0; i < n_mux; i++) {
+		u32 e = clarett_get_le32(mux + i * 4);
+		u16 dst = e & 0xfff, src = (e >> 12) & 0xfff;
+
+		if (!e || !clarett_mux_out_dst_name(dst, nm, sizeof(nm)))
+			continue;
+		for (j = 0; j < n_src; j++)
+			if (srcs[j] == src)
+				break;
+		if (j == n_src && n_src < ARRAY_SIZE(srcs))
+			srcs[n_src++] = src;
+	}
+	if (!n_src)
+		return;
+
+	texts = devm_kcalloc(&c->pci->dev, n_src, sizeof(*texts), GFP_KERNEL);
+	if (!texts)
+		return;
+	for (j = 0; j < n_src; j++) {
+		char *s = devm_kzalloc(&c->pci->dev, 24, GFP_KERNEL);
+
+		if (!s)
+			return;
+		clarett_mux_src_name(srcs[j], s, 24);
+		texts[j] = s;
+	}
+
+	for (i = 0; i < n_mux; i++) {
+		u32 e = clarett_get_le32(mux + i * 4);
+		u16 dst = e & 0xfff, src = (e >> 12) & 0xfff;
+		struct clarett_ctl *d;
+
+		if (!e || !clarett_mux_out_dst_name(dst, nm, sizeof(nm)))
+			continue;
+		for (j = 0; j < n_src && srcs[j] != src; j++)
+			;
+		d = &c->ctls[n++];
+		*d = (struct clarett_ctl){ .type = CT_ROUTE, .readonly = 1,
+			.texts = texts, .n_texts = n_src, .route_val = j };
+		scnprintf(d->name, sizeof(d->name), "%s Playback Enum", nm);
+	}
+	*np = n;
+}
+
 int clarett_create_controls(struct clarett *c)
 {
 	const struct clarett_model *m = c->model;
-	/* monitor(3) + gains + air(per input) + mode(per input) + optional S/PDIF source. Upper bound:
-	 * some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so
-	 * the actual count <= total. */
+	/* monitor(3) + gains + air(per input) + mode(per input) + optional S/PDIF source + routing view.
+	 * Upper bound: some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode
+	 * control, so the actual count <= total. */
 	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
-			  (m->has_spdif_source ? 1 : 0);
+			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m);
 	struct clarett_ctl *d;
 	int i, n = 0, err, gain_base;
 
@@ -273,6 +412,9 @@ int clarett_create_controls(struct clarett *c)
 			.n_texts = ARRAY_SIZE(spdif_src_texts), .values = spdif_src_vals };
 		scnprintf(d->name, sizeof(d->name), "S/PDIF Source Capture Enum");
 	}
+
+	/* Read-only routing view (Phase 1): one enum per output destination, showing its source. */
+	clarett_create_routing_ctls(c, &n);
 
 	for (i = 0; i < n; i++) {
 		struct snd_kcontrol *kctl;

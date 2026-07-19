@@ -32,6 +32,12 @@ Built from the clean-room notes in `../spec/`.
     fader goes **read-only while its select is `HW`** (the knob owns the level)
   - per analogue input: `Air` switch + input-mode enum
   - `S/PDIF Source Capture Enum` (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
+  - **read-only routing view** (Phase 1): a `<output> Playback Enum` per output
+    destination (analogue/S/PDIF/ADAT out) showing its source, decoded from the
+    default routing matrix in the arm blob's band-0 `SET_MUX`. No mux writes yet —
+    writable routing (rebuild + resend the matrix) is a later increment. Source
+    names are resolved from the confident pin ranges; destination names are
+    8PreX-accurate and approximate for smaller models pending per-model pin maps
 - **Control names match the in-kernel scarlett2 driver.** For the models with a USB
   sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
   `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`

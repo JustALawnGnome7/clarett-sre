@@ -340,6 +340,7 @@ enum clarett_ctl_type {
 	CT_SWITCH,	/* 1 byte, 0/1 (optionally inverted)        */
 	CT_GAIN,	/* 1 byte, 7-bit attenuation code = |dB|    */
 	CT_ENUM,	/* 1 byte, enumerated                       */
+	CT_ROUTE,	/* read-only routing view: fixed enum value = route_val, texts = source list */
 };
 
 struct clarett_ctl {
@@ -350,9 +351,10 @@ struct clarett_ctl {
 	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
 	u8  readonly;			/* read-only reflection of a hardware control (e.g. Master HW) */
 	u8  mask;			/* != 0: operate on these bits of shadow[offset] (RMW), not the whole byte */
-	const char * const *texts;	/* CT_ENUM                                    */
+	const char * const *texts;	/* CT_ENUM / CT_ROUTE                          */
 	int n_texts;
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
+	u16 route_val;			/* CT_ROUTE: the fixed source index this destination is routed to */
 	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
 	struct clarett_ctl *vol_link;	/* SW/HW enum only: the volume fader it makes R/O when set to HW */
 };
