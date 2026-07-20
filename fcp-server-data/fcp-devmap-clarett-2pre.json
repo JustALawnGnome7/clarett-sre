@@ -1,0 +1,24 @@
+{
+  "_note": "SKELETON — hand-authored placeholder device-map for the Clarett 2Pre (Thunderbolt), for use with fcp-server. fcp-server loads this from file (fcp_devmap_read_from_file) so it can proceed PAST the device-map step when the device's own DEVMAP_READ (0x80000d) is unavailable or silent. This is NOT a substitute for the real device-provided devmap: the APP_SPACE member offsets/types below are PROVISIONAL, carried from the snd-clarett reverse-engineering notes (config-space write offsets). They MUST be validated against — ideally replaced by — a real /tmp/fcp-devmap-clarett-2pre-*.json dump once DEVMAP_READ works on hardware.",
+  "_schema": "structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device?:int, notify-client?:int }. 'type' is a scalar (bool | uint8 | uint16 | uint32 | int8 | int16) or the name of another struct in 'structs'; for a nested (dotted) path fcp-server accumulates the offset at each level (see server/control-utils.c walk). notify-client is the FCP notification bitmask that should trigger a client re-read of the control.",
+  "_provenance": "Offsets from spec/clarett-control-plane.md and the snd-clarett driver (clarett.h). Clean-room: authored from our own interface facts, not from any vendor devmap.",
+  "_todo": [
+    "Replace with the device-provided devmap once DEVMAP_READ answers (the /tmp dump fcp-server writes).",
+    "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown; only read on the device path, unused from file).",
+    "input*.mode / input*.air use the config WRITE offsets 166/174; on the TB Clarett these read back 0 (the appspace does not mirror the NVRAM-restored preamp state — see the config-ownership finding). The true readable location, if any, is unknown; do not trust these as read sources until confirmed.",
+    "notify-client bitmask values are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0). Confirm against a device devmap."
+  ],
+  "structs": {
+    "APP_SPACE": {
+      "members": {
+        "versionStageRelease": { "offset": 0, "type": "uint32", "_note": "PLACEHOLDER offset; see _todo" },
+        "masterVolume": { "offset": 32, "type": "uint8", "notify-client": 1, "_note": "stereo attenuation code 0..127 at 32(L)/33(R); the alsa-map exposes it as a 2-component control (offset + index)" },
+        "masterMute": { "offset": 24, "type": "bool", "notify-client": 1 },
+        "monitorDim": { "offset": 73, "type": "bool", "notify-client": 1 },
+        "input1Air": { "offset": 174, "type": "bool", "notify-client": 1, "_note": "WRITE offset; reads 0 on TB Clarett (see _todo)" },
+        "input1Mode": { "offset": 166, "type": "uint8", "notify-client": 1, "_note": "2Pre Inst/Line select; WRITE offset, reads 0 on TB Clarett (see _todo)" }
+      }
+    }
+  },
+  "enums": {}
+}
