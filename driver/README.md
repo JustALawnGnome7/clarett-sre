@@ -30,6 +30,10 @@ Built from the clean-room notes in `../spec/`.
     `Line Out NN Volume Control Playback Enum` (`SW`/`HW` — the `enable-hardware-gain`
     bit: `HW` follows the hardware monitor knob). As on scarlett2, an output's volume
     fader goes **read-only while its select is `HW`** (the knob owns the level)
+  - per-output `Line NN Mute Playback Switch` (scarlett2 `MUTE_SWITCH`). Note the
+    Clarett has no independent per-output mute: this is the `enable-hardware-mute`
+    bit — the output is muted when this switch is **on and the global `Mute` is
+    active** (the master flag alone does nothing until an output opts in)
   - per analogue input: `Air` switch + input-mode enum
   - `S/PDIF Source Capture Enum` (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
   - **routing (patchbay)**: a source-selection enum per destination — outputs
@@ -201,9 +205,11 @@ Never load this while the VM is using the device.
   power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
   (double-init). TODO: probe with a `GET` and skip the replay when already armed.
 - **Packed bitfield controls** (per-output hardware gain/dim/mute enables): the
-  Monitor Out 1-2 mute+dim enables are now set at probe (read-modify-write of bytes
-  72/73 via `clarett_write_bits`), but they are not exposed as controls, and the
-  gain enables (byte 52) and the Line 3-10 enables are still neither set nor exposed.
+  per-output mute enables (byte 72/73) are now exposed as `Line NN Mute Playback
+  Switch`, and the gain enables (byte 52) as the SW/HW volume-control enums. The
+  Monitor Out 1-2 mute+dim enables are still force-set at probe so the global
+  `Mute`/`Dim` act on the monitors by default. The per-output **dim** enables are
+  not individually exposed (scarlett2 has no per-output dim).
 ## Settings persistence & `alsactl` (device-owns-the-state)
 
 This driver follows the same policy as the in-kernel scarlett2 / 4th-gen Scarlett

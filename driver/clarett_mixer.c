@@ -554,10 +554,10 @@ static void clarett_create_mix_ctls(struct clarett *c, int *np)
 int clarett_create_controls(struct clarett *c)
 {
 	const struct clarett_model *m = c->model;
-	/* monitor(3) + gains + air(per input) + mode(per input) + optional S/PDIF source + routing view.
-	 * Upper bound: some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode
-	 * control, so the actual count <= total. */
-	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
+	/* monitor(3) + per-output {volume, mute, SW/HW} (3x gains) + air + mode (per input) + optional
+	 * S/PDIF source + routing + mixer + Level Meter. Upper bound: some inputs are air-only
+	 * (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so the actual count <= total. */
+	const int total = 3 + 3 * m->n_out_gains + 2 * m->n_analogue +
 			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m) +
 			  clarett_count_mix(m) + 1 /* Level Meter */;
 	struct clarett_ctl *d;
@@ -595,6 +595,17 @@ int clarett_create_controls(struct clarett *c)
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_GAIN, .offset = m->out_gains[i].offset, .activate = 1 };
 		scnprintf(d->name, sizeof(d->name), "%s Playback Volume", m->out_gains[i].name);
+	}
+
+	/* Per-output mute (XML <enable-hardware-mute>; scarlett2 MUTE_SWITCH). On the Clarett this is the
+	 * output's "obey the master Mute" bit: bit set = the output is muted whenever the global Mute is
+	 * on (the master flag alone does nothing until an output opts in). Bit at HWEN_MUTE_OFFSET +
+	 * (i/8), bit i%8 — bit-RMW via mask, command 3. */
+	for (i = 0; i < m->n_out_gains; i++) {
+		d = &c->ctls[n++];
+		*d = (struct clarett_ctl){ .type = CT_SWITCH, .offset = HWEN_MUTE_OFFSET + (i >> 3),
+			.mask = 1 << (i & 7), .activate = HWEN_ACTIVATE };
+		scnprintf(d->name, sizeof(d->name), "Line %02d Mute Playback Switch", i + 1);
 	}
 
 	/* Per-output SW/HW volume-control select (XML <enable-hardware-gain>; scarlett2 SW_HW_SWITCH).
