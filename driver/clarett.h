@@ -340,8 +340,12 @@ enum clarett_ctl_type {
 	CT_SWITCH,	/* 1 byte, 0/1 (optionally inverted)        */
 	CT_GAIN,	/* 1 byte, 7-bit attenuation code = |dB|    */
 	CT_ENUM,	/* 1 byte, enumerated                       */
-	CT_ROUTE,	/* read-only routing view: fixed enum value = route_val, texts = source list */
+	CT_ROUTE,	/* routing enum: enum value = route_val, texts = source list, route_dst = dst pin */
+	CT_MIX,		/* mixer gain: 16-bit coeff at offset in mix_rows[mix_row]; value 0..184 (0.5 dB) */
 };
+
+#define CLARETT_MAX_MIXES        20    /* upper bound on mix buses (8PreX = 16)              */
+#define CLARETT_MIX_MAX_VALUE    184   /* mixer gain ALSA value: 0..184, 0.5 dB/step, 160 = 0 dB */
 
 struct clarett_ctl {
 	char name[44];
@@ -356,6 +360,7 @@ struct clarett_ctl {
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
 	u16 route_val;			/* CT_ROUTE: current source item this destination is routed to */
 	u16 route_dst;			/* CT_ROUTE: this destination's mux pin */
+	u8  mix_row;			/* CT_MIX: which mix bus (index into c->mix_rows); offset = coeff byte */
 	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
 	struct clarett_ctl *vol_link;	/* SW/HW enum only: the volume fader it makes R/O when set to HW */
 };
@@ -426,6 +431,12 @@ struct clarett {
 	u32 mux_band_len[3];
 	const u16 *mux_src_pins;
 
+	/* Mixer gain matrix: a mutable copy of each mix bus's SET_MIX payload ({u16 mix, u16 coeff[]}),
+	 * seeded from the arm blob. A CT_MIX put rewrites one coefficient and resends that bus's row. */
+	u8 *mix_rows[CLARETT_MAX_MIXES];
+	u32 mix_row_len;
+	int n_mix;
+
 	/*
 	 * Data-plane engine-start probe (opt-in via the stream_probe module param). Not a PCM
 	 * implementation — it programs the §3b ring registers with this buffer and watches whether
@@ -489,6 +500,17 @@ static inline void clarett_put_le32(u8 *p, u32 v)
 static inline u32 clarett_get_le32(const u8 *p)
 {
 	return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24;
+}
+
+static inline u16 clarett_get_le16(const u8 *p)
+{
+	return p[0] | p[1] << 8;
+}
+
+static inline void clarett_put_le16(u8 *p, u16 v)
+{
+	p[0] = v;
+	p[1] = v >> 8;
 }
 
 /*

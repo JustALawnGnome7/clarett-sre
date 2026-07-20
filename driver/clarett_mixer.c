@@ -31,6 +31,47 @@ static const DECLARE_TLV_DB_SCALE(clarett_gain_tlv, -12700, 100, 0);
 
 #define CLARETT_GAIN_MAX 127
 
+/*
+ * Mixer gain: ALSA value 0..184 in 0.5 dB steps (−80..+12 dB, value 160 = 0 dB), matching scarlett2.
+ * The device coefficient is a 16-bit linear amplitude = floor(8192 * 10^(dB/20)) (0x2000 = unity),
+ * clamped to the Clarett max 0x3fd9 (+6 dB) — so values above +6 dB all map to the ceiling. This
+ * table is derived from that formula (offline); it is not copied from any driver.
+ */
+static const DECLARE_TLV_DB_SCALE(clarett_mix_tlv, -8000, 50, 0);
+
+static const u16 clarett_mix_coeff[CLARETT_MIX_MAX_VALUE + 1] = {
+	0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
+	0x0001, 0x0001, 0x0001, 0x0001, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0002, 0x0003,
+	0x0003, 0x0003, 0x0003, 0x0003, 0x0004, 0x0004, 0x0004, 0x0004, 0x0005, 0x0005, 0x0005, 0x0006,
+	0x0006, 0x0006, 0x0007, 0x0007, 0x0008, 0x0008, 0x0009, 0x0009, 0x000a, 0x000a, 0x000b, 0x000c,
+	0x000c, 0x000d, 0x000e, 0x000f, 0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0017, 0x0018,
+	0x0019, 0x001b, 0x001d, 0x001e, 0x0020, 0x0022, 0x0024, 0x0026, 0x0029, 0x002b, 0x002e, 0x0030,
+	0x0033, 0x0036, 0x0039, 0x003d, 0x0041, 0x0044, 0x0049, 0x004d, 0x0051, 0x0056, 0x005b, 0x0061,
+	0x0067, 0x006d, 0x0073, 0x007a, 0x0081, 0x0089, 0x0091, 0x009a, 0x00a3, 0x00ad, 0x00b7, 0x00c2,
+	0x00cd, 0x00d9, 0x00e6, 0x00f4, 0x0103, 0x0112, 0x0122, 0x0133, 0x0146, 0x0159, 0x016d, 0x0183,
+	0x019a, 0x01b2, 0x01cc, 0x01e7, 0x0204, 0x0223, 0x0243, 0x0266, 0x028a, 0x02b1, 0x02da, 0x0305,
+	0x0333, 0x0363, 0x0397, 0x03cd, 0x0407, 0x0444, 0x0485, 0x04c9, 0x0512, 0x055f, 0x05b0, 0x0607,
+	0x0662, 0x06c3, 0x0729, 0x0796, 0x0809, 0x0883, 0x0904, 0x098d, 0x0a1e, 0x0ab8, 0x0b5a, 0x0c06,
+	0x0cbd, 0x0d7e, 0x0e4b, 0x0f24, 0x1009, 0x10fd, 0x11fe, 0x130f, 0x1430, 0x1563, 0x16a7, 0x17ff,
+	0x196b, 0x1aec, 0x1c85, 0x1e35, 0x2000, 0x21e5, 0x23e7, 0x2608, 0x2849, 0x2aac, 0x2d33, 0x2fe1,
+	0x32b7, 0x35b8, 0x38e7, 0x3c46, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9,
+	0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9, 0x3fd9,
+};
+
+/* Device coefficient -> nearest ALSA value: the table is monotic, so return the first value whose
+ * coefficient is >= the stored one (scarlett2's convention). */
+static unsigned int clarett_mix_coeff_to_value(u16 coeff)
+{
+	unsigned int v;
+
+	for (v = 0; v < CLARETT_MIX_MAX_VALUE; v++)
+		if (clarett_mix_coeff[v] >= coeff)
+			return v;
+	return CLARETT_MIX_MAX_VALUE;
+}
+
+#define CLARETT_GAIN_MAX 127
+
 static int clarett_ctl_info(struct snd_kcontrol *kc,
 			    struct snd_ctl_elem_info *ui)
 {
@@ -44,6 +85,12 @@ static int clarett_ctl_info(struct snd_kcontrol *kc,
 		ui->count = 1;
 		ui->value.integer.min = 0;
 		ui->value.integer.max = CLARETT_GAIN_MAX;
+		return 0;
+	case CT_MIX:
+		ui->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+		ui->count = 1;
+		ui->value.integer.min = 0;
+		ui->value.integer.max = CLARETT_MIX_MAX_VALUE;
 		return 0;
 	case CT_ENUM:
 	case CT_ROUTE:
@@ -90,6 +137,10 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 		break;
 	case CT_ROUTE:
 		uc->value.enumerated.item[0] = d->route_val;	/* read-only, fixed at probe */
+		break;
+	case CT_MIX:
+		uc->value.integer.value[0] =
+			clarett_mix_coeff_to_value(clarett_get_le16(c->mix_rows[d->mix_row] + d->offset));
 		break;
 	}
 	return 0;
@@ -151,6 +202,26 @@ static int clarett_route_put(struct clarett *c, struct clarett_ctl *d, unsigned 
 	return 1;
 }
 
+/*
+ * Mixer gain put: set one input's coefficient in one mix bus and resend that bus's SET_MIX row.
+ * The row is seeded from the arm blob (all unity), so a change is that row plus one coefficient delta.
+ */
+static int clarett_mix_put(struct clarett *c, struct clarett_ctl *d, long v)
+{
+	u8 *row = c->mix_rows[d->mix_row];
+	u16 coeff;
+	int err;
+
+	if (v < 0 || v > CLARETT_MIX_MAX_VALUE)
+		return -EINVAL;
+	coeff = clarett_mix_coeff[v];
+	if (clarett_get_le16(row + d->offset) == coeff)
+		return 0;
+	clarett_put_le16(row + d->offset, coeff);
+	err = clarett_fcp(c, FCP_SET_MIX, row, c->mix_row_len);
+	return err ? err : 1;
+}
+
 static int clarett_ctl_put(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *uc)
 {
@@ -162,6 +233,8 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 	if (d->type == CT_ROUTE)
 		return clarett_route_put(c, (struct clarett_ctl *)d,
 					 uc->value.enumerated.item[0]);
+	if (d->type == CT_MIX)
+		return clarett_mix_put(c, (struct clarett_ctl *)d, uc->value.integer.value[0]);
 	old = c->shadow[d->offset];
 
 	switch (d->type) {
@@ -400,6 +473,71 @@ static void clarett_create_routing_ctls(struct clarett *c, int *np)
 	*np = n;
 }
 
+/* Seed the mutable per-bus SET_MIX rows from the arm blob; sets c->n_mix and c->mix_row_len. */
+static bool clarett_seed_mix_rows(struct clarett *c)
+{
+	const struct clarett_model *m = c->model;
+	int i;
+
+	for (i = 0; i < m->n_init_steps; i++) {
+		const struct clarett_init_step *s = &m->init_seq[i];
+		const u8 *p = m->init_blob + s->off;
+		u16 mixn;
+
+		if (s->opcode != FCP_SET_MIX || s->len < 4)
+			continue;
+		mixn = clarett_get_le16(p);
+		if (mixn >= CLARETT_MAX_MIXES || c->mix_rows[mixn])
+			continue;
+		c->mix_rows[mixn] = devm_kmemdup(&c->pci->dev, p, s->len, GFP_KERNEL);
+		if (c->mix_rows[mixn]) {
+			c->mix_row_len = s->len;
+			if (mixn + 1 > c->n_mix)
+				c->n_mix = mixn + 1;
+		}
+	}
+	return c->n_mix > 0;
+}
+
+/* Number of mixer-gain controls this model adds: n_mix buses * n_input coefficients per bus. */
+static int clarett_count_mix(const struct clarett_model *m)
+{
+	int i, n_mix = 0, n_in = 0;
+
+	for (i = 0; i < m->n_init_steps; i++) {
+		const struct clarett_init_step *s = &m->init_seq[i];
+
+		if (s->opcode == FCP_SET_MIX && s->len >= 4) {
+			n_mix++;
+			n_in = (s->len - 2) / 2;
+		}
+	}
+	return n_mix * n_in;
+}
+
+/* Build the mixer gain matrix: one "Mix X Input NN Playback Volume" per (bus, input). */
+static void clarett_create_mix_ctls(struct clarett *c, int *np)
+{
+	int n = *np, mix, in, n_in;
+
+	if (!clarett_seed_mix_rows(c))
+		return;
+	n_in = (c->mix_row_len - 2) / 2;
+	for (mix = 0; mix < c->n_mix; mix++) {
+		if (!c->mix_rows[mix])
+			continue;
+		for (in = 0; in < n_in; in++) {
+			struct clarett_ctl *d = &c->ctls[n++];
+
+			*d = (struct clarett_ctl){ .type = CT_MIX, .mix_row = mix,
+				.offset = 2 + in * 2 };
+			scnprintf(d->name, sizeof(d->name),
+				  "Mix %c Input %02d Playback Volume", 'A' + mix, in + 1);
+		}
+	}
+	*np = n;
+}
+
 int clarett_create_controls(struct clarett *c)
 {
 	const struct clarett_model *m = c->model;
@@ -407,7 +545,8 @@ int clarett_create_controls(struct clarett *c)
 	 * Upper bound: some inputs are air-only (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode
 	 * control, so the actual count <= total. */
 	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
-			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m);
+			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m) +
+			  clarett_count_mix(m);
 	struct clarett_ctl *d;
 	int i, n = 0, err, gain_base;
 
@@ -494,8 +633,11 @@ int clarett_create_controls(struct clarett *c)
 		scnprintf(d->name, sizeof(d->name), "S/PDIF Source Capture Enum");
 	}
 
-	/* Read-only routing view (Phase 1): one enum per output destination, showing its source. */
+	/* Routing patchbay: one source-selection enum per destination. */
 	clarett_create_routing_ctls(c, &n);
+
+	/* Mixer gain matrix: one gain per (mix bus, input slot). */
+	clarett_create_mix_ctls(c, &n);
 
 	for (i = 0; i < n; i++) {
 		struct snd_kcontrol *kctl;
@@ -514,6 +656,10 @@ int clarett_create_controls(struct clarett *c)
 					: SNDRV_CTL_ELEM_ACCESS_READWRITE) |
 				    SNDRV_CTL_ELEM_ACCESS_TLV_READ;
 			kn.tlv.p = clarett_gain_tlv;
+		} else if (c->ctls[i].type == CT_MIX) {
+			kn.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+				    SNDRV_CTL_ELEM_ACCESS_TLV_READ;
+			kn.tlv.p = clarett_mix_tlv;
 		} else if (ro) {
 			kn.access = SNDRV_CTL_ELEM_ACCESS_READ;
 		}
