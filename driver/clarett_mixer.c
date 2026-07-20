@@ -113,13 +113,56 @@ static void clarett_set_fader_writable(struct clarett *c, struct clarett_ctl *vd
 	snd_ctl_notify(c->card, SNDRV_CTL_EVENT_MASK_INFO, &k->id);
 }
 
+/*
+ * Routing put: point a destination at a new source. Edit this destination's entry (src field) in
+ * each sample-rate band's SET_MUX payload, then resend all three commands — the arm's known-good
+ * matrix plus this one delta, matching FC's routing-change cycle (3 SET_MUX, no other command).
+ */
+static int clarett_route_put(struct clarett *c, struct clarett_ctl *d, unsigned int item)
+{
+	u16 src, dst = d->route_dst;
+	int b, ret = 0;
+
+	if (item >= (unsigned int)d->n_texts)
+		return -EINVAL;
+	if (item == d->route_val)
+		return 0;
+	src = c->mux_src_pins[item];
+
+	for (b = 0; b < 3; b++) {
+		u8 *p = c->mux_band[b];
+		u32 len = c->mux_band_len[b], k;
+		int err;
+
+		if (!p)
+			continue;
+		for (k = 4; k + 4 <= len; k += 4)
+			if ((clarett_get_le32(p + k) & 0xfff) == dst) {
+				clarett_put_le32(p + k, ((u32)src << 12) | dst);
+				break;
+			}
+		err = clarett_fcp(c, FCP_SET_MUX, p, len);
+		if (err && !ret)
+			ret = err;
+	}
+	if (ret)
+		return ret;
+	d->route_val = item;
+	return 1;
+}
+
 static int clarett_ctl_put(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *uc)
 {
 	struct clarett *c = snd_kcontrol_chip(kc);
 	const struct clarett_ctl *d = (const void *)kc->private_value;
-	u8 dev, old = c->shadow[d->offset];
+	u8 dev, old;
 	int err;
+
+	if (d->type == CT_ROUTE)
+		return clarett_route_put(c, (struct clarett_ctl *)d,
+					 uc->value.enumerated.item[0]);
+	old = c->shadow[d->offset];
 
 	switch (d->type) {
 	case CT_SWITCH: {
@@ -208,10 +251,11 @@ static void clarett_mux_src_name(u16 pin, char *buf, size_t len)
 		scnprintf(buf, len, "0x%03x", pin);
 }
 
-/* Output-destination name (XML-accurate). Returns false for non-output dsts (PCM capture 0x6xx and
- * mixer-input 0x3xx dsts are deferred to a later increment). */
-static bool clarett_mux_out_dst_name(u16 pin, char *buf, size_t len)
+/* Destination name (XML-accurate) + whether it is a capture-side destination (its control uses the
+ * "Capture Enum" suffix; outputs use "Playback Enum"). Returns false for an unrecognised pin. */
+static bool clarett_mux_dst_name(u16 pin, char *buf, size_t len, bool *is_capture)
 {
+	*is_capture = false;
 	if (pin == 0x408 || pin == 0x409)
 		scnprintf(buf, len, "Monitor Output %u", pin - 0x408 + 1);
 	else if (pin >= 0x400 && pin <= 0x407)
@@ -220,6 +264,10 @@ static bool clarett_mux_out_dst_name(u16 pin, char *buf, size_t len)
 		scnprintf(buf, len, "S/PDIF Output %u", pin - 0x186 + 1);
 	else if (pin >= 0x200 && pin <= 0x20f)
 		scnprintf(buf, len, "ADAT Output %u", pin - 0x200 + 1);
+	else if (pin >= 0x600 && pin <= 0x61f)
+		{ *is_capture = true; scnprintf(buf, len, "PCM %02u", pin - 0x600 + 1); }
+	else if (pin >= 0x300 && pin <= 0x31f)
+		{ *is_capture = true; scnprintf(buf, len, "Mixer Input %02u", pin - 0x300 + 1); }
 	else
 		return false;
 	return true;
@@ -242,44 +290,74 @@ static const u8 *clarett_band0_mux(const struct clarett_model *m, u32 *n_entries
 	return NULL;
 }
 
-/* Number of routing view controls this model will add (output destinations in the band-0 table). */
+/* Number of routing controls this model will add (destinations in the band-0 table). */
 static int clarett_count_routing(const struct clarett_model *m)
 {
 	u32 n_mux = 0, i;
 	const u8 *mux = clarett_band0_mux(m, &n_mux);
 	char nm[24];
+	bool cap;
 	int cnt = 0;
 
 	for (i = 0; mux && i < n_mux; i++) {
 		u32 e = clarett_get_le32(mux + i * 4);
 
-		if (e && clarett_mux_out_dst_name(e & 0xfff, nm, sizeof(nm)))
+		if (e && clarett_mux_dst_name(e & 0xfff, nm, sizeof(nm), &cap))
 			cnt++;
 	}
 	return cnt;
 }
 
-/* Append the read-only routing controls to c->ctls, advancing *np. Best-effort: on alloc failure
- * it simply adds fewer (the array was sized for the full count). */
+/* Seed the mutable per-band SET_MUX payloads from the arm blob (verbatim copies a routing put edits
+ * one entry of and resends). Returns false if the model has no routing table. */
+static bool clarett_seed_mux_bands(struct clarett *c)
+{
+	const struct clarett_model *m = c->model;
+	bool any = false;
+	int i, b;
+
+	for (i = 0; i < m->n_init_steps; i++) {
+		const struct clarett_init_step *s = &m->init_seq[i];
+		const u8 *p = m->init_blob + s->off;
+
+		if (s->opcode != FCP_SET_MUX || s->len < 4)
+			continue;
+		b = clarett_get_le32(p) >> 16;			/* band index from the header */
+		if (b < 0 || b >= 3 || c->mux_band[b])
+			continue;
+		c->mux_band[b] = devm_kmemdup(&c->pci->dev, p, s->len, GFP_KERNEL);
+		if (c->mux_band[b]) {
+			c->mux_band_len[b] = s->len;
+			any = true;
+		}
+	}
+	return any;
+}
+
+/* Build writable routing controls: one enum per destination, with a shared source list (item ->
+ * pin + name). Appends to c->ctls, advancing *np. Best-effort on allocation failure. */
 static void clarett_create_routing_ctls(struct clarett *c, int *np)
 {
 	const struct clarett_model *m = c->model;
 	u32 n_mux = 0, i, j, n_src = 0;
 	const u8 *mux = clarett_band0_mux(m, &n_mux);
-	u16 srcs[80];
+	u16 srcs[96];
 	const char **texts;
+	u16 *pins;
 	char nm[24];
+	bool cap;
 	int n = *np;
 
-	if (!mux)
+	if (!mux || !clarett_seed_mux_bands(c))
 		return;
 
-	/* Collect the distinct sources feeding output destinations -> the shared enum item list. */
+	/* Distinct sources across the whole band-0 table -> the shared enum item list (includes Off,
+	 * src pin 0, since unrouted mixer inputs carry it). */
 	for (i = 0; i < n_mux; i++) {
 		u32 e = clarett_get_le32(mux + i * 4);
-		u16 dst = e & 0xfff, src = (e >> 12) & 0xfff;
+		u16 src = (e >> 12) & 0xfff;
 
-		if (!e || !clarett_mux_out_dst_name(dst, nm, sizeof(nm)))
+		if (!e)
 			continue;
 		for (j = 0; j < n_src; j++)
 			if (srcs[j] == src)
@@ -291,7 +369,8 @@ static void clarett_create_routing_ctls(struct clarett *c, int *np)
 		return;
 
 	texts = devm_kcalloc(&c->pci->dev, n_src, sizeof(*texts), GFP_KERNEL);
-	if (!texts)
+	pins = devm_kcalloc(&c->pci->dev, n_src, sizeof(*pins), GFP_KERNEL);
+	if (!texts || !pins)
 		return;
 	for (j = 0; j < n_src; j++) {
 		char *s = devm_kzalloc(&c->pci->dev, 24, GFP_KERNEL);
@@ -300,21 +379,23 @@ static void clarett_create_routing_ctls(struct clarett *c, int *np)
 			return;
 		clarett_mux_src_name(srcs[j], s, 24);
 		texts[j] = s;
+		pins[j] = srcs[j];
 	}
+	c->mux_src_pins = pins;
 
 	for (i = 0; i < n_mux; i++) {
 		u32 e = clarett_get_le32(mux + i * 4);
 		u16 dst = e & 0xfff, src = (e >> 12) & 0xfff;
 		struct clarett_ctl *d;
 
-		if (!e || !clarett_mux_out_dst_name(dst, nm, sizeof(nm)))
+		if (!e || !clarett_mux_dst_name(dst, nm, sizeof(nm), &cap))
 			continue;
 		for (j = 0; j < n_src && srcs[j] != src; j++)
 			;
 		d = &c->ctls[n++];
-		*d = (struct clarett_ctl){ .type = CT_ROUTE, .readonly = 1,
-			.texts = texts, .n_texts = n_src, .route_val = j };
-		scnprintf(d->name, sizeof(d->name), "%s Playback Enum", nm);
+		*d = (struct clarett_ctl){ .type = CT_ROUTE, .texts = texts, .n_texts = n_src,
+			.route_val = j, .route_dst = dst };
+		scnprintf(d->name, sizeof(d->name), "%s %s Enum", nm, cap ? "Capture" : "Playback");
 	}
 	*np = n;
 }

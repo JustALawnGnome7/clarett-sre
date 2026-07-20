@@ -354,7 +354,8 @@ struct clarett_ctl {
 	const char * const *texts;	/* CT_ENUM / CT_ROUTE                          */
 	int n_texts;
 	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
-	u16 route_val;			/* CT_ROUTE: the fixed source index this destination is routed to */
+	u16 route_val;			/* CT_ROUTE: current source item this destination is routed to */
+	u16 route_dst;			/* CT_ROUTE: this destination's mux pin */
 	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
 	struct clarett_ctl *vol_link;	/* SW/HW enum only: the volume fader it makes R/O when set to HW */
 };
@@ -416,6 +417,14 @@ struct clarett {
 
 	struct clarett_ctl *ctls;	/* descriptor array, lifetime = card */
 	int n_ctls;
+
+	/* Writable routing (mux): a mutable copy of each sample-rate band's SET_MUX payload, seeded
+	 * verbatim from the arm blob. A routing put edits the target destination's entry (src field) in
+	 * each band and resends all three SET_MUX commands — the arm's known-good matrix plus one delta.
+	 * mux_src_pins maps a routing enum item to its source pin (shared across all routing controls). */
+	u8 *mux_band[3];
+	u32 mux_band_len[3];
+	const u16 *mux_src_pins;
 
 	/*
 	 * Data-plane engine-start probe (opt-in via the stream_probe module param). Not a PCM

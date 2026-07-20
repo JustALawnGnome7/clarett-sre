@@ -32,12 +32,15 @@ Built from the clean-room notes in `../spec/`.
     fader goes **read-only while its select is `HW`** (the knob owns the level)
   - per analogue input: `Air` switch + input-mode enum
   - `S/PDIF Source Capture Enum` (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
-  - **read-only routing view** (Phase 1): a `<output> Playback Enum` per output
-    destination (analogue/S/PDIF/ADAT out) showing its source, decoded from the
-    default routing matrix in the arm blob's band-0 `SET_MUX`. No mux writes yet —
-    writable routing (rebuild + resend the matrix) is a later increment. Source
-    names are resolved from the confident pin ranges; destination names are
-    8PreX-accurate and approximate for smaller models pending per-model pin maps
+  - **routing (patchbay)**: a source-selection enum per destination — outputs
+    (`… Playback Enum`) and PCM-capture / mixer-input (`… Capture Enum`), decoded
+    from the arm blob's default `SET_MUX` matrix. **Writable**: changing one
+    edits that destination's entry in each sample-rate band's payload (seeded
+    verbatim from the blob) and resends all three `SET_MUX` commands — the arm's
+    known-good matrix plus one delta, matching FC's routing-change cycle. Source
+    names come from the confident pin ranges; destination names are 8PreX-accurate
+    and approximate for smaller models pending per-model pin maps. **The mux writes
+    are not yet hardware-verified — see the note in Known limitations.**
 - **Control names match the in-kernel scarlett2 driver.** For the models with a USB
   sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
   `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`
@@ -126,6 +129,12 @@ Never load this while the VM is using the device.
 
 ## Known limitations / TODO
 
+- **Routing writes are not hardware-verified.** The patchbay enums resend the whole `SET_MUX`
+  matrix (seeded verbatim from the arm blob, one entry edited), which matches FC's traced
+  routing-change cycle, but this has not yet been exercised on a device — verify on the bench
+  before relying on it. Also pending: per-model destination pin maps (names are 8PreX-accurate),
+  the full source space (the enum currently lists the sources present in the default matrix), and
+  routing a source that is dropped at a higher sample-rate band into a destination that survives it.
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
   DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass at the
   **same off-wire/below-driver wall** as the control plane (`../spec/clarett-data-plane.md`).
