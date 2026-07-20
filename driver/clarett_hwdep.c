@@ -12,14 +12,16 @@
  * would otherwise contend for c->seq and the mailbox). The device is still armed in-kernel at probe
  * (clarett_arm_device); this just hands the mailbox to userspace afterwards.
  *
- * STATUS: PVERSION + CMD + INIT. SET_METER_MAP/LABELS (drive the level meter) and the
- * notification read/poll relay are TODO.
+ * STATUS: PVERSION + CMD + INIT + SET_METER_MAP/LABELS (the Level Meter control is created and
+ * driven from userspace). The notification read/poll relay (fcp_hwdep read/poll) is TODO.
  */
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <sound/core.h>
+#include <sound/control.h>
 #include <sound/hwdep.h>
+#include <sound/tlv.h>
 #include "clarett.h"
 #include "clarett_fcp_uapi.h"
 
@@ -129,6 +131,232 @@ out:
 	return err;
 }
 
+/*** Level Meter (FCP_IOCTL_SET_METER_MAP / _LABELS) ***/
+
+/*
+ * fcp-server owns metering on this path: it reads the device's raw meter count, chooses a
+ * channel->slot map, and installs both here. The "Level Meter" control is created on the first
+ * SET_METER_MAP; its .get polls GET_METER (the same {pad,num_meters,magic=1} request the in-kernel
+ * heartbeat uses) and projects the raw levels through the map. SET_METER_LABELS attaches an
+ * FCP_CHANNEL_LABELS TLV naming each channel. Mirrors sound/usb/fcp.c's meter control.
+ */
+static int clarett_hwdep_meter_info(struct snd_kcontrol *kctl,
+				    struct snd_ctl_elem_info *ui)
+{
+	struct clarett *c = kctl->private_data;
+
+	ui->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	ui->count = c->hwdep_meter_channels;
+	ui->value.integer.min = 0;
+	ui->value.integer.max = CLARETT_METER_MAX;
+	ui->value.integer.step = 1;
+	return 0;
+}
+
+static int clarett_hwdep_meter_get(struct snd_kcontrol *kctl,
+				   struct snd_ctl_elem_value *uc)
+{
+	struct clarett *c = kctl->private_data;
+	int i, err, n = c->hwdep_n_meter_slots;
+	u8 req[8];			/* {pad:u16=0, num_meters:u16, magic:u32=1} */
+
+	clarett_put_le16(req, 0);
+	clarett_put_le16(req + 2, n);
+	clarett_put_le32(req + 4, 1);
+
+	mutex_lock(&c->hwdep_lock);
+	err = clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
+			      (u8 *)c->hwdep_meter_levels, n * sizeof(__le32));
+	if (!err) {
+		for (i = 0; i < c->hwdep_meter_channels; i++) {
+			int idx = c->hwdep_meter_map[i];
+			u32 v = idx < 0 ? 0 : le32_to_cpu(c->hwdep_meter_levels[idx]);
+
+			uc->value.integer.value[i] = min(v, (u32)CLARETT_METER_MAX);
+		}
+	}
+	mutex_unlock(&c->hwdep_lock);
+	return err;
+}
+
+/* TLV read: hand back the channel-labels blob installed by SET_METER_LABELS. */
+static int clarett_hwdep_meter_tlv(struct snd_kcontrol *kctl, int op_flag,
+				   unsigned int size, unsigned int __user *tlv)
+{
+	struct clarett *c = kctl->private_data;
+	int ret = 0;
+
+	if (op_flag != SNDRV_CTL_TLV_OP_READ)
+		return -EINVAL;
+
+	mutex_lock(&c->hwdep_lock);
+	if (c->hwdep_meter_labels_tlv_size) {
+		if (size > c->hwdep_meter_labels_tlv_size)
+			size = c->hwdep_meter_labels_tlv_size;
+		if (copy_to_user(tlv, c->hwdep_meter_labels_tlv, size))
+			ret = -EFAULT;
+		else
+			ret = size;
+	}
+	mutex_unlock(&c->hwdep_lock);
+	return ret;
+}
+
+static const struct snd_kcontrol_new clarett_hwdep_meter_tmpl = {
+	.iface  = SNDRV_CTL_ELEM_IFACE_PCM,
+	.name   = "Level Meter",
+	.access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+	.info   = clarett_hwdep_meter_info,
+	.get    = clarett_hwdep_meter_get,
+	.tlv    = { .c = clarett_hwdep_meter_tlv },
+};
+
+static int clarett_hwdep_validate_map(const s16 *map, int map_size, int slots)
+{
+	int i;
+
+	for (i = 0; i < map_size; i++)
+		if (map[i] < -1 || map[i] >= slots)
+			return -EINVAL;
+	return 0;
+}
+
+/* FCP_IOCTL_SET_METER_MAP: install the channel->slot map, creating the control on first call. */
+static int clarett_hwdep_set_meter_map(struct clarett *c, struct fcp_meter_map __user *arg)
+{
+	u16 resp_cap = c->resp_size - FCP_RESP_DATA_OFF;
+	struct fcp_meter_map map;
+	s16 *tmp;
+	int err;
+
+	if (copy_from_user(&map, arg, sizeof(map)))
+		return -EFAULT;
+
+	/* Geometry is frozen once the control exists (fcp.c does the same). */
+	if (c->hwdep_meter_ctl &&
+	    (map.map_size != c->hwdep_meter_channels ||
+	     map.meter_slots != c->hwdep_n_meter_slots))
+		return -EINVAL;
+	if (map.map_size < 1 || map.map_size > 255 ||
+	    map.meter_slots < 1 || map.meter_slots > 255 ||
+	    map.meter_slots * sizeof(__le32) > resp_cap)	/* GET_METER response must fit resp_buf */
+		return -EINVAL;
+
+	tmp = kmalloc_array(map.map_size, sizeof(s16), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+	if (copy_from_user(tmp, arg->map, map.map_size * sizeof(s16))) {
+		err = -EFAULT;
+		goto out_free;
+	}
+	err = clarett_hwdep_validate_map(tmp, map.map_size, map.meter_slots);
+	if (err)
+		goto out_free;
+
+	mutex_lock(&c->hwdep_lock);
+	if (!c->hwdep_meter_ctl) {
+		s16 *new_map = devm_kmalloc_array(&c->pci->dev, map.map_size,
+						  sizeof(s16), GFP_KERNEL);
+		__le32 *levels = devm_kmalloc_array(&c->pci->dev, map.meter_slots,
+						    sizeof(__le32), GFP_KERNEL);
+		struct snd_kcontrol *kctl = NULL;
+
+		if (new_map && levels)
+			kctl = snd_ctl_new1(&clarett_hwdep_meter_tmpl, c);
+		if (!kctl) {
+			devm_kfree(&c->pci->dev, levels);	/* NULL-safe */
+			devm_kfree(&c->pci->dev, new_map);
+			err = -ENOMEM;
+			goto out_unlock;
+		}
+		/* Geometry must be visible before the control is added (info() reads it). */
+		c->hwdep_meter_channels = map.map_size;
+		c->hwdep_n_meter_slots = map.meter_slots;
+		c->hwdep_meter_map = new_map;
+		c->hwdep_meter_levels = levels;
+		err = snd_ctl_add(c->card, kctl);	/* frees kctl on failure */
+		if (err) {
+			c->hwdep_meter_map = NULL;
+			c->hwdep_meter_levels = NULL;
+			devm_kfree(&c->pci->dev, levels);
+			devm_kfree(&c->pci->dev, new_map);
+			goto out_unlock;
+		}
+		c->hwdep_meter_ctl = kctl;
+	}
+	memcpy(c->hwdep_meter_map, tmp, map.map_size * sizeof(s16));
+out_unlock:
+	mutex_unlock(&c->hwdep_lock);
+out_free:
+	kfree(tmp);
+	return err;
+}
+
+/* FCP_IOCTL_SET_METER_LABELS: attach (or clear, size 0) the channel-name TLV on the meter control. */
+static int clarett_hwdep_set_meter_labels(struct clarett *c, struct fcp_meter_labels __user *arg)
+{
+	struct fcp_meter_labels labels;
+	unsigned int *tlv, tlv_size, data_size;
+	int err = 0;
+
+	if (copy_from_user(&labels, arg, sizeof(labels)))
+		return -EFAULT;
+
+	mutex_lock(&c->hwdep_lock);
+	if (!c->hwdep_meter_ctl) {	/* map (hence the control) must be set first */
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (!labels.labels_size) {	/* clear */
+		if (c->hwdep_meter_labels_tlv) {
+			c->hwdep_meter_ctl->vd[0].access &=
+				~(SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+				  SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK);
+			snd_ctl_notify(c->card, SNDRV_CTL_EVENT_MASK_INFO,
+				       &c->hwdep_meter_ctl->id);
+			devm_kfree(&c->pci->dev, c->hwdep_meter_labels_tlv);
+			c->hwdep_meter_labels_tlv = NULL;
+			c->hwdep_meter_labels_tlv_size = 0;
+		}
+		goto out;
+	}
+
+	if (labels.labels_size > 4096) {
+		err = -EINVAL;
+		goto out;
+	}
+	data_size = ALIGN(labels.labels_size, sizeof(unsigned int));
+	tlv_size = sizeof(unsigned int) * 2 + data_size;	/* type + length words + payload */
+	tlv = devm_kzalloc(&c->pci->dev, tlv_size, GFP_KERNEL);
+	if (!tlv) {
+		err = -ENOMEM;
+		goto out;
+	}
+	tlv[0] = SNDRV_CTL_TLVT_FCP_CHANNEL_LABELS;
+	tlv[1] = data_size;
+	if (copy_from_user(&tlv[2], arg->labels, labels.labels_size)) {
+		devm_kfree(&c->pci->dev, tlv);
+		err = -EFAULT;
+		goto out;
+	}
+
+	if (!c->hwdep_meter_labels_tlv) {	/* first labels: advertise TLV read */
+		c->hwdep_meter_ctl->vd[0].access |=
+			SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+			SNDRV_CTL_ELEM_ACCESS_TLV_CALLBACK;
+		snd_ctl_notify(c->card, SNDRV_CTL_EVENT_MASK_INFO,
+			       &c->hwdep_meter_ctl->id);
+	} else {
+		devm_kfree(&c->pci->dev, c->hwdep_meter_labels_tlv);
+	}
+	c->hwdep_meter_labels_tlv = tlv;
+	c->hwdep_meter_labels_tlv_size = tlv_size;
+out:
+	mutex_unlock(&c->hwdep_lock);
+	return err;
+}
+
 static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 			       unsigned int cmd, unsigned long arg)
 {
@@ -143,8 +371,9 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 	case FCP_IOCTL_INIT:
 		return clarett_hwdep_init_cmd(c, argp);
 	case FCP_IOCTL_SET_METER_MAP:
+		return clarett_hwdep_set_meter_map(c, argp);
 	case FCP_IOCTL_SET_METER_LABELS:
-		return -EOPNOTSUPP;	/* TODO: next increment */
+		return clarett_hwdep_set_meter_labels(c, argp);
 	}
 	return -ENOIOCTLCMD;
 }
@@ -165,6 +394,7 @@ int clarett_hwdep_init(struct clarett *c)
 	hw->ops.ioctl = clarett_hwdep_ioctl;
 	hw->ops.ioctl_compat = clarett_hwdep_ioctl;
 
-	dev_info(&c->pci->dev, "FCP hwdep created (fcp-server transport; ioctls PVERSION+CMD+INIT)\n");
+	dev_info(&c->pci->dev,
+		 "FCP hwdep created (fcp-server transport; ioctls PVERSION+CMD+INIT+METER)\n");
 	return 0;
 }

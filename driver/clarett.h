@@ -470,6 +470,21 @@ struct clarett {
 	u16 meter_levels[CLARETT_N_METERS];
 
 	/*
+	 * FCP hwdep level meter (in_kernel_controls=0 path only). fcp-server creates the "Level Meter"
+	 * control via FCP_IOCTL_SET_METER_MAP: hwdep_meter_map[i] indexes the device's raw meter array
+	 * (or -1 = no source) for output channel i; hwdep_meter_levels is the GET_METER scratch buffer
+	 * (hwdep_n_meter_slots u32s). hwdep_meter_labels_tlv carries the channel-name TLV set by
+	 * FCP_IOCTL_SET_METER_LABELS. All devm-allocated (freed at detach). Mirrors sound/usb/fcp.c. */
+	struct mutex hwdep_lock;		/* serialises the hwdep meter ioctls vs the control callbacks */
+	struct snd_kcontrol *hwdep_meter_ctl;
+	s16 *hwdep_meter_map;
+	__le32 *hwdep_meter_levels;
+	int hwdep_meter_channels;	/* map_size: channels the control exposes */
+	int hwdep_n_meter_slots;	/* device raw meter count */
+	unsigned int *hwdep_meter_labels_tlv;
+	unsigned int hwdep_meter_labels_tlv_size;
+
+	/*
 	 * Data-plane engine-start probe (opt-in via the stream_probe module param). Not a PCM
 	 * implementation — it programs the §3b ring registers with this buffer and watches whether
 	 * the engine runs (vec1/vec2 period IRQs + DMA pointer advancing). See clarett_engine_start().

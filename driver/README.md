@@ -104,14 +104,31 @@ armed in-kernel at probe; the hwdep hands the mailbox to userspace afterwards.
 It's the `=0` path only — mutually exclusive with in-kernel controls, which would
 otherwise contend for the mailbox. Default is `1` (full in-kernel controls).
 
-Implemented so far: `FCP_IOCTL_PVERSION` and `FCP_IOCTL_CMD` — the command relay
-maps straight onto our mailbox (the FCP wire packet *is* our mailbox packet, and
-the opcodes are ours). Still TODO: `FCP_IOCTL_INIT` (the real `INIT_1`/`INIT_2`
-handshake + seq sync), `SET_METER_MAP`/`SET_METER_LABELS` (drive the level meter),
-and the notification read/poll relay. Note `fcp-server` recognises devices via a
-device-map it can read *from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes
-`0x80000c`/`0x80000d`) — whether this TB unit answers those is bench-testable now
-through `CMD`; if not, a device-map JSON can be authored from our known controls.
+Implemented so far:
+
+- `FCP_IOCTL_PVERSION` and `FCP_IOCTL_CMD` — the command relay maps straight onto
+  our mailbox (the FCP wire packet *is* our mailbox packet, and the opcodes are ours).
+- `FCP_IOCTL_INIT` — runs the `INIT_1`/`INIT_2` handshake with the opcodes
+  `fcp-server` passes, returning the firmware-info block in `step2[]`. Two device
+  adaptations: `step0` is zero-filled (its USB `STEP0` class request has no mailbox
+  equivalent; `fcp-server` ignores it), and `c->seq` is *not* reset (the in-kernel
+  `GET_METER` heartbeat shares it and the device only echoes seq). See the code's
+  BENCH RISK note about re-running `INIT_1` on the already-armed device.
+- `FCP_IOCTL_SET_METER_MAP`/`SET_METER_LABELS` — `fcp-server` creates and drives the
+  `Level Meter` control: it installs a channel→raw-slot map (the control's `.get`
+  polls `GET_METER` and projects through it) and an optional `FCP_CHANNEL_LABELS`
+  TLV naming each channel. This is the userspace-owned counterpart to the in-kernel
+  `Level Meter` (which uses a fixed 48-slot layout).
+
+Still TODO: the notification read/poll relay (`fcp_hwdep` read/poll wired to the
+ISR notify path). Note `fcp-server` recognises devices via a device-map it can read
+*from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes `0x80000c`/`0x80000d`) —
+whether this TB unit answers those is bench-testable now through `CMD`; if not, a
+device-map JSON can be authored from our known controls.
+
+The in-kernel `GET_METER` heartbeat still runs on this path; since `fcp-server`
+polls the meter itself, whether the heartbeat should stand down here is tied to the
+pending re-audit of the "heartbeat needed to apply writes" hypothesis.
 
 ## Model selection (auto-detected; `model=` overrides)
 
