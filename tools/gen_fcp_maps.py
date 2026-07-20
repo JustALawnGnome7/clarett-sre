@@ -51,13 +51,16 @@ for slug, spec in MODELS.items():
     out_shape = out_index(nout - 1) + 1
 
     # ---- devmap ----
+    # notify-device is the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server issues
+    # it via fcp_data_notify after the write). From the snd-clarett driver: air=7, mode=6, gain=1,
+    # monitor mute/dim=2. Without it the SET_DATA stages but never manifests.
     members = OD()
-    members["versionStageRelease"] = member(0, "uint32", nc=0, note="PLACEHOLDER offset; see _todo")
-    members["muteSwitch"] = member(24, "bool")
-    members["dimSwitch"]  = member(73, "bool")
-    members["air"]  = member(174, "bool",  shape=na, note="per-input air @ 174+i; WRITE offset, reads 0 on TB Clarett (see _todo)")
-    members["mode"] = member(166, "uint8", shape=na, note="per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; WRITE offset, reads 0 on TB Clarett (see _todo)")
-    members["outputVolume"] = member(32, "uint8", shape=out_shape, note="attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4)")
+    members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0, note="PLACEHOLDER offset; see _todo")
+    members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute; activate 2. NOTE: inverted in-kernel (device byte is active-low) — fcp-server has no invert flag, so this control may read/write inverted until handled")
+    members["dimSwitch"]  = member(28, "bool", nd=2, note="monitor dim @ 28; activate 2")
+    members["air"]  = member(174, "bool",  shape=na, nd=7, note="per-input air @ 174+i; commit activate 7")
+    members["mode"] = member(166, "uint8", shape=na, nd=6, note="per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6")
+    members["outputVolume"] = member(32, "uint8", shape=out_shape, nd=1, note="attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4); commit activate 1")
 
     phys_in = []
     for i in range(na):
@@ -90,9 +93,12 @@ for slug, spec in MODELS.items():
     devmap["_todo"] = [
         "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
         "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",
-        "air/mode use the config WRITE offsets (174+i / 166+i); on the TB Clarett these read back 0 "
-        "(appspace does not mirror NVRAM preamp state), so initial/notified reads show 0 until a real "
-        "read location is found. Writes are trace-confirmed to manifest.",
+        "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server "
+        "sends it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without "
+        "it the write stages but does not manifest. muteSwitch is active-low in-kernel; fcp-server has "
+        "no invert flag, so mute may behave inverted until handled.",
+        "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting "
+        "the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
         "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, "
         "pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic "
         "artifact of the layout, to be fixed with the real devmap.",

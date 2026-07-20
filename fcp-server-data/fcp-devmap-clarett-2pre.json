@@ -5,7 +5,8 @@
   "_todo": [
     "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
     "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",
-    "air/mode use the config WRITE offsets (174+i / 166+i); on the TB Clarett these read back 0 (appspace does not mirror NVRAM preamp state), so initial/notified reads show 0 until a real read location is found. Writes are trace-confirmed to manifest.",
+    "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server sends it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without it the write stages but does not manifest. muteSwitch is active-low in-kernel; fcp-server has no invert flag, so mute may behave inverted until handled.",
+    "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
     "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic artifact of the layout, to be fixed with the real devmap.",
     "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
     "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0)."
@@ -23,14 +24,16 @@
         "muteSwitch": {
           "offset": 24,
           "type": "bool",
-          "notify-device": 0,
-          "notify-client": 1
+          "notify-device": 2,
+          "notify-client": 1,
+          "_note": "monitor mute; activate 2. NOTE: inverted in-kernel (device byte is active-low) \u2014 fcp-server has no invert flag, so this control may read/write inverted until handled"
         },
         "dimSwitch": {
-          "offset": 73,
+          "offset": 28,
           "type": "bool",
-          "notify-device": 0,
-          "notify-client": 1
+          "notify-device": 2,
+          "notify-client": 1,
+          "_note": "monitor dim @ 28; activate 2"
         },
         "air": {
           "offset": 174,
@@ -38,9 +41,9 @@
           "array-shape": [
             2
           ],
-          "notify-device": 0,
+          "notify-device": 7,
           "notify-client": 1,
-          "_note": "per-input air @ 174+i; WRITE offset, reads 0 on TB Clarett (see _todo)"
+          "_note": "per-input air @ 174+i; commit activate 7"
         },
         "mode": {
           "offset": 166,
@@ -48,9 +51,9 @@
           "array-shape": [
             2
           ],
-          "notify-device": 0,
+          "notify-device": 6,
           "notify-client": 1,
-          "_note": "per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; WRITE offset, reads 0 on TB Clarett (see _todo)"
+          "_note": "per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6"
         },
         "outputVolume": {
           "offset": 32,
@@ -58,9 +61,9 @@
           "array-shape": [
             6
           ],
-          "notify-device": 0,
+          "notify-device": 1,
           "notify-client": 1,
-          "_note": "attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4)"
+          "_note": "attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4); commit activate 1"
         }
       }
     }
