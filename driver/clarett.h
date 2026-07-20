@@ -14,6 +14,7 @@
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/atomic.h>
+#include <linux/wait.h>		/* wait_queue_head_t — hwdep notification relay */
 #include <linux/workqueue.h>
 #include <linux/lcm.h>		/* lcm() — descriptor fragment alignment */
 #include <sound/core.h>
@@ -476,6 +477,13 @@ struct clarett {
 	 * (hwdep_n_meter_slots u32s). hwdep_meter_labels_tlv carries the channel-name TLV set by
 	 * FCP_IOCTL_SET_METER_LABELS. All devm-allocated (freed at detach). Mirrors sound/usb/fcp.c. */
 	struct mutex hwdep_lock;		/* serialises the hwdep meter ioctls vs the control callbacks */
+	/*
+	 * hwdep notification relay (in_kernel_controls=0 path). A device notification (0x400 cause,
+	 * detected in clarett_irq -> clarett_notify_work) sets hwdep_notify_event and wakes any
+	 * fcp-server blocked in read()/poll(). Lock-free: atomic_or to accumulate, atomic_xchg to drain.
+	 */
+	wait_queue_head_t hwdep_notify_wait;
+	atomic_t hwdep_notify_event;
 	struct snd_kcontrol *hwdep_meter_ctl;
 	s16 *hwdep_meter_map;
 	__le32 *hwdep_meter_levels;
@@ -639,6 +647,7 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len);
 int clarett_fcp_cmd(struct clarett *c, u32 opcode, const u8 *req, u16 req_len,
 		    u8 *resp, u16 resp_len);
 int clarett_hwdep_init(struct clarett *c);	/* create the FCP hwdep (fcp-server transport) */
+void clarett_hwdep_notify(struct clarett *c, u32 ev);	/* relay a device notification to fcp-server */
 int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);

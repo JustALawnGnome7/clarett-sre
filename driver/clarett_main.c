@@ -1091,6 +1091,14 @@ static void clarett_notify_work(struct work_struct *work)
 	if (!ev)
 		return;
 
+	/* hwdep/fcp-server path: userspace owns the control re-reads, so relay the event and stop.
+	 * The in-kernel monitor re-read below (and its snd_ctl_notify) target controls that do not
+	 * exist here, and would only add pointless mailbox traffic against fcp-server. */
+	if (!in_kernel_controls) {
+		clarett_hwdep_notify(c, ev);
+		return;
+	}
+
 	err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
 	if (err) {
 		/* Rate-limited: on a walled device the periodic unsatisfied config-change notification
@@ -1305,6 +1313,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_info(&pci->dev, "model: %s (forced by model=)\n", c->model->name);
 	mutex_init(&c->mbox_lock);
 	mutex_init(&c->hwdep_lock);
+	init_waitqueue_head(&c->hwdep_notify_wait);
 	init_completion(&c->mbox_done);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	INIT_DELAYED_WORK(&c->save_work, clarett_save_work);

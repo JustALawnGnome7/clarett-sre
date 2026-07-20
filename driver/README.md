@@ -120,10 +120,20 @@ Implemented so far:
   TLV naming each channel. This is the userspace-owned counterpart to the in-kernel
   `Level Meter` (which uses a fixed 48-slot layout).
 
-Still TODO: the notification read/poll relay (`fcp_hwdep` read/poll wired to the
-ISR notify path). Note `fcp-server` recognises devices via a device-map it can read
-*from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes `0x80000c`/`0x80000d`) —
-whether this TB unit answers those is bench-testable now through `CMD`; if not, a
+- The notification read/poll relay — `read()`/`poll()` on the hwdep block until the
+  device signals a change (the `0x400` cause, routed via `clarett_notify_work` on
+  this path), then return a u32 event bitmask, exactly as `fcp-server` expects.
+  **Adaptation:** the USB FCP device carries the precise FCP notification bitmask in
+  its interrupt message, but this TB device only signals *that* a notification
+  occurred (the FCP notification word is on no readable surface), so we deliver an
+  all-categories event (`~0`) and `fcp-server` re-reads every notifiable control — a
+  correct if broad re-sync. If a real notification word is later decoded, carry it
+  through in place of the wildcard.
+
+This is the complete hwdep ABI — `fcp-server` can now drive the device end-to-end
+(bench-testing pending). Note `fcp-server` recognises devices via a device-map it
+can read *from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes `0x80000c`/`0x80000d`)
+— whether this TB unit answers those is bench-testable now through `CMD`; if not, a
 device-map JSON can be authored from our known controls.
 
 The in-kernel `GET_METER` heartbeat still runs on this path; since `fcp-server`

@@ -12,12 +12,14 @@
  * would otherwise contend for c->seq and the mailbox). The device is still armed in-kernel at probe
  * (clarett_arm_device); this just hands the mailbox to userspace afterwards.
  *
- * STATUS: PVERSION + CMD + INIT + SET_METER_MAP/LABELS (the Level Meter control is created and
- * driven from userspace). The notification read/poll relay (fcp_hwdep read/poll) is TODO.
+ * STATUS: complete ABI — PVERSION + CMD + INIT + SET_METER_MAP/LABELS + the notification
+ * read/poll relay. fcp-server can drive this device end-to-end (bench-testing pending).
  */
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
+#include <linux/poll.h>
+#include <linux/wait.h>
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/hwdep.h>
@@ -378,6 +380,57 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 	return -ENOIOCTLCMD;
 }
 
+/*** Notification relay ***/
+
+/*
+ * Relay a device notification to a waiting fcp-server (called from clarett_notify_work on the
+ * hwdep path). fcp-server's read() returns a u32 bitmask and re-reads every control whose
+ * devmap "notify-client" mask intersects it.
+ *
+ * Adaptation: the USB FCP device delivers that precise FCP notification bitmask in its interrupt
+ * message; this Thunderbolt device only signals *that* a notification occurred, via the 0x400
+ * cause register (ev = the monitor-mask cause bits) — the FCP notification word is not exposed on
+ * any surface we can read. We therefore deliver an all-categories event (~0) so fcp-server does a
+ * correct, if broad, re-read of all notifiable controls. If a real notification word is ever
+ * decoded (e.g. a future capture or a DEVMAP field), carry it through here instead of the wildcard.
+ */
+void clarett_hwdep_notify(struct clarett *c, u32 ev)
+{
+	atomic_or(~0u, &c->hwdep_notify_event);
+	wake_up_interruptible(&c->hwdep_notify_wait);
+}
+
+static long clarett_hwdep_read(struct snd_hwdep *hw, char __user *buf,
+			       long count, loff_t *offset)
+{
+	struct clarett *c = hw->private_data;
+	u32 event;
+	int err;
+
+	if (count < sizeof(event))
+		return -EINVAL;
+
+	err = wait_event_interruptible(c->hwdep_notify_wait,
+				       atomic_read(&c->hwdep_notify_event));
+	if (err)
+		return err;
+
+	event = atomic_xchg(&c->hwdep_notify_event, 0);
+	if (copy_to_user(buf, &event, sizeof(event)))
+		return -EFAULT;
+
+	return sizeof(event);
+}
+
+static __poll_t clarett_hwdep_poll(struct snd_hwdep *hw, struct file *file,
+				   poll_table *wait)
+{
+	struct clarett *c = hw->private_data;
+
+	poll_wait(file, &c->hwdep_notify_wait, wait);
+	return atomic_read(&c->hwdep_notify_event) ? EPOLLIN | EPOLLRDNORM : 0;
+}
+
 int clarett_hwdep_init(struct clarett *c)
 {
 	struct snd_hwdep *hw;
@@ -393,8 +446,10 @@ int clarett_hwdep_init(struct clarett *c)
 	hw->ops.open = clarett_hwdep_open;
 	hw->ops.ioctl = clarett_hwdep_ioctl;
 	hw->ops.ioctl_compat = clarett_hwdep_ioctl;
+	hw->ops.read = clarett_hwdep_read;
+	hw->ops.poll = clarett_hwdep_poll;
 
 	dev_info(&c->pci->dev,
-		 "FCP hwdep created (fcp-server transport; ioctls PVERSION+CMD+INIT+METER)\n");
+		 "FCP hwdep created (fcp-server transport; PVERSION+CMD+INIT+METER+notify)\n");
 	return 0;
 }
