@@ -156,10 +156,23 @@ struct snd_pcm_substream;
 #define HWEN_MONITOR_MUTE_MASK   0x03    /* Monitor Out 1-2 mute enables */
 #define HWEN_MONITOR_DIM_MASK    0x0c    /* Monitor Out 1-2 dim enables  */
 
-/* S/PDIF input source select (XML <spdif-mode> <input>): 2-bit field, DATA_CMD activate 4.
- * Same offset/command across 4Pre/8Pre/8PreX. Enum None=0 / Optical=1 / RCA=2 (matches scarlett2). */
+/* S/PDIF source select (XML <spdif-mode>): 2-bit fields, DATA_CMD activate 4. <input> @132 picks the
+ * S/PDIF *input* to capture (matches scarlett2's "S/PDIF Source Capture Enum"); <output> @124 picks the
+ * S/PDIF *output* connector. Enum None=0 / Optical=1 / RCA=2. Activate 4 [TRACE-CONFIRMED]. */
 #define SPDIF_SOURCE_OFFSET      132
 #define SPDIF_SOURCE_ACTIVATE    4
+#define SPDIF_OUTPUT_OFFSET      124
+#define SPDIF_OUTPUT_ACTIVATE    4
+
+/* Hardware-meter source select (XML <meter-source> @184, DATA_CMD activate 8) + the per-band channel
+ * index tables written alongside it (<hardware-meters> meters-l@136 / meters-m@146 / meters-h@156,
+ * 10 bytes each). Enum is a bitmask value: Analogue=1 / S/PDIF=2 / ADAT1=4 / ADAT2=8. [TRACE-CONFIRMED] */
+#define METER_SOURCE_OFFSET      184
+#define METER_SOURCE_ACTIVATE    8
+#define METER_TABLE_L_OFFSET     136
+#define METER_TABLE_M_OFFSET     146
+#define METER_TABLE_H_OFFSET     156
+#define METER_TABLE_LEN          10
 
 /* FCP "big" opcodes (low bits of cmd) — confirmed; == scarlett2 USB values */
 #define FCP_GET_DATA             0x800000
@@ -277,6 +290,9 @@ struct clarett_model {
 	 * device has a selectable S/PDIF input — 4Pre/8Pre/8PreX. The 2Pre has optical only (one
 	 * option), so it gets no control, matching scarlett2 (which omits it for the 2Pre). */
 	bool has_spdif_source;
+	/* Hardware-meter source selector (8PreX only; others have one or no source). */
+	const struct clarett_meter_source *meter_sources;
+	int n_meter_sources;
 
 	/* data plane / PCM geometry */
 	u8 capture_channels;			/* block-1 RX stream width */
@@ -343,6 +359,15 @@ enum clarett_ctl_type {
 	CT_ROUTE,	/* routing enum: enum value = route_val, texts = source list, route_dst = dst pin */
 	CT_MIX,		/* mixer gain: 16-bit coeff at offset in mix_rows[mix_row]; value 0..184 (0.5 dB) */
 	CT_METER,	/* read-only multi-channel level meter (c->meter_levels[]) */
+	CT_METERSRC,	/* hardware-meter source select: writes the per-band tables + source byte + cmd 8 */
+};
+
+/* A hardware-meter source option: its device value and the three per-band channel-index tables the
+ * host writes (@136/146/156) when selecting it, alongside SET_DATA{184}=value + DATA_CMD{8}. */
+struct clarett_meter_source {
+	const char *name;
+	u8 value;			/* Analogue=1 / S/PDIF=2 / ADAT1=4 / ADAT2=8 */
+	u8 tbl[3][10];			/* meters-l, meters-m, meters-h (per sample-rate band) */
 };
 
 #define CLARETT_MAX_MIXES        20    /* upper bound on mix buses (8PreX = 16)              */

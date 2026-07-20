@@ -35,7 +35,11 @@ Built from the clean-room notes in `../spec/`.
     bit — the output is muted when this switch is **on and the global `Mute` is
     active** (the master flag alone does nothing until an output opts in)
   - per analogue input: `Air` switch + input-mode enum
-  - `S/PDIF Source Capture Enum` (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
+  - `S/PDIF Source Capture Enum` (input) and `S/PDIF Output Mode Playback Enum`
+    (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
+  - `Meter Source Capture Enum` (8PreX): which channel set the hardware meters
+    show (`Analogue`/`S/PDIF`/`ADAT 1`/`ADAT 2`) — writes the per-band meter index
+    tables + the source byte + `DATA_CMD{8}`, replaying FC's cycle
   - **routing (patchbay)**: a source-selection enum per destination — outputs
     (`… Playback Enum`) and PCM-capture / mixer-input (`… Capture Enum`), decoded
     from the arm blob's default `SET_MUX` matrix. **Writable**: changing one
@@ -53,7 +57,8 @@ Built from the clean-room notes in `../spec/`.
   - **`Level Meter`**: a read-only 48-channel control (0..4095), snapshotted from
     the `GET_METER` heartbeat the driver already runs. Marked volatile so userspace
     re-reads live. Channels are the raw device meter order (scarlett2 reorders via a
-    per-model meter map, not yet derived here)
+    per-model meter map, not yet derived here). See `Meter Source` above for
+    selecting which channel set the *hardware* meters display
 - **Control names match the in-kernel scarlett2 driver.** For the models with a USB
   sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
   `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`

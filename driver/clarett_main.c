@@ -1508,6 +1508,27 @@ static const struct clarett_out_gain clarett_8prex_gains[] = {
 static const char * const clarett_mode_mli[] = { "Mic", "Line", "Inst" };
 static const char * const clarett_mode_ml[]  = { "Mic", "Line" };
 
+/* Hardware-meter sources for the 8PreX (XML <hardware-meters>; source values [TRACE], activate 8).
+ * Selecting one writes its three per-band channel-index tables (@136/146/156) then SET_DATA{184}. */
+static const struct clarett_meter_source clarett_8prex_meter_sources[] = {
+	{ "Analogue", 1, {
+		{  0,  1,  2,  3,  4,  5,  6,  7, 26, 27 },
+		{  0,  1,  2,  3,  4,  5,  6,  7, 18, 19 },
+		{  0,  1,  2,  3,  4,  5,  6,  7, 14, 15 } } },
+	{ "S/PDIF", 2, {
+		{  8,  9, 255, 255, 255, 255, 255, 255, 26, 27 },
+		{  8,  9, 255, 255, 255, 255, 255, 255, 18, 19 },
+		{  8,  9, 255, 255, 255, 255, 255, 255, 14, 15 } } },
+	{ "ADAT 1", 4, {
+		{ 10, 11, 12, 13, 14, 15, 16, 17, 26, 27 },
+		{ 10, 11, 12, 13, 255, 255, 255, 255, 18, 19 },
+		{ 10, 11, 255, 255, 255, 255, 255, 255, 14, 15 } } },
+	{ "ADAT 2", 8, {
+		{ 18, 19, 20, 21, 22, 23, 24, 25, 26, 27 },
+		{ 14, 15, 16, 17, 255, 255, 255, 255, 18, 19 },
+		{ 12, 13, 255, 255, 255, 255, 255, 255, 14, 15 } } },
+};
+
 /* Analogue 1-2 add Inst; 3-8 are Mic/Line. Device byte == text index (identity). */
 static const struct clarett_preamp clarett_8prex_preamps[] = {
 	{ clarett_mode_mli, NULL, 3 }, { clarett_mode_mli, NULL, 3 },
@@ -1525,6 +1546,8 @@ static const struct clarett_model clarett_8prex = {
 	.in_prefix = "Line In",			/* match the USB models' input naming */
 	.mode_label = "Mode",			/* but keep "Mode": Mic/Line/Inst is richer than "Level" */
 	.has_spdif_source = true,
+	.meter_sources = clarett_8prex_meter_sources,
+	.n_meter_sources = ARRAY_SIZE(clarett_8prex_meter_sources),
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.stream_frag = STREAM_SIZE_VAL,

@@ -100,6 +100,7 @@ static int clarett_ctl_info(struct snd_kcontrol *kc,
 		return 0;
 	case CT_ENUM:
 	case CT_ROUTE:
+	case CT_METERSRC:
 		return snd_ctl_enum_info(ui, 1, d->n_texts, d->texts);
 	}
 	return -EINVAL;
@@ -153,6 +154,18 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 
 		for (i = 0; i < CLARETT_N_METERS; i++)
 			uc->value.integer.value[i] = c->meter_levels[i];
+		break;
+	}
+	case CT_METERSRC: {
+		const struct clarett_meter_source *ms = c->model->meter_sources;
+		int i;
+
+		uc->value.enumerated.item[0] = 0;
+		for (i = 0; i < c->model->n_meter_sources; i++)
+			if (ms[i].value == c->shadow[d->offset]) {
+				uc->value.enumerated.item[0] = i;
+				break;
+			}
 		break;
 	}
 	}
@@ -235,6 +248,37 @@ static int clarett_mix_put(struct clarett *c, struct clarett_ctl *d, long v)
 	return err ? err : 1;
 }
 
+/*
+ * Meter-source put: select which channel set the hardware meters show. Replay FC's cycle — write the
+ * three per-band channel-index tables (@136/146/156), then the source byte (@184), then one
+ * DATA_CMD{8} that commits the lot.
+ */
+static int clarett_metersrc_put(struct clarett *c, struct clarett_ctl *d, unsigned int item)
+{
+	const struct clarett_meter_source *ms;
+	int err;
+
+	if (item >= (unsigned int)d->n_texts)
+		return -EINVAL;
+	ms = &c->model->meter_sources[item];
+	if (c->shadow[d->offset] == ms->value)
+		return 0;
+
+	err = clarett_set_data(c, METER_TABLE_L_OFFSET, METER_TABLE_LEN, ms->tbl[0]);
+	if (!err)
+		err = clarett_set_data(c, METER_TABLE_M_OFFSET, METER_TABLE_LEN, ms->tbl[1]);
+	if (!err)
+		err = clarett_set_data(c, METER_TABLE_H_OFFSET, METER_TABLE_LEN, ms->tbl[2]);
+	if (!err)
+		err = clarett_set_data(c, METER_SOURCE_OFFSET, 1, &ms->value);
+	if (!err)
+		err = clarett_data_cmd(c, d->activate);
+	if (err)
+		return err;
+	c->shadow[d->offset] = ms->value;
+	return 1;
+}
+
 static int clarett_ctl_put(struct snd_kcontrol *kc,
 			   struct snd_ctl_elem_value *uc)
 {
@@ -248,6 +292,9 @@ static int clarett_ctl_put(struct snd_kcontrol *kc,
 					 uc->value.enumerated.item[0]);
 	if (d->type == CT_MIX)
 		return clarett_mix_put(c, (struct clarett_ctl *)d, uc->value.integer.value[0]);
+	if (d->type == CT_METERSRC)
+		return clarett_metersrc_put(c, (struct clarett_ctl *)d,
+					    uc->value.enumerated.item[0]);
 	old = c->shadow[d->offset];
 
 	switch (d->type) {
@@ -558,8 +605,9 @@ int clarett_create_controls(struct clarett *c)
 	 * S/PDIF source + routing + mixer + Level Meter. Upper bound: some inputs are air-only
 	 * (n_modes == 0, e.g. 4Pre Analogue 3-4) and get no mode control, so the actual count <= total. */
 	const int total = 3 + 3 * m->n_out_gains + 2 * m->n_analogue +
-			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m) +
-			  clarett_count_mix(m) + 1 /* Level Meter */;
+			  (m->has_spdif_source ? 2 : 0) + clarett_count_routing(m) +
+			  clarett_count_mix(m) + 1 /* Level Meter */ +
+			  (m->n_meter_sources > 1 ? 1 : 0);
 	struct clarett_ctl *d;
 	int i, n = 0, err, gain_base;
 
@@ -647,14 +695,20 @@ int clarett_create_controls(struct clarett *c)
 	/* S/PDIF input source (XML <spdif-mode>): 2-bit field @132, DATA_CMD activate 4. Enum and name
 	 * match scarlett2's Clarett "S/PDIF Source Capture Enum" ({None, Optical, RCA} = values 0/1/2). */
 	if (m->has_spdif_source) {
-		static const char * const spdif_src_texts[] = { "None", "Optical", "RCA" };
-		static const u8 spdif_src_vals[] = { 0, 1, 2 };
+		static const char * const spdif_texts[] = { "None", "Optical", "RCA" };
+		static const u8 spdif_vals[] = { 0, 1, 2 };
 
 		d = &c->ctls[n++];
 		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = SPDIF_SOURCE_OFFSET,
-			.activate = SPDIF_SOURCE_ACTIVATE, .texts = spdif_src_texts,
-			.n_texts = ARRAY_SIZE(spdif_src_texts), .values = spdif_src_vals };
+			.activate = SPDIF_SOURCE_ACTIVATE, .texts = spdif_texts,
+			.n_texts = ARRAY_SIZE(spdif_texts), .values = spdif_vals };
 		scnprintf(d->name, sizeof(d->name), "S/PDIF Source Capture Enum");
+
+		d = &c->ctls[n++];
+		*d = (struct clarett_ctl){ .type = CT_ENUM, .offset = SPDIF_OUTPUT_OFFSET,
+			.activate = SPDIF_OUTPUT_ACTIVATE, .texts = spdif_texts,
+			.n_texts = ARRAY_SIZE(spdif_texts), .values = spdif_vals };
+		scnprintf(d->name, sizeof(d->name), "S/PDIF Output Mode Playback Enum");
 	}
 
 	/* Routing patchbay: one source-selection enum per destination. */
@@ -667,6 +721,22 @@ int clarett_create_controls(struct clarett *c)
 	d = &c->ctls[n++];
 	*d = (struct clarett_ctl){ .type = CT_METER, .readonly = 1 };
 	scnprintf(d->name, sizeof(d->name), "Level Meter");
+
+	/* Meter Source: which channel set the hardware meters display (8PreX only, >1 source). */
+	if (m->n_meter_sources > 1) {
+		const char **mtexts = devm_kcalloc(&c->pci->dev, m->n_meter_sources,
+						   sizeof(*mtexts), GFP_KERNEL);
+
+		if (mtexts) {
+			for (i = 0; i < m->n_meter_sources; i++)
+				mtexts[i] = m->meter_sources[i].name;
+			d = &c->ctls[n++];
+			*d = (struct clarett_ctl){ .type = CT_METERSRC, .offset = METER_SOURCE_OFFSET,
+				.activate = METER_SOURCE_ACTIVATE, .texts = mtexts,
+				.n_texts = m->n_meter_sources };
+			scnprintf(d->name, sizeof(d->name), "Meter Source Capture Enum");
+		}
+	}
 
 	for (i = 0; i < n; i++) {
 		struct snd_kcontrol *kctl;
