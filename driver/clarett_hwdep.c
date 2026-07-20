@@ -394,10 +394,25 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
  * correct, if broad, re-read of all notifiable controls. If a real notification word is ever
  * decoded (e.g. a future capture or a DEVMAP field), carry it through here instead of the wildcard.
  */
+/* Coalesced wake: fires ~200 ms after the last notification, so a burst collapses to one wake. */
+static void clarett_hwdep_notify_wake(struct work_struct *work)
+{
+	struct clarett *c = container_of(work, struct clarett, hwdep_notify_dwork.work);
+
+	wake_up_interruptible(&c->hwdep_notify_wait);
+}
+
 void clarett_hwdep_notify(struct clarett *c, u32 ev)
 {
+	/*
+	 * The device asserts the 0x400 config-change notification steadily (~30 Hz idle), and we can
+	 * only relay a wildcard (~0) since the FCP notification word is not exposed — so every wake
+	 * makes fcp-server re-read *every* control. Coalesce: set the event now, but debounce the wake
+	 * ~200 ms so a storm of idle notifications becomes one re-read, not thirty. A real change is
+	 * delivered within the debounce window — imperceptible for a control refresh.
+	 */
 	atomic_or(~0u, &c->hwdep_notify_event);
-	wake_up_interruptible(&c->hwdep_notify_wait);
+	mod_delayed_work(system_wq, &c->hwdep_notify_dwork, msecs_to_jiffies(200));
 }
 
 static long clarett_hwdep_read(struct snd_hwdep *hw, char __user *buf,
@@ -439,6 +454,8 @@ int clarett_hwdep_init(struct clarett *c)
 	err = snd_hwdep_new(c->card, "Focusrite Control", 0, &hw);
 	if (err < 0)
 		return err;
+
+	INIT_DELAYED_WORK(&c->hwdep_notify_dwork, clarett_hwdep_notify_wake);
 
 	/* fcp.c leaves iface at the default and fcp-server opens by device, not iface. */
 	hw->private_data = c;

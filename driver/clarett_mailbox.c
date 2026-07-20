@@ -120,7 +120,7 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 			 u8 *resp_out, u16 resp_len)
 {
 	unsigned long deadline;
-	u32 cause = 0, first_cause = 0, fcperr = 0, resp_echo = 0;
+	u32 cause = 0, first_cause = 0, fcperr = 0, resp_echo = 0, fcp_status = 0;
 	ktime_t t_submit;
 	s64 done_us = -1, land_us = -1;
 	int i, ret = 0, polls = 0;
@@ -227,12 +227,21 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 				clarett_rl(c, sweep[s]);	/* confirming full sweep */
 			resp_echo = clarett_resp_wait(c, CMD_EXEC_FLAG | opcode,
 						      t_submit, &land_us);
-			if (resp_echo)
+			if (resp_echo) {
+				/* The device reports command-level failures in the FCP status word
+				 * (resp+8), NOT the mailbox error register — a rejected write/commit
+				 * lands a nonzero status here while DONE and the echo both look fine.
+				 * Read it now (response has landed) so callers, incl. the hwdep CMD
+				 * ioctl, see the real result instead of a false success. */
+				dma_rmb();
+				fcp_status = clarett_get_le32((const u8 *)c->resp_buf +
+							      FCP_RESP_STATUS_OFF);
 				clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
-			else
+			} else {
 				dev_warn_ratelimited(&c->pci->dev,
 					"FCP op=0x%06x seq=%u: response never landed; ack withheld\n",
 					opcode, c->seq);
+			}
 		}
 		/* on timeout: no ack — the vendor never acks an incomplete command */
 	}
@@ -247,8 +256,8 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 	/* Per-transaction trace. dev_dbg (not dev_info): the GET_METER heartbeat runs at ~24 Hz, so
 	 * info-level here would flood the log. Enable via dynamic debug when diagnosing the mailbox. */
 	dev_dbg(&c->pci->dev,
-		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x\n",
-		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr);
+		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x status=0x%08x\n",
+		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr, fcp_status);
 
 	if (resp_trace) {
 		const u8 *r = c->resp_buf;
@@ -278,6 +287,12 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 		ret = -ETIMEDOUT;
 	else if (fcperr)
 		ret = -EIO;
+	/*
+	 * NOTE: fcp_status (resp+8) is NOT a clean pass/fail on the Clarett — INIT_1 re-run on an
+	 * already-armed device returns a nonzero status yet the command works (INIT_2 still answers
+	 * the firmware version). So we do NOT fail on it; it is surfaced in the dev_dbg line below and
+	 * via resp_trace for diagnosis. Real command rejection is judged by outcome, not this word.
+	 */
 
 	/* Copy the response payload out while still holding the lock (resp_buf is stable until the next
 	 * command, which can't start before we unlock). Only on success and only if the caller asked. */

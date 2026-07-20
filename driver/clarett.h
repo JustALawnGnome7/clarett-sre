@@ -491,6 +491,7 @@ struct clarett {
 	 */
 	wait_queue_head_t hwdep_notify_wait;
 	atomic_t hwdep_notify_event;
+	struct delayed_work hwdep_notify_dwork;	/* coalesces relay wakes (idle 0x400 storms ~30 Hz) */
 	struct snd_kcontrol *hwdep_meter_ctl;
 	s16 *hwdep_meter_map;
 	__le32 *hwdep_meter_levels;

@@ -1542,6 +1542,8 @@ static void clarett_shutdown(struct pci_dev *pci)
 		return;
 	c = card->private_data;
 	cancel_delayed_work_sync(&c->meter_work);
+	if (!in_kernel_controls)
+		cancel_delayed_work_sync(&c->hwdep_notify_dwork);	/* only armed on the hwdep path */
 	/* Persist a just-made change before the reboot tears the device down (mailbox still up). */
 	if (cancel_delayed_work_sync(&c->save_work))
 		clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
