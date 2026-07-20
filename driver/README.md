@@ -85,6 +85,23 @@ sudo insmod snd-clarett.ko
 
 `make KDIR=/path/to/kernel` to build against another tree.
 
+## Direction: toward the FCP userspace model
+
+The controls above are all implemented in-kernel today. The intended end state for
+this line — matching the in-kernel FCP driver used by the 4th-gen Scarlett
+(`sound/usb/fcp.c`) — is a **minimal kernel driver that exposes a hwdep interface**
+and lets Geoffrey Bennett's userspace **`fcp-server`** implement the mixer, routing,
+metering, etc. The first step of that transition is in place:
+
+```sh
+sudo insmod snd-clarett.ko in_kernel_controls=0   # no in-kernel mixer; device is still armed
+```
+
+`in_kernel_controls=0` skips the entire in-kernel control layer (the card arms and
+runs but exposes no controls). The hwdep transport that `fcp-server` would drive is
+not implemented yet, so today this just yields a controls-less card; it's the seam
+we'll build the userspace path onto. Default is `1` (full in-kernel controls).
+
 ## Model selection (auto-detected; `model=` overrides)
 
 The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` and presents a

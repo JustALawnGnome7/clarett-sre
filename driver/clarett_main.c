@@ -90,6 +90,20 @@ MODULE_PARM_DESC(monitor_enables,
 		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
 		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
 
+/*
+ * In-kernel control layer toggle. Default true = the driver creates the full ALSA mixer/routing/
+ * meter control set itself (the current behaviour). The long-term direction for this line is the
+ * in-kernel FCP model used by the 4th-gen Scarlett (sound/usb/fcp.c): a minimal kernel driver that
+ * exposes a hwdep interface and lets Geoffrey Bennett's userspace `fcp-server` implement the
+ * controls. Set 0 to run that way — no in-kernel controls (the hwdep transport is a later step; for
+ * now this simply yields a controls-less card). Naming/behaviour will firm up as the hwdep lands.
+ */
+static bool in_kernel_controls = true;
+module_param(in_kernel_controls, bool, 0444);
+MODULE_PARM_DESC(in_kernel_controls,
+		 "Create the mixer/routing/meter controls in-kernel (default 1). Set 0 to defer them to "
+		 "the userspace fcp-server over a hwdep interface (fcp.c model; hwdep not yet implemented).");
+
 static bool seed_dump;
 module_param(seed_dump, bool, 0444);
 MODULE_PARM_DESC(seed_dump,
@@ -1398,17 +1412,24 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		clarett_error_probe(c);
 	}
 
-	err = clarett_create_controls(c);
-	if (err)
-		goto err_free;
-
-	/* Make the global Mute/Dim controls actually affect Monitor Out 1-2. Needs the seeded
-	 * shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
-	if (!seeded && monitor_enables) {
-		err = clarett_enable_monitor_hw_controls(c);
+	/* In-kernel control layer (skipped in the fcp-server/hwdep direction). The device is still
+	 * armed and the session/heartbeat run either way; this only governs the ALSA controls. */
+	if (in_kernel_controls) {
+		err = clarett_create_controls(c);
 		if (err)
-			dev_warn(&pci->dev,
-				 "could not enable monitor hardware mute/dim (%d)\n", err);
+			goto err_free;
+
+		/* Make the global Mute/Dim controls actually affect Monitor Out 1-2. Needs the seeded
+		 * shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
+		if (!seeded && monitor_enables) {
+			err = clarett_enable_monitor_hw_controls(c);
+			if (err)
+				dev_warn(&pci->dev,
+					 "could not enable monitor hardware mute/dim (%d)\n", err);
+		}
+	} else {
+		dev_info(&pci->dev,
+			 "in-kernel controls disabled (in_kernel_controls=0); card has no mixer controls\n");
 	}
 
 	if (!early_msi) {
