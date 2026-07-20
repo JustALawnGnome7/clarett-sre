@@ -110,7 +110,14 @@ static u32 clarett_resp_wait(struct clarett *c, u32 exp_echo, ktime_t t_submit, 
 	}
 }
 
-int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
+/*
+ * Core mailbox transaction. If resp_out/resp_len are given, the response *payload* (the bytes after
+ * the 16-byte echoed header) is copied out under mbox_lock on success — race-free, unlike reading
+ * c->resp_buf after the call. clarett_fcp() is the response-less wrapper; clarett_fcp_cmd() is the
+ * hwdep CMD path that needs the payload.
+ */
+static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
+			 u8 *resp_out, u16 resp_len)
 {
 	unsigned long deadline;
 	u32 cause = 0, first_cause = 0, fcperr = 0, resp_echo = 0;
@@ -272,12 +279,31 @@ int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
 	else if (fcperr)
 		ret = -EIO;
 
+	/* Copy the response payload out while still holding the lock (resp_buf is stable until the next
+	 * command, which can't start before we unlock). Only on success and only if the caller asked. */
+	if (!ret && resp_out && resp_len) {
+		dma_rmb();
+		memcpy(resp_out, (const u8 *)c->resp_buf + FCP_RESP_DATA_OFF, resp_len);
+	}
+
 	c->seq++;
 
 	atomic_set(&c->cmd_inflight, 0);	/* completion window closed; idle-gap events may resume */
 
 	mutex_unlock(&c->mbox_lock);
 	return ret;
+}
+
+int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len)
+{
+	return __clarett_fcp(c, opcode, data, len, NULL, 0);
+}
+
+/* hwdep FCP_IOCTL_CMD: run one command and return `resp_len` bytes of its response payload. */
+int clarett_fcp_cmd(struct clarett *c, u32 opcode, const u8 *req, u16 req_len,
+		    u8 *resp, u16 resp_len)
+{
+	return __clarett_fcp(c, opcode, req, req_len, resp, resp_len);
 }
 
 /* GET_DATA: request `len` bytes from config `offset`. The response is DMAed into

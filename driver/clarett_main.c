@@ -1428,8 +1428,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 					 "could not enable monitor hardware mute/dim (%d)\n", err);
 		}
 	} else {
-		dev_info(&pci->dev,
-			 "in-kernel controls disabled (in_kernel_controls=0); card has no mixer controls\n");
+		/* fcp-server transport path: expose the FCP hwdep instead of in-kernel controls. */
+		err = clarett_hwdep_init(c);
+		if (err)
+			dev_warn(&pci->dev, "FCP hwdep create failed (%d)\n", err);
+		err = 0;
 	}
 
 	if (!early_msi) {

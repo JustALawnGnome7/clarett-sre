@@ -97,10 +97,21 @@ metering, etc. The first step of that transition is in place:
 sudo insmod snd-clarett.ko in_kernel_controls=0   # no in-kernel mixer; device is still armed
 ```
 
-`in_kernel_controls=0` skips the entire in-kernel control layer (the card arms and
-runs but exposes no controls). The hwdep transport that `fcp-server` would drive is
-not implemented yet, so today this just yields a controls-less card; it's the seam
-we'll build the userspace path onto. Default is `1` (full in-kernel controls).
+`in_kernel_controls=0` skips the in-kernel control layer and instead exposes an
+**FCP hwdep** (`clarett_hwdep.c`) presenting the same ABI as the mainline USB FCP
+driver (`sound/usb/fcp.c`), the interface `fcp-server` drives. The device is still
+armed in-kernel at probe; the hwdep hands the mailbox to userspace afterwards.
+It's the `=0` path only — mutually exclusive with in-kernel controls, which would
+otherwise contend for the mailbox. Default is `1` (full in-kernel controls).
+
+Implemented so far: `FCP_IOCTL_PVERSION` and `FCP_IOCTL_CMD` — the command relay
+maps straight onto our mailbox (the FCP wire packet *is* our mailbox packet, and
+the opcodes are ours). Still TODO: `FCP_IOCTL_INIT` (the real `INIT_1`/`INIT_2`
+handshake + seq sync), `SET_METER_MAP`/`SET_METER_LABELS` (drive the level meter),
+and the notification read/poll relay. Note `fcp-server` recognises devices via a
+device-map it can read *from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes
+`0x80000c`/`0x80000d`) — whether this TB unit answers those is bench-testable now
+through `CMD`; if not, a device-map JSON can be authored from our known controls.
 
 ## Model selection (auto-detected; `model=` overrides)
 

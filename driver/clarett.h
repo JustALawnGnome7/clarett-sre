@@ -621,6 +621,9 @@ static inline size_t clarett_pcm_rx_ring(const struct clarett *c)
 
 /* mailbox.c */
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len);
+int clarett_fcp_cmd(struct clarett *c, u32 opcode, const u8 *req, u16 req_len,
+		    u8 *resp, u16 resp_len);
+int clarett_hwdep_init(struct clarett *c);	/* create the FCP hwdep (fcp-server transport) */
 int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
