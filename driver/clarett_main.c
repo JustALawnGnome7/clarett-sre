@@ -1130,8 +1130,9 @@ static void clarett_notify_work(struct work_struct *work)
  * GET_METER heartbeat. Focusrite Control polls GET_METER continuously while connected, and that poll
  * turns out to be the device's required host heartbeat: without it, control writes complete (done=1,
  * fcperr=0) but never reach hardware (front-panel state frozen). We replay FC's exact 8-byte payload
- * and re-arm ourselves every meter_poll_ms. The response (DMAed meter levels) is ignored — only the
- * periodic transaction matters. Self-requeuing delayed_work; cancelled at remove.
+ * (pad=0, num_meters=0x30=48, magic=1) and re-arm ourselves every meter_poll_ms. The DMAed response
+ * (48 u32 levels) is snapshotted into c->meter_levels for the "Level Meter" control.
+ * Self-requeuing delayed_work; cancelled at remove.
  */
 static void clarett_meter_work(struct work_struct *work)
 {
@@ -1139,8 +1140,23 @@ static void clarett_meter_work(struct work_struct *work)
 	static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
 	int delay = meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS;
 
-	if (meter_poll_ms > 0)
-		clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
+	if (meter_poll_ms > 0 && !clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req))) {
+		const u8 *r = c->resp_buf;
+		u16 size;
+		int i;
+
+		dma_rmb();	/* order the DMAed response before reading it */
+		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+		if (clarett_get_le32(r + FCP_RESP_ECHO_OFF) == (CMD_EXEC_FLAG | FCP_GET_METER)) {
+			int n = min_t(int, size / 4, CLARETT_N_METERS);
+
+			for (i = 0; i < n; i++) {
+				u32 lvl = clarett_get_le32(r + FCP_RESP_DATA_OFF + i * 4);
+
+				c->meter_levels[i] = min(lvl, (u32)CLARETT_METER_MAX);
+			}
+		}
+	}
 
 	if (meter_poll_ms > 0)
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));

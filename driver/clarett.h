@@ -342,10 +342,13 @@ enum clarett_ctl_type {
 	CT_ENUM,	/* 1 byte, enumerated                       */
 	CT_ROUTE,	/* routing enum: enum value = route_val, texts = source list, route_dst = dst pin */
 	CT_MIX,		/* mixer gain: 16-bit coeff at offset in mix_rows[mix_row]; value 0..184 (0.5 dB) */
+	CT_METER,	/* read-only multi-channel level meter (c->meter_levels[]) */
 };
 
 #define CLARETT_MAX_MIXES        20    /* upper bound on mix buses (8PreX = 16)              */
 #define CLARETT_MIX_MAX_VALUE    184   /* mixer gain ALSA value: 0..184, 0.5 dB/step, 160 = 0 dB */
+#define CLARETT_N_METERS         48    /* GET_METER returns 48 u32 levels (num_meters=0x30)  */
+#define CLARETT_METER_MAX        4095  /* meter level range 0..4095 (matches scarlett2)       */
 
 struct clarett_ctl {
 	char name[44];
@@ -436,6 +439,10 @@ struct clarett {
 	u8 *mix_rows[CLARETT_MAX_MIXES];
 	u32 mix_row_len;
 	int n_mix;
+
+	/* Latest level-meter snapshot, refreshed from the GET_METER response by the meter heartbeat and
+	 * read by the "Level Meter" control. Lock-free: torn reads are harmless for a display meter. */
+	u16 meter_levels[CLARETT_N_METERS];
 
 	/*
 	 * Data-plane engine-start probe (opt-in via the stream_probe module param). Not a PCM

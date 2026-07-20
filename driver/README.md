@@ -46,6 +46,10 @@ Built from the clean-room notes in `../spec/`.
     scarlett2. A change rewrites one 16-bit coefficient in that bus's `SET_MIX` row
     (seeded from the blob's all-unity default) and resends it. Same
     not-yet-hardware-verified caveat as the routing writes
+  - **`Level Meter`**: a read-only 48-channel control (0..4095), snapshotted from
+    the `GET_METER` heartbeat the driver already runs. Marked volatile so userspace
+    re-reads live. Channels are the raw device meter order (scarlett2 reorders via a
+    per-model meter map, not yet derived here)
 - **Control names match the in-kernel scarlett2 driver.** For the models with a USB
   sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
   `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`

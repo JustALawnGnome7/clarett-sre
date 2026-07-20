@@ -92,6 +92,12 @@ static int clarett_ctl_info(struct snd_kcontrol *kc,
 		ui->value.integer.min = 0;
 		ui->value.integer.max = CLARETT_MIX_MAX_VALUE;
 		return 0;
+	case CT_METER:
+		ui->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+		ui->count = CLARETT_N_METERS;
+		ui->value.integer.min = 0;
+		ui->value.integer.max = CLARETT_METER_MAX;
+		return 0;
 	case CT_ENUM:
 	case CT_ROUTE:
 		return snd_ctl_enum_info(ui, 1, d->n_texts, d->texts);
@@ -142,6 +148,13 @@ static int clarett_ctl_get(struct snd_kcontrol *kc,
 		uc->value.integer.value[0] =
 			clarett_mix_coeff_to_value(clarett_get_le16(c->mix_rows[d->mix_row] + d->offset));
 		break;
+	case CT_METER: {
+		int i;
+
+		for (i = 0; i < CLARETT_N_METERS; i++)
+			uc->value.integer.value[i] = c->meter_levels[i];
+		break;
+	}
 	}
 	return 0;
 }
@@ -546,7 +559,7 @@ int clarett_create_controls(struct clarett *c)
 	 * control, so the actual count <= total. */
 	const int total = 3 + 2 * m->n_out_gains + 2 * m->n_analogue +
 			  (m->has_spdif_source ? 1 : 0) + clarett_count_routing(m) +
-			  clarett_count_mix(m);
+			  clarett_count_mix(m) + 1 /* Level Meter */;
 	struct clarett_ctl *d;
 	int i, n = 0, err, gain_base;
 
@@ -639,6 +652,11 @@ int clarett_create_controls(struct clarett *c)
 	/* Mixer gain matrix: one gain per (mix bus, input slot). */
 	clarett_create_mix_ctls(c, &n);
 
+	/* Level meter: one read-only multi-channel control fed by the GET_METER heartbeat. */
+	d = &c->ctls[n++];
+	*d = (struct clarett_ctl){ .type = CT_METER, .readonly = 1 };
+	scnprintf(d->name, sizeof(d->name), "Level Meter");
+
 	for (i = 0; i < n; i++) {
 		struct snd_kcontrol *kctl;
 		bool ro = c->ctls[i].readonly;
@@ -660,6 +678,11 @@ int clarett_create_controls(struct clarett *c)
 			kn.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
 				    SNDRV_CTL_ELEM_ACCESS_TLV_READ;
 			kn.tlv.p = clarett_mix_tlv;
+		} else if (c->ctls[i].type == CT_METER) {
+			/* value changes continuously with no notification — mark volatile so
+			 * userspace re-reads on every access. */
+			kn.access = SNDRV_CTL_ELEM_ACCESS_READ |
+				    SNDRV_CTL_ELEM_ACCESS_VOLATILE;
 		} else if (ro) {
 			kn.access = SNDRV_CTL_ELEM_ACCESS_READ;
 		}
