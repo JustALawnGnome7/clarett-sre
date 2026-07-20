@@ -1,5 +1,5 @@
 {
-  "_note": "DRAFT \u2014 hand-authored device-map for the Clarett 2Pre (Thunderbolt), paired with fcp-alsa-map-clarett-2pre.json for fcp-server. Loaded from file so fcp-server can create controls when the device's own DEVMAP_READ (0x80000d) is unavailable/silent. NOT a substitute for the device-provided devmap: offsets/types are carried from the snd-clarett driver (see _todo). Replace with the /tmp/fcp-devmap-clarett-2pre-*.json dump once DEVMAP_READ works.",
+  "_note": "DRAFT \u2014 hand-authored device-map for the Clarett 4Pre (Thunderbolt), paired with fcp-alsa-map-clarett-4pre.json for fcp-server. Loaded from file so fcp-server can create controls when the device's own DEVMAP_READ (0x80000d) is unavailable/silent. NOT a substitute for the device-provided devmap: offsets/types are carried from the snd-clarett driver (see _todo). Replace with the /tmp/fcp-devmap-clarett-4pre-*.json dump once DEVMAP_READ works.",
   "_schema": "structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read offset = member.offset + index*width, and index+1 fills the %d in the alsa-map name.",
   "_provenance": "Offsets from the snd-clarett driver + spec/clarett-control-plane.md: air @ 174+i, mode @ 166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. Clean-room: authored from our own interface facts, not any vendor devmap.",
   "_todo": [
@@ -36,7 +36,7 @@
           "offset": 174,
           "type": "bool",
           "array-shape": [
-            2
+            4
           ],
           "notify-device": 0,
           "notify-client": 1,
@@ -46,7 +46,7 @@
           "offset": 166,
           "type": "uint8",
           "array-shape": [
-            2
+            4
           ],
           "notify-device": 0,
           "notify-client": 1,
@@ -56,7 +56,7 @@
           "offset": 32,
           "type": "uint8",
           "array-shape": [
-            6
+            10
           ],
           "notify-device": 0,
           "notify-client": 1,
@@ -90,6 +90,24 @@
           "mode3": {
             "index": 1,
             "member": "mode"
+          }
+        }
+      },
+      {
+        "name": "Analogue 3",
+        "controls": {
+          "air": {
+            "index": 2,
+            "member": "air"
+          }
+        }
+      },
+      {
+        "name": "Analogue 4",
+        "controls": {
+          "air": {
+            "index": 3,
+            "member": "air"
           }
         }
       }
@@ -127,6 +145,24 @@
         "controls": {
           "level": {
             "index": 5,
+            "member": "outputVolume"
+          }
+        }
+      },
+      {
+        "name": "Output 5",
+        "controls": {
+          "level": {
+            "index": 8,
+            "member": "outputVolume"
+          }
+        }
+      },
+      {
+        "name": "Output 6",
+        "controls": {
+          "level": {
+            "index": 9,
             "member": "outputVolume"
           }
         }

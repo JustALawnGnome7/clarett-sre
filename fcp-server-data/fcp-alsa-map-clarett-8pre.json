@@ -1,5 +1,5 @@
 {
-  "_note": "DRAFT \u2014 hand-authored ALSA control map for the Clarett 2Pre (Thunderbolt), paired with fcp-devmap-clarett-2pre.json. Presentation layer: control names/types/ranges/enum labels (matching the driver's scarlett2-parity set); offsets + bindings live in the devmap. Scoped to a confident slice: preamp air/mode, output levels, master mute/dim.",
+  "_note": "DRAFT \u2014 hand-authored ALSA control map for the Clarett 8Pre (Thunderbolt), paired with fcp-devmap-clarett-8pre.json. Presentation layer: control names/types/ranges/enum labels (matching the driver's scarlett2-parity set); offsets + bindings live in the devmap. Scoped to a confident slice: preamp air/mode, output levels, master mute/dim.",
   "_provenance": "Names/types from the snd-clarett in-kernel control set + the shipped fcp-alsa-map-821d.json schema. Clean-room: no vendor map.",
   "_todo": [
     "Add S/PDIF, ADAT, and the mux/mix routing sections (sources/sinks/output-group-sources) once the device's MUX/MIX capability + offsets are confirmed on the bench.",
