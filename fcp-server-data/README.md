@@ -15,15 +15,24 @@ Clean-room: authored from our own interface facts (`spec/clarett-control-plane.m
 
 ## Files
 
-- `fcp-devmap-clarett-2pre.json` — **SKELETON.** A minimal, schema-correct
-  device-map so fcp-server can get *past* the device-map step when the device's own
-  `DEVMAP_READ` (`0x80000d`) is silent. Offsets/types are **provisional** (see the
-  `_todo` inside) and must be validated against — ideally replaced by — a real
-  `/tmp/fcp-devmap-clarett-2pre-*.json` dump once `DEVMAP_READ` works on hardware.
+The 2Pre map is a **pair** — fcp-server needs both, and they cross-reference:
 
-Not yet authored: the `fcp-alsa-map-clarett-*.json` control-naming maps (the next
-thing fcp-server needs after the device-map). Without one, fcp-server exits right
-after loading the device-map — which is the intended Stage-2/3 checkpoint.
+- `fcp-devmap-clarett-2pre.json` — **DRAFT** device-map: the `structs.APP_SPACE`
+  members (offsets/types) plus the `device-specification` that binds each per-channel
+  control to a member. Lets fcp-server create controls when the device's own
+  `DEVMAP_READ` (`0x80000d`) is unavailable/silent. Offsets are carried from the
+  driver (air `174+i`, mode `166+i`, gains `32,33,36,37`, mute `24`, dim `73`);
+  see the `_todo` inside for caveats, and replace wholesale with a real
+  `/tmp/fcp-devmap-clarett-2pre-*.json` dump once `DEVMAP_READ` works.
+- `fcp-alsa-map-clarett-2pre.json` — **DRAFT** ALSA map: the presentation layer
+  (control names/types/ranges/enum labels), matching the driver's scarlett2-parity
+  control set. Scoped to a confident slice: preamp air/mode, output levels, master
+  mute/dim.
+
+Cross-checked consistent: every `member` the alsa-map/device-spec references resolves
+in the devmap with the required keys. On a 2Pre this yields Line In 1-2 Air/Level,
+four output-level controls, and Mute/Dim. Deferred (see each `_todo`): S/PDIF/ADAT,
+the mux/mix routing sections, output mute, and global masterVolume/firmware-version.
 
 ## Use
 

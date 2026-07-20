@@ -1,24 +1,44 @@
 {
-  "_note": "SKELETON — hand-authored placeholder device-map for the Clarett 2Pre (Thunderbolt), for use with fcp-server. fcp-server loads this from file (fcp_devmap_read_from_file) so it can proceed PAST the device-map step when the device's own DEVMAP_READ (0x80000d) is unavailable or silent. This is NOT a substitute for the real device-provided devmap: the APP_SPACE member offsets/types below are PROVISIONAL, carried from the snd-clarett reverse-engineering notes (config-space write offsets). They MUST be validated against — ideally replaced by — a real /tmp/fcp-devmap-clarett-2pre-*.json dump once DEVMAP_READ works on hardware.",
-  "_schema": "structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device?:int, notify-client?:int }. 'type' is a scalar (bool | uint8 | uint16 | uint32 | int8 | int16) or the name of another struct in 'structs'; for a nested (dotted) path fcp-server accumulates the offset at each level (see server/control-utils.c walk). notify-client is the FCP notification bitmask that should trigger a client re-read of the control.",
-  "_provenance": "Offsets from spec/clarett-control-plane.md and the snd-clarett driver (clarett.h). Clean-room: authored from our own interface facts, not from any vendor devmap.",
+  "_note": "DRAFT — hand-authored device-map for the Clarett 2Pre (Thunderbolt), paired with fcp-alsa-map-clarett-2pre.json for use with fcp-server. fcp-server loads this from file (fcp_devmap_read_from_file) so it can create controls when the device's own DEVMAP_READ (0x80000d) is unavailable or silent. It is NOT a substitute for the device-provided devmap: offsets/types are carried from the snd-clarett driver and are subject to the caveats in _todo. Replace with the /tmp/fcp-devmap-clarett-2pre-*.json dump once DEVMAP_READ works.",
+  "_schema": "structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, notify-client:int, array-shape?:[int] }. type is a scalar (bool|uint8|uint16|uint32|int8|int16) or a nested struct name (dotted paths accumulate offsets). device-specification.physical-{inputs,outputs}[] = { name, controls: { <control_type>: { index:int, member:string } } } binds a per-channel control to an APP_SPACE member; the read offset is member.offset + index*width (server/control-utils.c), and index+1 fills the %d in the alsa-map control name.",
+  "_provenance": "Offsets from the snd-clarett driver (clarett_main.c / clarett_mixer.c) and spec/clarett-control-plane.md: air @ 174+i, mode @ 166+i, output gains @ {32,33,36,37}, master mute @ 24, dim @ 73 (several trace-confirmed). Clean-room: authored from our own interface facts, not any vendor devmap.",
   "_todo": [
-    "Replace with the device-provided devmap once DEVMAP_READ answers (the /tmp dump fcp-server writes).",
-    "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown; only read on the device path, unused from file).",
-    "input*.mode / input*.air use the config WRITE offsets 166/174; on the TB Clarett these read back 0 (the appspace does not mirror the NVRAM-restored preamp state — see the config-ownership finding). The true readable location, if any, is unknown; do not trust these as read sources until confirmed.",
-    "notify-client bitmask values are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0). Confirm against a device devmap."
+    "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
+    "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",
+    "air/instrument use the config WRITE offsets (174+i / 166+i); on the TB Clarett these read back 0 (appspace does not mirror NVRAM preamp state — config-ownership finding), so initial/notified reads will show 0 until a real read location is found. Writes are trace-confirmed to manifest.",
+    "outputVolume is modelled as a stride-1 array at 32 with shape [6] so indices 0,1,4,5 land on the real gains 32,33,36,37 (34,35 are an unmapped gap). Consequence: the alsa-map names come out Line 1/2/5/6 rather than 1..4 — a cosmetic artifact of the sparse layout, to be fixed with the real devmap.",
+    "Output mute offsets are not yet captured, so output mute is omitted here (and from the alsa-map).",
+    "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0)."
   ],
   "structs": {
     "APP_SPACE": {
       "members": {
-        "versionStageRelease": { "offset": 0, "type": "uint32", "_note": "PLACEHOLDER offset; see _todo" },
-        "masterVolume": { "offset": 32, "type": "uint8", "notify-client": 1, "_note": "stereo attenuation code 0..127 at 32(L)/33(R); the alsa-map exposes it as a 2-component control (offset + index)" },
-        "masterMute": { "offset": 24, "type": "bool", "notify-client": 1 },
-        "monitorDim": { "offset": 73, "type": "bool", "notify-client": 1 },
-        "input1Air": { "offset": 174, "type": "bool", "notify-client": 1, "_note": "WRITE offset; reads 0 on TB Clarett (see _todo)" },
-        "input1Mode": { "offset": 166, "type": "uint8", "notify-client": 1, "_note": "2Pre Inst/Line select; WRITE offset, reads 0 on TB Clarett (see _todo)" }
+        "versionStageRelease": { "offset": 0, "type": "uint32", "notify-device": 0, "notify-client": 0, "_note": "PLACEHOLDER offset; see _todo" },
+        "muteSwitch": { "offset": 24, "type": "bool", "notify-device": 0, "notify-client": 1 },
+        "dimSwitch": { "offset": 73, "type": "bool", "notify-device": 0, "notify-client": 1 },
+        "air": { "offset": 174, "type": "bool", "array-shape": [2], "notify-device": 0, "notify-client": 1, "_note": "per-input air @ 174+i; WRITE offset, reads 0 on TB Clarett (see _todo)" },
+        "instrument": { "offset": 166, "type": "uint8", "array-shape": [2], "notify-device": 0, "notify-client": 1, "_note": "per-input Inst/Line mode @ 166+i; WRITE offset, reads 0 on TB Clarett (see _todo)" },
+        "outputVolume": { "offset": 32, "type": "uint8", "array-shape": [6], "notify-device": 0, "notify-client": 1, "_note": "monitor/output attenuation code 0..127; real gains at indices 0,1,4,5 (32,33,36,37)" }
       }
     }
+  },
+  "device-specification": {
+    "physical-inputs": [
+      { "name": "Analogue 1", "controls": {
+        "air": { "index": 0, "member": "air" },
+        "instrument": { "index": 0, "member": "instrument" }
+      } },
+      { "name": "Analogue 2", "controls": {
+        "air": { "index": 1, "member": "air" },
+        "instrument": { "index": 1, "member": "instrument" }
+      } }
+    ],
+    "physical-outputs": [
+      { "name": "Line 1", "controls": { "level": { "index": 0, "member": "outputVolume" } } },
+      { "name": "Line 2", "controls": { "level": { "index": 1, "member": "outputVolume" } } },
+      { "name": "Headphone 1", "controls": { "level": { "index": 4, "member": "outputVolume" } } },
+      { "name": "Headphone 2", "controls": { "level": { "index": 5, "member": "outputVolume" } } }
+    ]
   },
   "enums": {}
 }

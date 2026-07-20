@@ -1,0 +1,42 @@
+{
+  "_note": "DRAFT — hand-authored ALSA control map for the Clarett 2Pre (Thunderbolt), paired with fcp-devmap-clarett-2pre.json. This is the PRESENTATION layer: it names the ALSA controls and gives their types/ranges/enum labels; the offsets and per-channel bindings live in the devmap. fcp-server creates a control for each entry whose key resolves to a devmap APP_SPACE member (via device-specification for input/output controls). Scoped to a confident 2Pre slice (preamp air/mode, monitor/output levels, master mute/dim); see _todo for what is deferred.",
+  "_provenance": "Control names/types match the snd-clarett in-kernel control set (scarlett2 parity) for the 2Pre. Clean-room: authored from our own control set + the shipped fcp-alsa-map-821d.json schema, not any vendor map.",
+  "_todo": [
+    "Add S/PDIF, ADAT, and the routing/mixer (mux/mix) sections (sources/sinks/output-group-sources) once the device's MUX/MIX capability and offsets are confirmed on the bench.",
+    "Add output mute once its offset is captured (omitted here; see the devmap _todo).",
+    "Add global masterVolume and firmware-version once backing members/offsets are confirmed (masterVolume overlaps output index 0/1 at 32/33, so it is intentionally left out of this slice to avoid double-driving the same offset).",
+    "Air is modelled as a 2-state Switch (the 2Pre has on/off air, unlike the 3-state Scarlett 4th-gen enum). Confirm on hardware."
+  ],
+  "input-controls": {
+    "air": {
+      "name": "Line In %d Air Capture Switch",
+      "type": "bool"
+    },
+    "instrument": {
+      "name": "Line In %d Level Capture Enum",
+      "type": "enum",
+      "values": ["Line", "Inst"]
+    }
+  },
+  "output-controls": {
+    "level": {
+      "name": "Line %d Playback Volume",
+      "type": "int",
+      "min": -127,
+      "max": 0,
+      "db-min": -127,
+      "db-max": 0
+    }
+  },
+  "output-link": [],
+  "global-controls": {
+    "muteSwitch": {
+      "name": "Mute Playback Switch",
+      "type": "bool"
+    },
+    "dimSwitch": {
+      "name": "Dim Playback Switch",
+      "type": "bool"
+    }
+  }
+}
