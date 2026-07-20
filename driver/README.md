@@ -156,6 +156,18 @@ sudo insmod snd-clarett.ko                # auto-detects the model from the arme
 sudo insmod snd-clarett.ko model=8prex    # or force: model=2pre / model=4pre / model=8pre
 ```
 
+Because the PCI id is shared line-wide, the detected model is published for userspace at
+**`/proc/asound/card<N>/clarett`** as a stable, greppable slug — the key a device-map
+consumer (`fcp-server`) uses to select its per-model control map, since the PCI id cannot:
+
+```
+model: Clarett 8PreX
+slug: clarett-8prex
+```
+
+Slugs: `clarett-2pre` / `clarett-4pre` / `clarett-8pre` / `clarett-8prex`. Unlike
+`card->id`, the slug is never mangled for uniqueness, so it is a reliable contract.
+
 The **4Pre** descriptor is built from the device XML and cross-checked against a live capture:
 the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-only, 5-8 none;
 six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the

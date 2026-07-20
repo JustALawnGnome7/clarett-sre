@@ -19,6 +19,7 @@
 #include <linux/string.h>
 #include <linux/jiffies.h>
 #include <sound/core.h>
+#include <sound/info.h>
 #include <sound/control.h>
 #include <sound/initval.h>
 #include "clarett.h"
@@ -1288,6 +1289,20 @@ static void clarett_card_free(struct snd_card *card)
 	cancel_work_sync(&c->notify_work);
 }
 
+/*
+ * /proc/asound/cardN/clarett — the stable per-model identity for userspace. The whole Thunderbolt
+ * line shares PCI id 1cb5:0002, so a device-map consumer (fcp-server) cannot key a model-specific
+ * map on the PCI id; it keys on `slug` here instead. `model` is the human name; `slug` is the
+ * machine key (never mangled, unlike card->id). Kept minimal and greppable on purpose.
+ */
+static void clarett_proc_read(struct snd_info_entry *entry, struct snd_info_buffer *buf)
+{
+	struct clarett *c = entry->private_data;
+
+	snd_iprintf(buf, "model: %s\n", c->model->name);
+	snd_iprintf(buf, "slug: %s\n", c->model->slug);
+}
+
 static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
@@ -1476,6 +1491,12 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		 "%s at %s, fw app 0x%08x", card->shortname, pci_name(pci),
 		 c->fw_app);
 
+	/* Expose the stable per-model slug at /proc/asound/cardN/clarett (see clarett_proc_read).
+	 * Best-effort: the entry's lifetime is the card's; a failure only costs userspace its model
+	 * auto-detect, not function, so it is not fatal to probe. */
+	if (snd_card_ro_proc_new(card, "clarett", c, clarett_proc_read))
+		dev_warn(&pci->dev, "could not create /proc/asound/.../clarett model entry\n");
+
 	err = snd_card_register(card);
 	if (err)
 		goto err_free;
@@ -1573,6 +1594,7 @@ static const struct clarett_preamp clarett_8prex_preamps[] = {
 
 static const struct clarett_model clarett_8prex = {
 	.name = "Clarett 8PreX",
+	.slug = "clarett-8prex",
 	.out_gains = clarett_8prex_gains,
 	.n_out_gains = ARRAY_SIZE(clarett_8prex_gains),
 	.n_analogue = 8,
@@ -1637,6 +1659,7 @@ static const u8 clarett_2pre_stream_rx[] = {
 
 static const struct clarett_model clarett_2pre = {
 	.name = "Clarett 2Pre",
+	.slug = "clarett-2pre",
 	.out_gains = clarett_2pre_gains,
 	.n_out_gains = ARRAY_SIZE(clarett_2pre_gains),
 	.n_analogue = 2,
@@ -1700,6 +1723,7 @@ static const u8 clarett_4pre_stream_rx[] = {
 
 static const struct clarett_model clarett_4pre = {
 	.name = "Clarett 4Pre",
+	.slug = "clarett-4pre",
 	.out_gains = clarett_4pre_gains,
 	.n_out_gains = ARRAY_SIZE(clarett_4pre_gains),
 	.n_analogue = 4,
@@ -1755,6 +1779,7 @@ static const struct clarett_out_gain clarett_8pre_gains[] = {
 
 static const struct clarett_model clarett_8pre = {
 	.name = "Clarett 8Pre",
+	.slug = "clarett-8pre",
 	.out_gains = clarett_8pre_gains,
 	.n_out_gains = ARRAY_SIZE(clarett_8pre_gains),
 	.n_analogue = 8,
