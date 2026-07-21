@@ -115,6 +115,15 @@ def name_sources(srcs):
 # (8 vs 16) and in their analogue pin blocks (the 2Pre's inputs are 0x400/0x402, skipping 0x401,
 # and it reaches S/PDIF at 0x186/0x187), so any other model must be measured on its own hardware.
 METER_SLOTS = {
+    # Measured on a 2Pre, July 20 2026: analogue in 1 -> slot 0, analogue in 2 -> slot 1. Note its
+    # router pins are 0x400/0x402 (0x401 is skipped on this model) yet the slots are 0/1 — so meter
+    # slots are a COMPACT CHANNEL INDEX, not derived from the pin number. Nothing else is listed:
+    # S/PDIF/ADAT would need a digital source to excite, and both models answer METER_INFO with the
+    # same 00 02 0c 00, so the "12" in it is a family constant rather than this model's channel
+    # count and cannot be used to infer where the remaining inputs sit.
+    "clarett-2pre": {
+        0x400: (0, "measured"), 0x402: (1, "measured"),
+    },
     "clarett-4pre": {
         # pin: (slot, provenance)
         0x400: (0,  "measured"), 0x401: (1,  "measured"),

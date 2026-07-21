@@ -189,11 +189,15 @@
       },
       {
         "name": "Analogue 1",
-        "router-pin": "1024"
+        "router-pin": "1024",
+        "peak-index": 0,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Analogue 2",
-        "router-pin": "1026"
+        "router-pin": "1026",
+        "peak-index": 1,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 1",
