@@ -3,26 +3,31 @@
   "_provenance": "Names/types from the snd-clarett in-kernel control set + the shipped fcp-alsa-map-821d.json schema. Clean-room: no vendor map.",
   "_todo": [
     "Routing sources/sinks are generated from the model's band-0 SET_MUX bring-up table. LIMITATION: the SOURCE list is the set of pins that table actually routes, which is the factory-default patch, NOT the device's full source inventory \u2014 e.g. the 8PreX only ever routes Mix C-F, so Mix A/B and Mix G-P are absent as selectable sources, and only some PCM playback pins appear. Widening it means asserting pins we have not observed the device accept; verify on the bench (pick a destination, try a pin outside the list, confirm GET_MUX reflects it) before adding.",
-    "The Clarett 8Pre has NO bring-up blob in the driver (it needs an 8Pre capture), so it gets no routing/mixer sections at all \u2014 same gap as its in-kernel routing controls.",
+    "The Clarett 8Pre is the exception to the note above, in both directions. It has no capture at all, so its band-0 table is CONSTRUCTED (driver/clarett_mux_8pre.h, emitted by this script and pushed by the driver once the model is detected): the capture half is the 4Pre's, whose input geometry is identical, and the output half is authored. Its source list is therefore not table-derived either \u2014 it is the hardware's full inventory from the XML, which is what the other models' lists should eventually become. Its meter peak-index values are PREDICTED from the packing rule, not measured. NOTHING here has run against 8Pre hardware.",
     "output-group-sources / output-link are not emitted: those drive the Scarlett 4th gen's output group controls, which this line does not appear to have.",
     "Add output mute once its offset is captured (omitted; see the devmap _todo).",
     "Add global masterVolume + firmware-version once backing members/offsets are confirmed (masterVolume overlaps output 0/1 at 32/33, so it is left out of this slice to avoid double-driving one offset).",
     "Output level uses \"invert\": true, which REQUIRES the Stage-2 fcp-server patch (value_invert in struct control_props; device = invert-base - alsa). The device stores unsigned attenuation (0 = unity, 127 = -127 dB) where the Scarlett 4th gen stores signed dB. On an unpatched fcp-server the key is ignored, every reading lands outside [-127, 0], and the resulting snd_ctl_elem_write EINVAL repeats on every notification refresh.",
     "Firmware Version reads the versionStageRelease PLACEHOLDER offset, so its displayed value is meaningless \u2014 it exists because fcp-server needs the control for its socket-path TLV + lock handshake. Point it at the real firmware-version location once that is found in the appspace.",
-    "Mode enums are byte-identity (index==device byte 0=Mic/1=Line/2=Inst) because fcp-server stores the enum index directly. The combo-jack models (2Pre/4Pre/8Pre) hide Mic in-kernel (auto-detected by the jack); it is exposed here to keep Line/Inst byte-correct. Confirm behaviour of selecting Mic on those."
+    "Mode: the device byte is 0=Mic/1=Line/2=Inst line-wide, but only the 8PreX (separate XLR + 1/4\" jacks) can select Mic in software. The combo-jack models (2Pre/4Pre/8Pre) auto-select Mic from the jack, so their enum is Line/Inst carrying explicit values 1/2 \u2014 which REQUIRES the fcp-server patch accepting {name, value} entries in input-controls; on an unpatched server the names parse as an index-valued enum and Line/Inst would write 0/1."
   ],
   "input-controls": {
     "air": {
       "name": "Line In %d Air Capture Switch",
       "type": "bool"
     },
-    "mode3": {
+    "mode2": {
       "name": "Line In %d Level Capture Enum",
       "type": "enum",
       "values": [
-        "Mic",
-        "Line",
-        "Inst"
+        {
+          "name": "Line",
+          "value": 1
+        },
+        {
+          "name": "Inst",
+          "value": 2
+        }
       ]
     }
   },
@@ -245,19 +250,19 @@
     },
     {
       "device_name": "Line Output 1",
-      "alsa_name": "Line Output 1"
+      "alsa_name": "Analogue Output 1"
     },
     {
       "device_name": "Line Output 2",
-      "alsa_name": "Line Output 2"
+      "alsa_name": "Analogue Output 2"
     },
     {
       "device_name": "Line Output 3",
-      "alsa_name": "Line Output 3"
+      "alsa_name": "Analogue Output 3"
     },
     {
       "device_name": "Line Output 4",
-      "alsa_name": "Line Output 4"
+      "alsa_name": "Analogue Output 4"
     },
     {
       "device_name": "PCM 01",

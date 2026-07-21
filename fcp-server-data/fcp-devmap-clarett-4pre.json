@@ -80,7 +80,7 @@
             "index": 0,
             "member": "air"
           },
-          "mode3": {
+          "mode2": {
             "index": 0,
             "member": "mode"
           }
@@ -93,7 +93,7 @@
             "index": 1,
             "member": "air"
           },
-          "mode3": {
+          "mode2": {
             "index": 1,
             "member": "mode"
           }

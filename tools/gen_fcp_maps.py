@@ -3,9 +3,8 @@
 
 Grounded in the snd-clarett driver: air @ 174+i, mode @ 166+i (device byte 0=Mic,1=Line,2=Inst),
 output gains strided at 32 (pairs at base+{0,1}, pairs step by 4), master mute @ 24, dim @ 73.
-fcp-server stores an enum's INDEX as the device byte (no value map), so mode enums are byte-identity
-lists starting at Mic (index 0) — the combo-jack models hide Mic in-kernel, but exposing it here keeps
-Line=1/Inst=2 byte-correct.
+Mode enums carry the device byte explicitly where it is not the enum index, so the combo-jack models
+offer Line/Inst only (bytes 1/2) and just the 8PreX offers Mic — see ENUM_LABELS.
 """
 import json, collections, re
 
@@ -76,6 +75,22 @@ def name_destinations(dsts):
         elif 0x600 <= pin <= 0x61f:
             out[pin] = (f"PCM {pin - 0x600 + 1:02d}", None)
     return out
+
+
+def alsa_sink_name(name):
+    """Device name -> ALSA control name for a routing destination.
+
+    alsa-scarlett-gui classifies a routing sink by its control name, and only accepts a hardware
+    output whose name starts with "Analogue ", "S/PDIF " or "ADAT " (alsa.c is_elem_routing_snk).
+    The physical names above ("Line Output 3", "Monitor Output 1" — what the front panel and the
+    device's own port list call them) are kept in the devmap, and the analogue ones are presented
+    to ALSA under the scarlett2 convention, which is what the USB Clarett+ 2Pre also reports.
+    Numbering is preserved: the monitor pair is 1/2 and the 0x400 block continues from there.
+    """
+    for prefix in ("Line Output ", "Monitor Output "):
+        if name.startswith(prefix):
+            return "Analogue Output " + name[len(prefix):]
+    return name
 
 
 def name_sources(srcs):
@@ -155,6 +170,24 @@ METER_SLOTS = {
         0x204: (14, "measured"), 0x205: (15, "measured"),
         0x206: (16, "measured"), 0x207: (17, "measured"),
     },
+    # PREDICTED, not measured — the one model here with no measurement on it. The packing rule is a
+    # function of the input geometry alone, and the 8Pre's is identical to the 4Pre's (8 analogue at
+    # 0x400-0x407, 2 S/PDIF at 0x408/0x409, 8 ADAT at 0x200-0x207), so the whole table is the 4Pre's.
+    # Included rather than left out because every slot is inside the bound fcp-server enforces, so
+    # the cost of being wrong is meters against the wrong channel names, not a discarded map — and
+    # it makes the prediction falsifiable on first contact with the hardware (tools/fcp_meter_watch.c
+    # against one input at a time; if it disagrees, the rule itself is wrong and wants revisiting).
+    "clarett-8pre": {
+        0x400: (0,  "predicted"), 0x401: (1,  "predicted"),
+        0x402: (2,  "predicted"), 0x403: (3,  "predicted"),
+        0x404: (4,  "predicted"), 0x405: (5,  "predicted"),
+        0x406: (6,  "predicted"), 0x407: (7,  "predicted"),
+        0x408: (8,  "predicted"), 0x409: (9,  "predicted"),
+        0x200: (10, "predicted"), 0x201: (11, "predicted"),
+        0x202: (12, "predicted"), 0x203: (13, "predicted"),
+        0x204: (14, "predicted"), 0x205: (15, "predicted"),
+        0x206: (16, "predicted"), 0x207: (17, "predicted"),
+    },
 }
 # NO destination peak-index. fcp-server rejects any index >= the count the device reports from
 # METER_INFO (0x001000, resp[0]), and a 4Pre rejected index 10 - so it exposes at most 10 meter
@@ -165,24 +198,105 @@ METER_SLOTS = {
 # ADAT (10-17, inferred) is dropped for the same reason.
 METER_SLOTS_DST = {}
 
-# per-model: mode_label, n_analogue (air on all), and per-input mode enum ("mli3" | "ml2" | None)
+# per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
 MODELS = {
     "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
                           n_analogue=2, outputs=4,
-                          modes={0: "mli3", 1: "mli3"}),
+                          modes={0: "li2", 1: "li2"}),
     "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="4pre",
                           n_analogue=4, outputs=6,
-                          modes={0: "mli3", 1: "mli3"}),
+                          modes={0: "li2", 1: "li2"}),
     "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level", init=None,
                           n_analogue=8, outputs=10,
-                          modes={0: "mli3", 1: "mli3"}),
-    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Mode", init="8prex",
+                          modes={0: "li2", 1: "li2"},
+                          # No capture for this model: routing is constructed instead, and the
+                          # driver pushes the same table (see synth_band0_8pre).
+                          synth_mux=lambda: synth_band0_8pre(),
+                          synth_sources=lambda: synth_sources_8pre()),
+    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Level", init="8prex",
                           n_analogue=8, outputs=10,
                           modes={0: "mli3", 1: "mli3",
                                  2: "ml2", 3: "ml2", 4: "ml2",
                                  5: "ml2", 6: "ml2", 7: "ml2"}),
 }
-ENUM_LABELS = {"mli3": ["Mic", "Line", "Inst"], "ml2": ["Mic", "Line"]}
+# Mode enum per kind. The device byte is always 0=Mic, 1=Line, 2=Inst (line-wide encoding).
+#
+# The 8PreX has SEPARATE XLR and 1/4" jacks per input, so software picks the path and Mic is a real
+# setting: its enums start at Mic and are plain lists, whose index IS the device byte.
+#
+# The 2Pre/4Pre/8Pre have a single combo XLR/TRS jack per input that cannot take both plugs at once,
+# so the hardware selects Mic itself when an XLR is inserted and software only chooses Line vs Inst
+# (spec/clarett-control-plane.md §4). Those get the {name, value} form so the device bytes stay 1/2
+# with no Mic entry — offering a Mic that the jack decides would be offering a setting that does
+# nothing. REQUIRES the fcp-server patch that accepts the object form in input-controls (the same
+# form global-controls.c already took).
+ENUM_LABELS = {
+    "mli3": ["Mic", "Line", "Inst"],
+    "ml2":  ["Mic", "Line"],
+    "li2":  [OD([("name", "Line"), ("value", 1)]), OD([("name", "Inst"), ("value", 2)])],
+}
+
+
+# --- Clarett 8Pre band-0 router table (no capture exists for this model) -------------------------
+#
+# Every other model's routing comes from its captured bring-up blob. There is no 8Pre capture, and
+# without a band-0 table naming the 8Pre's own destinations the device is left holding the 2Pre's
+# routing after the arm, whereupon fcp-server refuses to create ANY routing control.
+#
+# So this table is CONSTRUCTED, and its two halves have very different provenance:
+#
+#  * The capture half is the 4Pre's captured table verbatim. The two models have identical input
+#    geometry — 8 analogue at 0x400-0x407, S/PDIF at 0x408/0x409, 8 ADAT at 0x200-0x207, 20 capture
+#    channels — so the 4Pre's own vendor-configured block applies unchanged, loopback included.
+#
+#  * The output half is AUTHORED. The captured tables are user sessions, not factory defaults (the
+#    8PreX's routes analogue inputs straight to its ADAT outputs), so there is nothing to copy. It
+#    follows the 4Pre's pattern of mixes landing on the analogue outputs in order, and leaves the
+#    digital outputs and all 30 mixer inputs unrouted — the same src=0 the vendor tables use for
+#    destinations they aren't feeding. Nothing is fed into the mixer, so the device starts silent
+#    rather than making up a patch that might surprise someone's monitors.
+#
+# Destination pins and their names are [XML] (vendor-reference/Devices/Clarett 8Pre.xml), which was
+# cross-checked against all three captured models: for each of them the XML's output pin list is
+# exactly the set of physical destinations in the live band-0 table.
+def synth_band0_8pre():
+    pairs = []
+
+    # Capture: analogue -> PCM 1-8, S/PDIF -> 9/10, loopback -> 11/12, ADAT -> 13-20 [4Pre TRACE]
+    pairs += [(0x400 + i, 0x600 + i) for i in range(8)]
+    pairs += [(0x408, 0x608), (0x409, 0x609)]
+    pairs += [(0x600, 0x60a), (0x601, 0x60b)]
+    pairs += [(0x200 + i, 0x60c + i) for i in range(8)]
+
+    # Physical outputs [AUTHORED]: Mix A/B -> the monitor pair, Mix C-J -> Line Output 3-10
+    pairs += [(0x300, 0x408), (0x301, 0x409)]
+    pairs += [(0x302 + i, 0x400 + i) for i in range(8)]
+    pairs += [(0, 0x186), (0, 0x187)]                       # S/PDIF out, unrouted
+    pairs += [(0, 0x200 + i) for i in range(8)]             # ADAT out, unrouted
+
+    # Mixer inputs [AUTHORED]: all 30 present, none fed
+    pairs += [(0, 0x300 + i) for i in range(30)]
+
+    return pairs
+
+
+# The full source set, which a band-0 table cannot give: it records the source currently patched to
+# each destination, so an unrouted source simply doesn't appear (which is why the 2Pre's map offers
+# 2 of its 16 mix buses and 2 of its 4 playback streams). fcp-server validates destinations against
+# the live table but not sources, so the 8Pre — the one model whose map isn't blob-derived — lists
+# every source the hardware has. [XML] Clarett 8Pre.xml: 8 analogue, 2 S/PDIF, 8 ADAT, 20 playback,
+# plus the 16 mix buses shared line-wide.
+def synth_sources_8pre():
+    return ([0x400 + i for i in range(8)] + [0x408, 0x409] +
+            [0x200 + i for i in range(8)] +
+            [0x600 + i for i in range(20)] +
+            [0x300 + i for i in range(16)])
+
+
+def mode_key(kind):
+    """alsa-map control-type key for a mode enum kind: by arity, so a model's kinds never collide
+    (the 8PreX has a 3-way and a 2-way; every other model has only one kind)."""
+    return f"mode{len(ENUM_LABELS[kind])}"
 
 def out_index(n):        # physical output n (0-based) -> array index onto the strided gain region
     return (n // 2) * 4 + (n % 2)
@@ -220,7 +334,7 @@ for slug, spec in MODELS.items():
         ctrls["air"] = OD(index=i, member="air")
         mt = modes.get(i)
         if mt:
-            ctrls["mode3" if mt == "mli3" else "mode2"] = OD(index=i, member="mode")
+            ctrls[mode_key(mt)] = OD(index=i, member="mode")
         phys_in.append(OD(name=f"Analogue {i+1}", controls=ctrls))
 
     phys_out = []
@@ -235,9 +349,12 @@ for slug, spec in MODELS.items():
     # router-pin is a STRING parsed with atoi(), i.e. decimal (fcp-server's error message prints it
     # as 0x%s, which is misleading — a device-provided devmap may well use another convention).
     dev_sources, dev_dests, alsa_sources, alsa_sinks = [], [], [], []
-    if spec["init"]:
-        pairs = band0_mux(spec["init"])
-        src_names = name_sources({s for s, _ in pairs})
+    pairs = band0_mux(spec["init"]) if spec["init"] else spec.get("synth_mux", lambda: [])()
+    if pairs:
+        # Sources: from the table for a captured model (all it can tell us), from the hardware's own
+        # full list where we have one (see synth_sources_8pre).
+        src_pins = spec.get("synth_sources", lambda: None)() or {s for s, _ in pairs}
+        src_names = name_sources(set(src_pins))
         dst_names = name_destinations({d for _, d in pairs})
         assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"
         assert len(set(n for n, _ in dst_names.values())) == len(dst_names), f"{slug}: dup sink name"
@@ -264,7 +381,7 @@ for slug, spec in MODELS.items():
                 # as mix_output * mix_input_count + mixer-input-index (dims come from MIX_INFO).
                 entry["mixer-input-index"] = mix_idx
             dev_dests.append(entry)
-            alsa_sinks.append(OD([("device_name", nm), ("alsa_name", nm)]))
+            alsa_sinks.append(OD([("device_name", nm), ("alsa_name", alsa_sink_name(nm))]))
 
     devmap = OD()
     devmap["_note"] = (f"DRAFT — hand-authored device-map for the {spec['name']} (Thunderbolt), paired with "
@@ -335,12 +452,9 @@ for slug, spec in MODELS.items():
     input_controls = OD()
     input_controls["air"] = OD(name="Line In %d Air Capture Switch", type="bool")
     used_modes = set(m for m in modes.values() if m)
-    if "mli3" in used_modes:
-        input_controls["mode3"] = OD(name=f"Line In %d {ml} Capture Enum", type="enum",
-                                     values=ENUM_LABELS["mli3"])
-    if "ml2" in used_modes:
-        input_controls["mode2"] = OD(name=f"Line In %d {ml} Capture Enum", type="enum",
-                                     values=ENUM_LABELS["ml2"])
+    for kind in sorted(used_modes):
+        input_controls[mode_key(kind)] = OD(name=f"Line In %d {ml} Capture Enum", type="enum",
+                                            values=ENUM_LABELS[kind])
 
     alsamap = OD()
     alsamap["_note"] = (f"DRAFT — hand-authored ALSA control map for the {spec['name']} (Thunderbolt), paired "
@@ -356,8 +470,13 @@ for slug, spec in MODELS.items():
         "Mix A/B and Mix G-P are absent as selectable sources, and only some PCM playback pins appear. "
         "Widening it means asserting pins we have not observed the device accept; verify on the bench "
         "(pick a destination, try a pin outside the list, confirm GET_MUX reflects it) before adding.",
-        "The Clarett 8Pre has NO bring-up blob in the driver (it needs an 8Pre capture), so it gets no "
-        "routing/mixer sections at all — same gap as its in-kernel routing controls.",
+        "The Clarett 8Pre is the exception to the note above, in both directions. It has no capture at "
+        "all, so its band-0 table is CONSTRUCTED (driver/clarett_mux_8pre.h, emitted by this script and "
+        "pushed by the driver once the model is detected): the capture half is the 4Pre's, whose input "
+        "geometry is identical, and the output half is authored. Its source list is therefore not "
+        "table-derived either — it is the hardware's full inventory from the XML, which is what the "
+        "other models' lists should eventually become. Its meter peak-index values are PREDICTED from "
+        "the packing rule, not measured. NOTHING here has run against 8Pre hardware.",
         "output-group-sources / output-link are not emitted: those drive the Scarlett 4th gen's output "
         "group controls, which this line does not appear to have.",
         "Add output mute once its offset is captured (omitted; see the devmap _todo).",
@@ -371,9 +490,11 @@ for slug, spec in MODELS.items():
         "Firmware Version reads the versionStageRelease PLACEHOLDER offset, so its displayed value is "
         "meaningless — it exists because fcp-server needs the control for its socket-path TLV + lock "
         "handshake. Point it at the real firmware-version location once that is found in the appspace.",
-        "Mode enums are byte-identity (index==device byte 0=Mic/1=Line/2=Inst) because fcp-server stores the "
-        "enum index directly. The combo-jack models (2Pre/4Pre/8Pre) hide Mic in-kernel (auto-detected by the "
-        "jack); it is exposed here to keep Line/Inst byte-correct. Confirm behaviour of selecting Mic on those.",
+        "Mode: the device byte is 0=Mic/1=Line/2=Inst line-wide, but only the 8PreX (separate XLR + 1/4\" "
+        "jacks) can select Mic in software. The combo-jack models (2Pre/4Pre/8Pre) auto-select Mic from the "
+        "jack, so their enum is Line/Inst carrying explicit values 1/2 — which REQUIRES the fcp-server patch "
+        "accepting {name, value} entries in input-controls; on an unpatched server the names parse as an "
+        "index-valued enum and Line/Inst would write 0/1.",
     ]
     alsamap["input-controls"] = input_controls
     # The Scarlett 4th gen (fcp-alsa-map-821d) stores volume as a signed dB byte, so its map can say
@@ -411,3 +532,39 @@ for slug, spec in MODELS.items():
 
     print(f"{slug}: {na} air, {sum(1 for m in modes.values() if m)} mode "
           f"({sorted(used_modes)}), {nout} outputs (shape [{out_shape}])")
+
+
+# --- driver header for the constructed 8Pre table ------------------------------------------------
+# Written from the same function the 8Pre's map is generated from, so the table the driver pushes and
+# the destinations the map claims cannot drift apart. The other models need no such header: their
+# driver-side table is the captured bring-up blob in clarett_init_<model>.h.
+def emit_mux_header():
+    pairs = synth_band0_8pre()
+    lines = [
+        "/* SPDX-License-Identifier: GPL-2.0-or-later */",
+        "/*",
+        " * Clarett 8Pre band-0 router table — GENERATED by tools/gen_fcp_maps.py, do not edit.",
+        " *",
+        " * Unlike clarett_init_<model>.h this is NOT a capture: no 8Pre boot has been traced. The",
+        " * capture half is the 4Pre's captured table (identical input geometry); the output half is",
+        " * authored, and every mixer input is present but unrouted. See synth_band0_8pre() for the",
+        " * full provenance. Pins and their names are [XML], cross-checked against all three captured",
+        " * models, where the XML's output pin list exactly matched the live band-0 destinations.",
+        " *",
+        f" * {len(pairs)} entries = 30 mixer inputs + 20 physical outputs + 20 capture channels: one per",
+        " * destination, which is how every captured table is built.",
+        " */",
+        "",
+        "static const struct clarett_mux_entry clarett_mux_band0_8pre[] = {",
+    ]
+    for i in range(0, len(pairs), 4):
+        row = "".join("{ 0x%03x, 0x%03x }, " % p for p in pairs[i:i + 4]).rstrip()
+        lines.append("\t" + row)
+    lines += ["};", ""]
+
+    with open(os.path.join(DRIVERDIR, "clarett_mux_8pre.h"), "w") as f:
+        f.write("\n".join(lines))
+    print(f"clarett-8pre: emitted driver/clarett_mux_8pre.h ({len(pairs)} entries)")
+
+
+emit_mux_header()
