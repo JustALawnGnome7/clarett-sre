@@ -5,7 +5,7 @@
   "_todo": [
     "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
     "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",
-    "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server sends it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without it the write stages but does not manifest. muteSwitch is active-low in-kernel; fcp-server has no invert flag, so mute may behave inverted until handled.",
+    "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server sends it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without it the write stages but does not manifest. muteSwitch is active-low (device byte 1 = unmuted), handled in the alsa-map with invert/invert-base 1.",
     "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
     "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic artifact of the layout, to be fixed with the real devmap.",
     "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
@@ -28,7 +28,7 @@
           "type": "bool",
           "notify-device": 2,
           "notify-client": 1,
-          "_note": "monitor mute; activate 2. NOTE: inverted in-kernel (device byte is active-low) \u2014 fcp-server has no invert flag, so this control may read/write inverted until handled"
+          "_note": "monitor mute @ 24; activate 2. Active-low: the device byte is 1 when UNMUTED, so the alsa-map marks it invert/invert-base 1 (needs the Stage-2 fcp-server patch)"
         },
         "dimSwitch": {
           "offset": 28,
