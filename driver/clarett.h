@@ -465,7 +465,7 @@ struct clarett {
 	bool hwdep_ready;			/* dwork INIT'd: gates cancel (probe-error paths never got here) */
 	struct snd_kcontrol *hwdep_meter_ctl;
 	s16 *hwdep_meter_map;
-	__le32 *hwdep_meter_levels;
+	__le16 *hwdep_meter_levels;
 	int hwdep_meter_channels;	/* map_size: channels the control exposes */
 	int hwdep_n_meter_slots;	/* device raw meter count */
 	unsigned int *hwdep_meter_labels_tlv;
