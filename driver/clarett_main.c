@@ -359,6 +359,8 @@ static void clarett_hw_init(struct clarett *c)
 #include "clarett_init_2pre.h"
 /* clarett_init_blob_4pre[] / clarett_init_seq_4pre[] (fcp_decode.py --emit-init --init-model 4pre). */
 #include "clarett_init_4pre.h"
+/* clarett_mux_band0_8pre[]: constructed, not captured — the 8Pre has no traced boot. */
+#include "clarett_mux_8pre.h"
 
 /*
  * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
@@ -390,13 +392,52 @@ static void clarett_hw_init(struct clarett *c)
  * runtime routing or mixer edit issues, so this is an ordinary operation on an armed session —
  * unlike a full re-init, which is documented to wedge GET_DATA on an already-armed device.
  */
+/*
+ * Push a model's band-0 router table for a model with no captured bring-up blob. Same command a
+ * runtime routing edit issues: SET_MUX{u32 band, u32 entry[]}, entry = (src << 12) | dst, one per
+ * destination. Without it the device keeps the arming model's routing, whose destination pins are
+ * the wrong ones for this hardware, and fcp-server then declines to create any routing control.
+ */
+static int clarett_push_mux_band0(struct clarett *c)
+{
+	const struct clarett_model *m = c->model;
+	size_t len = 4 + (size_t)m->n_mux_band0 * 4;
+	u8 *buf;
+	int i, err;
+
+	if (WARN_ON(len > CLARETT_MBOX_DATA_MAX))
+		return -EINVAL;
+
+	buf = kzalloc(len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	clarett_put_le32(buf, 0);		/* band 0 */
+	for (i = 0; i < m->n_mux_band0; i++)
+		clarett_put_le32(buf + 4 + i * 4,
+				 (u32)m->mux_band0[i].src << 12 | m->mux_band0[i].dst);
+
+	err = clarett_fcp(c, FCP_SET_MUX, buf, len);
+	kfree(buf);
+
+	dev_info(&c->pci->dev, "%s: pushed constructed band-0 routing (%d entries) -> %d\n",
+		 m->name, m->n_mux_band0, err);
+	return err;
+}
+
 static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with)
 {
 	const struct clarett_model *m = c->model;
 	int i, sent = 0, fails = 0;
 
-	if (m == armed_with || !m->init_blob)	/* right tables already, or no blob (8Pre) */
+	if (m == armed_with)			/* right tables already */
 		return;
+
+	if (!m->init_blob) {			/* no capture for this model (8Pre) */
+		if (m->mux_band0)
+			clarett_push_mux_band0(c);
+		return;
+	}
 
 	for (i = 0; i < m->n_init_steps; i++) {
 		const struct clarett_init_step *s = &m->init_seq[i];
@@ -1295,7 +1336,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
-	const struct clarett_model *forced;
+	const struct clarett_model *forced, *armed_with;
 	void __iomem *bar0;
 	int err, seeded;
 
@@ -1370,16 +1411,27 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	clarett_hw_init(c);
 
-	/* Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
-	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled. */
+	/*
+	 * Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
+	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled.
+	 *
+	 * The bring-up is model-agnostic, which matters for a model with no captured blob of its
+	 * own (the 8Pre): arm as the id_table default, then hand the routing back below. Without
+	 * this, model=8pre would replay an empty sequence and arm nothing at all.
+	 */
+	armed_with = c->model;
+	if (!armed_with->init_blob) {
+		armed_with = (const struct clarett_model *)ent->driver_data;
+		c->model = armed_with;
+	}
 	clarett_arm_device(c);
+	c->model = forced ? forced : armed_with;
 
-	/* The armed device can say who it is; everything model-dependent (mixer, PCM geometry,
-	 * card names) comes after this point. Must precede the meter heartbeat: detection parses
+	/* The armed device can say who it is; everything model-dependent (PCM geometry, card
+	 * names) comes after this point. Must precede the meter heartbeat: detection parses
 	 * resp_buf after its command returns, and the meter worker shares that buffer. */
 	if (!forced) {
 		const struct clarett_model *det = clarett_detect_model(c);
-		const struct clarett_model *armed_with = c->model;
 
 		if (det)
 			c->model = det;
@@ -1389,9 +1441,10 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 				 c->model->name);
 		dev_info(&pci->dev, "model: %s%s\n", c->model->name,
 			 det ? " (auto-detected)" : "");
-		/* The arm used armed_with's tables; give the detected model its own. */
-		clarett_apply_model_routing(c, armed_with);
 	}
+
+	/* The arm used armed_with's tables; give the selected model its own. */
+	clarett_apply_model_routing(c, armed_with);
 
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
 	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the
@@ -1781,7 +1834,13 @@ static const struct clarett_model clarett_8pre = {
 	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
 	.stream_frag = 0,
-	/* no .init_blob / .stream_*_ids: requires an 8Pre capture — see the comment above. */
+	/*
+	 * No .init_blob / .stream_*_ids: those need an 8Pre capture. The routing table does not —
+	 * it is constructed (clarett_mux_8pre.h) and pushed once detection has identified the
+	 * device, which is what lets fcp-server build this model's routing and mixer controls.
+	 */
+	.mux_band0 = clarett_mux_band0_8pre,
+	.n_mux_band0 = ARRAY_SIZE(clarett_mux_band0_8pre),
 };
 
 static const struct pci_device_id clarett_ids[] = {

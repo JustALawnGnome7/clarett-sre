@@ -268,6 +268,20 @@ struct clarett_init_step {
 };
 
 /*
+ * One router patch: this destination pin is fed from this source pin (src 0 = unrouted). A model's
+ * band-0 table names every destination it has exactly once — confirmed on all three captured models,
+ * where the entry count is exactly (30 mixer inputs + physical outputs + capture channels).
+ *
+ * Used for a model with no captured bring-up blob: the arm necessarily replays another model's
+ * routing (see clarett_apply_model_routing), and fcp-server refuses to create ANY routing control
+ * unless every destination in its map is present in the device's live table.
+ */
+struct clarett_mux_entry {
+	u16 src;
+	u16 dst;
+};
+
+/*
  * Per-model descriptor (multi-model support). One const instance per supported
  * Clarett Thunderbolt variant, selected at probe and pinned as clarett.model.
  * Every value that differs between variants lives here; the mailbox/engine/mixer
@@ -344,6 +358,10 @@ struct clarett_model {
 	const u8 *init_blob;
 	const struct clarett_init_step *init_seq;
 	int n_init_steps;
+
+	/* Band-0 router patch for a model with no init_blob (tools/gen_fcp_maps.py --emit-mux). */
+	const struct clarett_mux_entry *mux_band0;
+	int n_mux_band0;
 };
 
 /*

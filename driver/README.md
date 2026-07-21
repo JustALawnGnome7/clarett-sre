@@ -122,11 +122,24 @@ the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-o
 six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the
 bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
 
-The **8Pre** (distinct from the 8PreX) is **control-plane only** — built from the XML, but with no
-8Pre capture available it has no bring-up replay or stream ids, so it registers its mixer but will
-not arm config access or stream PCM until an 8Pre boot is captured. It uses combo XLR/TRS jacks (Mic
-is auto-detected by the jack, so the software mode is Line/Inst only, on inputs 1-2; 3-8 are air-only),
-unlike the 8PreX's separate ports; outputs match the 8PreX (10 gains).
+The **8Pre** (distinct from the 8PreX) is the one model **no capture exists for**, and nothing about
+it has run against the hardware. It is built from the XML: combo XLR/TRS jacks (Mic is auto-detected
+by the jack, so the software mode is Line/Inst only, on inputs 1-2; 3-8 are air-only) unlike the
+8PreX's separate ports, outputs matching the 8PreX (10 gains), and `(20, 20)` streams for detection.
+
+It has no bring-up replay and no stream ids — both need an 8Pre boot capture — but it does **not**
+need them to be usable, because the bring-up is model-agnostic: it arms on whichever model's blob
+the probe replayed. What it does need is its own **routing table**, since the arm otherwise leaves it
+holding the 2Pre's, whose destination pins are the wrong ones (fcp-server then refuses to create any
+routing control at all). So the driver pushes a constructed band-0 table once detection identifies
+the device — `clarett_mux_8pre.h`, emitted by `tools/gen_fcp_maps.py` alongside the matching device
+map, its capture half taken from the 4Pre's captured table (identical input geometry) and its output
+half authored. Nothing is fed into the mixer, so the device starts silent.
+
+Its meter `peak-index` values are likewise **predicted** from the measured packing rule rather than
+measured. First contact with real hardware should check both: that `MUX_READ` reads the table back
+as pushed, and that one excited input at a time lights the predicted meter slot
+(`tools/fcp_meter_watch.c`).
 
 There is no auto-detect of any kind. The model name *does* live in the Thunderbolt
 DROM, but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3
@@ -166,9 +179,9 @@ Never load this while the VM is using the device.
 - **Routing and mixer-gain writes are not hardware-verified.** They now live in the device maps
   (`../fcp-server-data/`) rather than in-kernel: `fcp-server` creates the patchbay enums and the
   mixer matrix, and reads decode correctly against the device's own tables (`PCM 01 Capture Enum`
-  reads `Analogue 1` for the table's `400 600`), but no write has been exercised. Also pending: the
-  source list is only the pins the factory-default matrix routes, not the device's full source
-  inventory, and the 8Pre has no bring-up blob so it gets no routing at all.
+  reads `Analogue 1` for the table's `400 600`), but no write has been exercised. Also pending: for
+  the three captured models the source list is only the pins the factory-default matrix routes, not
+  the device's full source inventory (the 8Pre, whose map is not table-derived, lists all of them).
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
   DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass at the
   **same off-wire/below-driver wall** as the control plane (`../spec/clarett-data-plane.md`).
