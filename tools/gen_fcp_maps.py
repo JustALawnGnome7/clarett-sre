@@ -108,7 +108,14 @@ for slug, spec in MODELS.items():
     ]
     devmap["structs"] = OD(APP_SPACE=OD(members=members))
     devmap["device-specification"] = OD([("physical-inputs", phys_in), ("physical-outputs", phys_out)])
-    devmap["enums"] = OD()
+    # REQUIRED, not decoration: fcp-server's create_global_control() hard-fails (-1) if
+    # enums.eDEV_FCP_USER_MESSAGE_TYPE.enumerators is absent, so an empty "enums" silently kills
+    # EVERY global control (mute, dim, Firmware Version). Only eMSG_FLASH_CTRL is read from it: it
+    # supplies the notify-device activate for `save: true` controls == our DATA_CMD persist (5).
+    devmap["enums"] = OD([
+        ("eDEV_FCP_USER_MESSAGE_TYPE",
+         OD(enumerators=OD([("eMSG_FLASH_CTRL", 5)]))),
+    ])
 
     with open(f"{OUTDIR}/fcp-devmap-{slug}.json", "w") as f:
         json.dump(devmap, f, indent=2)
@@ -138,17 +145,36 @@ for slug, spec in MODELS.items():
         "Add output mute once its offset is captured (omitted; see the devmap _todo).",
         "Add global masterVolume + firmware-version once backing members/offsets are confirmed (masterVolume "
         "overlaps output 0/1 at 32/33, so it is left out of this slice to avoid double-driving one offset).",
+        "Output level uses \"invert\": true, which REQUIRES the Stage-2 fcp-server patch (value_invert in "
+        "struct control_props; device = invert-base - alsa). The device stores unsigned attenuation "
+        "(0 = unity, 127 = -127 dB) where the Scarlett 4th gen stores signed dB. On an unpatched "
+        "fcp-server the key is ignored, every reading lands outside [-127, 0], and the resulting "
+        "snd_ctl_elem_write EINVAL repeats on every notification refresh.",
+        "Firmware Version reads the versionStageRelease PLACEHOLDER offset, so its displayed value is "
+        "meaningless — it exists because fcp-server needs the control for its socket-path TLV + lock "
+        "handshake. Point it at the real firmware-version location once that is found in the appspace.",
         "Mode enums are byte-identity (index==device byte 0=Mic/1=Line/2=Inst) because fcp-server stores the "
         "enum index directly. The combo-jack models (2Pre/4Pre/8Pre) hide Mic in-kernel (auto-detected by the "
         "jack); it is exposed here to keep Line/Inst byte-correct. Confirm behaviour of selecting Mic on those.",
     ]
     alsamap["input-controls"] = input_controls
-    alsamap["output-controls"] = OD(level=OD(name="Line %d Playback Volume", type="int",
-                                             min=-127, max=0))
-    alsamap["output-controls"]["level"]["db-min"] = -127
-    alsamap["output-controls"]["level"]["db-max"] = 0
+    # The Scarlett 4th gen (fcp-alsa-map-821d) stores volume as a signed dB byte, so its map can say
+    # min=-127/max=0 directly. The Clarett stores an UNSIGNED ATTENUATION MAGNITUDE (0 = unity,
+    # 127 = -127 dB), which runs backwards. "invert" (our Stage-2 fcp-server patch) maps
+    # device = invert-base - alsa, base 0 — so the ALSA side keeps the natural ascending dB range
+    # and a valid DB_MINMAX TLV, and alsamixer behaves like every other volume control.
+    alsamap["output-controls"] = OD(level=OD([("name", "Line %d Playback Volume"), ("type", "int"),
+                                              ("min", -127), ("max", 0),
+                                              ("db-min", -127), ("db-max", 0),
+                                              ("invert", True)]))
     alsamap["output-link"] = []
     alsamap["global-controls"] = OD([
+        # Infrastructure, not cosmetics: fcp-server writes its socket path into this control's TLV
+        # and locks it, and that lock+SCKT TLV is how clients discover a running server. Without it
+        # startup logs "Cannot write socket path TLV"/"Cannot lock control element" and no client
+        # can connect. Keyed on the backing member; interface/name are what fcp-socket looks up.
+        ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
+                                    ("access", "readonly"), ("type", "int")])),
         ("muteSwitch", OD(name="Mute Playback Switch", type="bool")),
         ("dimSwitch",  OD(name="Dim Playback Switch",  type="bool")),
     ])

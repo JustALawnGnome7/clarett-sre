@@ -5,6 +5,8 @@
     "Add S/PDIF, ADAT, and the mux/mix routing sections (sources/sinks/output-group-sources) once the device's MUX/MIX capability + offsets are confirmed on the bench.",
     "Add output mute once its offset is captured (omitted; see the devmap _todo).",
     "Add global masterVolume + firmware-version once backing members/offsets are confirmed (masterVolume overlaps output 0/1 at 32/33, so it is left out of this slice to avoid double-driving one offset).",
+    "Output level uses \"invert\": true, which REQUIRES the Stage-2 fcp-server patch (value_invert in struct control_props; device = invert-base - alsa). The device stores unsigned attenuation (0 = unity, 127 = -127 dB) where the Scarlett 4th gen stores signed dB. On an unpatched fcp-server the key is ignored, every reading lands outside [-127, 0], and the resulting snd_ctl_elem_write EINVAL repeats on every notification refresh.",
+    "Firmware Version reads the versionStageRelease PLACEHOLDER offset, so its displayed value is meaningless \u2014 it exists because fcp-server needs the control for its socket-path TLV + lock handshake. Point it at the real firmware-version location once that is found in the appspace.",
     "Mode enums are byte-identity (index==device byte 0=Mic/1=Line/2=Inst) because fcp-server stores the enum index directly. The combo-jack models (2Pre/4Pre/8Pre) hide Mic in-kernel (auto-detected by the jack); it is exposed here to keep Line/Inst byte-correct. Confirm behaviour of selecting Mic on those."
   ],
   "input-controls": {
@@ -29,11 +31,18 @@
       "min": -127,
       "max": 0,
       "db-min": -127,
-      "db-max": 0
+      "db-max": 0,
+      "invert": true
     }
   },
   "output-link": [],
   "global-controls": {
+    "versionStageRelease": {
+      "name": "Firmware Version",
+      "interface": "card",
+      "access": "readonly",
+      "type": "int"
+    },
     "muteSwitch": {
       "name": "Mute Playback Switch",
       "type": "bool"
