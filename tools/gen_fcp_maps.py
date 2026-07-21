@@ -122,7 +122,7 @@ METER_SLOTS = {
     # THE RULE, measured: slots are packed PER MODEL in category order — analogue inputs fill
     # 0..n-1, then S/PDIF, then ADAT. The 2Pre is now mapped end to end and confirms it exactly:
     # analogue 0-1, S/PDIF 2-3, ADAT 4-11. The 4Pre's S/PDIF at 8/9 (after its 8 analogue) is the
-    # same rule, so its ADAT should sit at 10-17 — predicted, not yet measured.
+    # same rule, and its ADAT was then measured at exactly the predicted 10-17.
     #
     # METER_INFO answers 00 02 0c 00 on BOTH models. The 12 is exactly the 2Pre's input count
     # (2+2+8) but not the 4Pre's (8+2+8 = 18), so a single per-model count it is not. Reading the
@@ -141,12 +141,19 @@ METER_SLOTS = {
         # pin: (slot, provenance)
         0x400: (0,  "measured"), 0x401: (1,  "measured"),
         0x402: (2,  "measured"), 0x403: (3,  "measured"),
-        # Bracketed rather than free guesses: analogue 1-4 are measured at 0-3 and S/PDIF at 8-9,
-        # so on an 8-analogue-input device the four slots between can only be analogue 5-8.
-        0x404: (4,  "bracketed"), 0x405: (5,  "bracketed"),
-        0x406: (6,  "bracketed"), 0x407: (7,  "bracketed"),
-        # Measured: optical S/PDIF into the 4Pre (source byte @132 = Optical) lit 8 and 9 together.
+        # Inputs 5 and 8 were excited directly (finger-tap on a line input, so only ~30 counts —
+        # under the tool's flag threshold, but they were the ONLY non-zero slots in the array).
+        # 6 and 7 are bracketed between them and cannot be anywhere else.
+        0x404: (4,  "measured-weak"), 0x405: (5,  "bracketed"),
+        0x406: (6,  "bracketed"),     0x407: (7,  "measured-weak"),
+        # Optical S/PDIF into the 4Pre (source byte @132 = Optical) lit 8 and 9 together.
         0x408: (8,  "measured"), 0x409: (9,  "measured"),
+        # ADAT via the optical port (S/PDIF source back to RCA) lit 10-17 — exactly what the
+        # packing rule predicted from the analogue and S/PDIF placements.
+        0x200: (10, "measured"), 0x201: (11, "measured"),
+        0x202: (12, "measured"), 0x203: (13, "measured"),
+        0x204: (14, "measured"), 0x205: (15, "measured"),
+        0x206: (16, "measured"), 0x207: (17, "measured"),
     },
 }
 # NO destination peak-index. fcp-server rejects any index >= the count the device reports from
