@@ -119,17 +119,23 @@ METER_SLOTS = {
     # are 0x400/0x402 (0x401 skipped) and S/PDIF is at 0x186/0x187, yet the slots are 0..3 — meter
     # slots are a COMPACT CHANNEL INDEX, unrelated to pin numbering.
     #
-    # THE RULE, now measured on two models: slots are packed PER MODEL in category order — analogue
-    # inputs fill 0..n-1, then S/PDIF. The 2Pre puts S/PDIF at 2/3 (after 2 analogue), the 4Pre at
-    # 8/9 (after 8). ADAT is expected to follow S/PDIF but is unmeasured on both.
+    # THE RULE, measured: slots are packed PER MODEL in category order — analogue inputs fill
+    # 0..n-1, then S/PDIF, then ADAT. The 2Pre is now mapped end to end and confirms it exactly:
+    # analogue 0-1, S/PDIF 2-3, ADAT 4-11. The 4Pre's S/PDIF at 8/9 (after its 8 analogue) is the
+    # same rule, so its ADAT should sit at 10-17 — predicted, not yet measured.
     #
-    # METER_INFO answers 00 02 0c 00 on BOTH models, so the 12 in it is a family constant, not a
-    # per-model channel count (it happens to equal the 2Pre's 2+2+8 input total, and does not match
-    # the 4Pre's 18). fcp-server uses it as the bound on peak-index, which is why the 4Pre's ADAT
-    # slots (10-17) are unreachable while the 2Pre's predicted 4-11 would fit.
+    # METER_INFO answers 00 02 0c 00 on BOTH models. The 12 is exactly the 2Pre's input count
+    # (2+2+8) but not the 4Pre's (8+2+8 = 18), so a single per-model count it is not. Reading the
+    # bytes as {?, 2, 12} suggests 2 x 12 = 24 total slots, which would cover both — untested, and
+    # it matters: fcp-server bounds peak-index by this value, so if the real bound is 24 rather
+    # than 12 the 4Pre's ADAT becomes reachable too.
     "clarett-2pre": {
         0x400: (0, "measured"), 0x402: (1, "measured"),
-        0x186: (2, "measured"), 0x187: (3, "measured"),   # S/PDIF in (optical), measured
+        0x186: (2, "measured"), 0x187: (3, "measured"),   # S/PDIF in (optical)
+        0x200: (4,  "measured"), 0x201: (5,  "measured"),  # ADAT 1-8, fed from an optical source
+        0x202: (6,  "measured"), 0x203: (7,  "measured"),
+        0x204: (8,  "measured"), 0x205: (9,  "measured"),
+        0x206: (10, "measured"), 0x207: (11, "measured"),
     },
     "clarett-4pre": {
         # pin: (slot, provenance)

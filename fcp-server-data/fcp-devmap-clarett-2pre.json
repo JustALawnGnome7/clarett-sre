@@ -153,35 +153,51 @@
       },
       {
         "name": "ADAT 1",
-        "router-pin": "512"
+        "router-pin": "512",
+        "peak-index": 4,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 2",
-        "router-pin": "513"
+        "router-pin": "513",
+        "peak-index": 5,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 3",
-        "router-pin": "514"
+        "router-pin": "514",
+        "peak-index": 6,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 4",
-        "router-pin": "515"
+        "router-pin": "515",
+        "peak-index": 7,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 5",
-        "router-pin": "516"
+        "router-pin": "516",
+        "peak-index": 8,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 6",
-        "router-pin": "517"
+        "router-pin": "517",
+        "peak-index": 9,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 7",
-        "router-pin": "518"
+        "router-pin": "518",
+        "peak-index": 10,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 8",
-        "router-pin": "519"
+        "router-pin": "519",
+        "peak-index": 11,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Mix A",
