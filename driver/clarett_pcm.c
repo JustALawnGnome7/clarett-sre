@@ -28,6 +28,19 @@
 #include "clarett.h"
 
 /*
+ * Replay the vendor's pre-arm re-init batch in the stream handshake (see clarett_stream_handshake).
+ * TESTED ON A 4Pre AND IT CHANGES NOTHING: the device accepts every command (err=0) but the engine
+ * still raises one period event with ctr=0. Default OFF because it overlaps the probe-time bring-up
+ * that is documented to wedge GET_DATA when re-run on an armed device, and it has no demonstrated
+ * benefit to weigh against that. Kept as a lever for retesting on other models.
+ */
+static bool stream_batch;
+module_param(stream_batch, bool, 0644);
+MODULE_PARM_DESC(stream_batch,
+		 "Replay the vendor's pre-arm re-init batch (INIT_2, subsystem enables 1-8, count "
+		 "queries, 0x004001 x6) before arming the stream engine (default off; no effect on a 4Pre).");
+
+/*
  * Per-ring geometry is derived per-model at runtime (clarett.h: clarett_pcm_rx_samples() &c.). The ALSA
  * buffer is pinned to exactly the RX sample-area size so the RX ring and the ALSA ring share one geometry
  * (CLARETT_STREAM_NDESC descriptors, 1:1 byte offsets) — the per-period copy is then a straight offset copy
@@ -168,7 +181,7 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 {
 	const struct clarett_model *m = c->model;
 	u8 clk[8], id[2];
-	int e_clk, e_en1, e_en2, e_commit, pushes = 0, push_err = 0, i;
+	int e_clk, e_en1, e_en2, e_commit, pushes = 0, push_err = 0, batch_err = 0, i;
 
 	if (!rate)
 		rate = CLARETT_DEFAULT_RATE;
@@ -195,6 +208,33 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	}
 
 	/*
+	 * The vendor's pre-arm RE-INIT batch (4pre_boot_to_stream_end.log @21:58:18.5). Our engine
+	 * state at arm is byte-identical to the vendor's — its failing arms read 0x218=0xe
+	 * 0x21c=0xd->0xe 0x318=0x3 0x31c=0x3 and so do we — and it arms and stalls exactly as we do
+	 * four times over. What it does differently is issue this batch, then re-arm once, after
+	 * which the 0x300 counter advances. The commands look like a subset of probe-time bring-up
+	 * (subsystem enables + count queries), re-issued per stream start; semantics are not decoded,
+	 * so this is a verbatim replay. ids 1..8 and idx 0..5 are as observed on the 4Pre.
+	 */
+	if (stream_batch) {
+		static const u32 count_queries[] = { 0x001000, 0x002000, 0x003000, 0x004000 };
+		u8 arg[4];
+
+		clarett_fcp(c, FCP_INIT_2, NULL, 0);
+		for (i = 1; i <= 8; i++) {
+			arg[0] = i; arg[1] = 0;
+			batch_err |= clarett_fcp(c, FCP_INIT_1, arg, 2);
+		}
+		clarett_fcp(c, FCP_INIT_2, NULL, 0);
+		for (i = 0; i < (int)ARRAY_SIZE(count_queries); i++)
+			batch_err |= clarett_fcp(c, count_queries[i], NULL, 0);
+		for (i = 0; i < 6; i++) {
+			clarett_put_le32(arg, i);
+			batch_err |= clarett_fcp(c, 0x004001, arg, 4);
+		}
+	}
+
+	/*
 	 * The pre-arm triple, in the vendor's order: 0x6004, 0x6002, 0x6005 — NOT 0x6004 twice.
 	 * Every occurrence of these opcodes in 4pre_boot_to_stream_end.log is that triple (sometimes
 	 * doubled for full duplex, which is where the old "VM issues twice" note came from), and the
@@ -207,8 +247,10 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	e_commit = clarett_fcp(c, FCP_STREAM_COMMIT, NULL, 0);
 
 	dev_info(&c->pci->dev,
-		 "stream-handshake: SET_CLOCK{%u,24}=%d CONFIG_PUSH=%d(err=%d) 0x6004=%d 0x6002=%d 0x6005=%d\n",
-		 rate, e_clk, pushes, push_err, e_en1, e_en2, e_commit);
+		 "stream-handshake: SET_CLOCK{%u,24}=%d CONFIG_PUSH=%d(err=%d) batch=%s(err=%d) "
+		 "0x6004=%d 0x6002=%d 0x6005=%d\n",
+		 rate, e_clk, pushes, push_err, stream_batch ? "yes" : "off", batch_err,
+		 e_en1, e_en2, e_commit);
 }
 
 /*
