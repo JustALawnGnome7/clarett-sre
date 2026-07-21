@@ -9,7 +9,9 @@
     "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
     "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic artifact of the layout, to be fixed with the real devmap.",
     "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
-    "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0)."
+    "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0).",
+    "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob (tools/gen_fcp_maps.py parses clarett_init_<model>.h), so the router-pins are exactly what the device reports via GET_MUX after our arm. Pin meaning is DIRECTION-SCOPED and per-model: 0x408 is S/PDIF-in as a source but Monitor Out 1 as a destination, the 2Pre reaches S/PDIF input at 0x186/0x187 (where the 8PreX has S/PDIF output), and its analogue inputs are 0x400/0x402, skipping 0x401. Never copy a pin table between models.",
+    "router-pin is emitted as a DECIMAL string because fcp-server parses it with atoi(); if a device-provided devmap ever turns up using hex strings, that parse silently yields 0."
   ],
   "structs": {
     "APP_SPACE": {
@@ -265,6 +267,560 @@
             "member": "outputVolume"
           }
         }
+      }
+    ],
+    "sources": [
+      {
+        "name": "ADAT 1",
+        "router-pin": "512"
+      },
+      {
+        "name": "ADAT 2",
+        "router-pin": "513"
+      },
+      {
+        "name": "ADAT 3",
+        "router-pin": "514"
+      },
+      {
+        "name": "ADAT 4",
+        "router-pin": "515"
+      },
+      {
+        "name": "ADAT 5",
+        "router-pin": "516"
+      },
+      {
+        "name": "ADAT 6",
+        "router-pin": "517"
+      },
+      {
+        "name": "ADAT 7",
+        "router-pin": "518"
+      },
+      {
+        "name": "ADAT 8",
+        "router-pin": "519"
+      },
+      {
+        "name": "ADAT 9",
+        "router-pin": "520"
+      },
+      {
+        "name": "ADAT 10",
+        "router-pin": "521"
+      },
+      {
+        "name": "ADAT 11",
+        "router-pin": "522"
+      },
+      {
+        "name": "ADAT 12",
+        "router-pin": "523"
+      },
+      {
+        "name": "ADAT 13",
+        "router-pin": "524"
+      },
+      {
+        "name": "ADAT 14",
+        "router-pin": "525"
+      },
+      {
+        "name": "ADAT 15",
+        "router-pin": "526"
+      },
+      {
+        "name": "ADAT 16",
+        "router-pin": "527"
+      },
+      {
+        "name": "Mix C",
+        "router-pin": "770"
+      },
+      {
+        "name": "Mix D",
+        "router-pin": "771"
+      },
+      {
+        "name": "Mix E",
+        "router-pin": "772"
+      },
+      {
+        "name": "Mix F",
+        "router-pin": "773"
+      },
+      {
+        "name": "Analogue 1",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Analogue 2",
+        "router-pin": "1025"
+      },
+      {
+        "name": "Analogue 3",
+        "router-pin": "1026"
+      },
+      {
+        "name": "Analogue 4",
+        "router-pin": "1027"
+      },
+      {
+        "name": "Analogue 5",
+        "router-pin": "1028"
+      },
+      {
+        "name": "Analogue 6",
+        "router-pin": "1029"
+      },
+      {
+        "name": "Analogue 7",
+        "router-pin": "1030"
+      },
+      {
+        "name": "Analogue 8",
+        "router-pin": "1031"
+      },
+      {
+        "name": "S/PDIF 1",
+        "router-pin": "1032"
+      },
+      {
+        "name": "S/PDIF 2",
+        "router-pin": "1033"
+      },
+      {
+        "name": "PCM 1",
+        "router-pin": "1536"
+      },
+      {
+        "name": "PCM 2",
+        "router-pin": "1537"
+      },
+      {
+        "name": "PCM 5",
+        "router-pin": "1540"
+      },
+      {
+        "name": "PCM 6",
+        "router-pin": "1541"
+      },
+      {
+        "name": "PCM 11",
+        "router-pin": "1546"
+      },
+      {
+        "name": "PCM 12",
+        "router-pin": "1547"
+      },
+      {
+        "name": "PCM 21",
+        "router-pin": "1556"
+      },
+      {
+        "name": "PCM 22",
+        "router-pin": "1557"
+      },
+      {
+        "name": "PCM 23",
+        "router-pin": "1558"
+      },
+      {
+        "name": "PCM 24",
+        "router-pin": "1559"
+      },
+      {
+        "name": "PCM 25",
+        "router-pin": "1560"
+      },
+      {
+        "name": "PCM 26",
+        "router-pin": "1561"
+      },
+      {
+        "name": "PCM 27",
+        "router-pin": "1562"
+      },
+      {
+        "name": "PCM 28",
+        "router-pin": "1563"
+      }
+    ],
+    "destinations": [
+      {
+        "name": "S/PDIF Output 1",
+        "router-pin": "390"
+      },
+      {
+        "name": "S/PDIF Output 2",
+        "router-pin": "391"
+      },
+      {
+        "name": "ADAT Output 1",
+        "router-pin": "512"
+      },
+      {
+        "name": "ADAT Output 2",
+        "router-pin": "513"
+      },
+      {
+        "name": "ADAT Output 3",
+        "router-pin": "514"
+      },
+      {
+        "name": "ADAT Output 4",
+        "router-pin": "515"
+      },
+      {
+        "name": "ADAT Output 5",
+        "router-pin": "516"
+      },
+      {
+        "name": "ADAT Output 6",
+        "router-pin": "517"
+      },
+      {
+        "name": "ADAT Output 7",
+        "router-pin": "518"
+      },
+      {
+        "name": "ADAT Output 8",
+        "router-pin": "519"
+      },
+      {
+        "name": "ADAT Output 9",
+        "router-pin": "520"
+      },
+      {
+        "name": "ADAT Output 10",
+        "router-pin": "521"
+      },
+      {
+        "name": "ADAT Output 11",
+        "router-pin": "522"
+      },
+      {
+        "name": "ADAT Output 12",
+        "router-pin": "523"
+      },
+      {
+        "name": "ADAT Output 13",
+        "router-pin": "524"
+      },
+      {
+        "name": "ADAT Output 14",
+        "router-pin": "525"
+      },
+      {
+        "name": "ADAT Output 15",
+        "router-pin": "526"
+      },
+      {
+        "name": "ADAT Output 16",
+        "router-pin": "527"
+      },
+      {
+        "name": "Mixer Input 01",
+        "router-pin": "768",
+        "mixer-input-index": 0
+      },
+      {
+        "name": "Mixer Input 02",
+        "router-pin": "769",
+        "mixer-input-index": 1
+      },
+      {
+        "name": "Mixer Input 03",
+        "router-pin": "770",
+        "mixer-input-index": 2
+      },
+      {
+        "name": "Mixer Input 04",
+        "router-pin": "771",
+        "mixer-input-index": 3
+      },
+      {
+        "name": "Mixer Input 05",
+        "router-pin": "772",
+        "mixer-input-index": 4
+      },
+      {
+        "name": "Mixer Input 06",
+        "router-pin": "773",
+        "mixer-input-index": 5
+      },
+      {
+        "name": "Mixer Input 07",
+        "router-pin": "774",
+        "mixer-input-index": 6
+      },
+      {
+        "name": "Mixer Input 08",
+        "router-pin": "775",
+        "mixer-input-index": 7
+      },
+      {
+        "name": "Mixer Input 09",
+        "router-pin": "776",
+        "mixer-input-index": 8
+      },
+      {
+        "name": "Mixer Input 10",
+        "router-pin": "777",
+        "mixer-input-index": 9
+      },
+      {
+        "name": "Mixer Input 11",
+        "router-pin": "778",
+        "mixer-input-index": 10
+      },
+      {
+        "name": "Mixer Input 12",
+        "router-pin": "779",
+        "mixer-input-index": 11
+      },
+      {
+        "name": "Mixer Input 13",
+        "router-pin": "780",
+        "mixer-input-index": 12
+      },
+      {
+        "name": "Mixer Input 14",
+        "router-pin": "781",
+        "mixer-input-index": 13
+      },
+      {
+        "name": "Mixer Input 15",
+        "router-pin": "782",
+        "mixer-input-index": 14
+      },
+      {
+        "name": "Mixer Input 16",
+        "router-pin": "783",
+        "mixer-input-index": 15
+      },
+      {
+        "name": "Mixer Input 17",
+        "router-pin": "784",
+        "mixer-input-index": 16
+      },
+      {
+        "name": "Mixer Input 18",
+        "router-pin": "785",
+        "mixer-input-index": 17
+      },
+      {
+        "name": "Mixer Input 19",
+        "router-pin": "786",
+        "mixer-input-index": 18
+      },
+      {
+        "name": "Mixer Input 20",
+        "router-pin": "787",
+        "mixer-input-index": 19
+      },
+      {
+        "name": "Mixer Input 21",
+        "router-pin": "788",
+        "mixer-input-index": 20
+      },
+      {
+        "name": "Mixer Input 22",
+        "router-pin": "789",
+        "mixer-input-index": 21
+      },
+      {
+        "name": "Mixer Input 23",
+        "router-pin": "790",
+        "mixer-input-index": 22
+      },
+      {
+        "name": "Mixer Input 24",
+        "router-pin": "791",
+        "mixer-input-index": 23
+      },
+      {
+        "name": "Mixer Input 25",
+        "router-pin": "792",
+        "mixer-input-index": 24
+      },
+      {
+        "name": "Mixer Input 26",
+        "router-pin": "793",
+        "mixer-input-index": 25
+      },
+      {
+        "name": "Mixer Input 27",
+        "router-pin": "794",
+        "mixer-input-index": 26
+      },
+      {
+        "name": "Mixer Input 28",
+        "router-pin": "795",
+        "mixer-input-index": 27
+      },
+      {
+        "name": "Mixer Input 29",
+        "router-pin": "796",
+        "mixer-input-index": 28
+      },
+      {
+        "name": "Mixer Input 30",
+        "router-pin": "797",
+        "mixer-input-index": 29
+      },
+      {
+        "name": "Line Output 3",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Line Output 4",
+        "router-pin": "1025"
+      },
+      {
+        "name": "Line Output 5",
+        "router-pin": "1026"
+      },
+      {
+        "name": "Line Output 6",
+        "router-pin": "1027"
+      },
+      {
+        "name": "Line Output 7",
+        "router-pin": "1028"
+      },
+      {
+        "name": "Line Output 8",
+        "router-pin": "1029"
+      },
+      {
+        "name": "Line Output 9",
+        "router-pin": "1030"
+      },
+      {
+        "name": "Line Output 10",
+        "router-pin": "1031"
+      },
+      {
+        "name": "Monitor Output 1",
+        "router-pin": "1032"
+      },
+      {
+        "name": "Monitor Output 2",
+        "router-pin": "1033"
+      },
+      {
+        "name": "PCM 01",
+        "router-pin": "1536"
+      },
+      {
+        "name": "PCM 02",
+        "router-pin": "1537"
+      },
+      {
+        "name": "PCM 03",
+        "router-pin": "1538"
+      },
+      {
+        "name": "PCM 04",
+        "router-pin": "1539"
+      },
+      {
+        "name": "PCM 05",
+        "router-pin": "1540"
+      },
+      {
+        "name": "PCM 06",
+        "router-pin": "1541"
+      },
+      {
+        "name": "PCM 07",
+        "router-pin": "1542"
+      },
+      {
+        "name": "PCM 08",
+        "router-pin": "1543"
+      },
+      {
+        "name": "PCM 09",
+        "router-pin": "1544"
+      },
+      {
+        "name": "PCM 10",
+        "router-pin": "1545"
+      },
+      {
+        "name": "PCM 11",
+        "router-pin": "1546"
+      },
+      {
+        "name": "PCM 12",
+        "router-pin": "1547"
+      },
+      {
+        "name": "PCM 13",
+        "router-pin": "1548"
+      },
+      {
+        "name": "PCM 14",
+        "router-pin": "1549"
+      },
+      {
+        "name": "PCM 15",
+        "router-pin": "1550"
+      },
+      {
+        "name": "PCM 16",
+        "router-pin": "1551"
+      },
+      {
+        "name": "PCM 17",
+        "router-pin": "1552"
+      },
+      {
+        "name": "PCM 18",
+        "router-pin": "1553"
+      },
+      {
+        "name": "PCM 19",
+        "router-pin": "1554"
+      },
+      {
+        "name": "PCM 20",
+        "router-pin": "1555"
+      },
+      {
+        "name": "PCM 21",
+        "router-pin": "1556"
+      },
+      {
+        "name": "PCM 22",
+        "router-pin": "1557"
+      },
+      {
+        "name": "PCM 23",
+        "router-pin": "1558"
+      },
+      {
+        "name": "PCM 24",
+        "router-pin": "1559"
+      },
+      {
+        "name": "PCM 25",
+        "router-pin": "1560"
+      },
+      {
+        "name": "PCM 26",
+        "router-pin": "1561"
+      },
+      {
+        "name": "PCM 27",
+        "router-pin": "1562"
+      },
+      {
+        "name": "PCM 28",
+        "router-pin": "1563"
       }
     ]
   },

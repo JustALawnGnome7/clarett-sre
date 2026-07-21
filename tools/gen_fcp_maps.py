@@ -7,24 +7,108 @@ fcp-server stores an enum's INDEX as the device byte (no value map), so mode enu
 lists starting at Mic (index 0) — the combo-jack models hide Mic in-kernel, but exposing it here keeps
 Line=1/Inst=2 byte-correct.
 """
-import json, collections
+import json, collections, re
 
 import os
-OUTDIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fcp-server-data")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTDIR = os.path.join(ROOT, "fcp-server-data")
+DRIVERDIR = os.path.join(ROOT, "driver")
 OD = collections.OrderedDict
+
+FCP_SET_MUX = 0x003002
+
+
+def load_init_blob(key):
+    """Parse driver/clarett_init_<key>.h back into (blob bytes, [(opcode, off, len)])."""
+    text = open(os.path.join(DRIVERDIR, f"clarett_init_{key}.h")).read()
+
+    m = re.search(r"clarett_init_blob_%s\[\]\s*=\s*\{(.*?)\};" % key, text, re.S)
+    blob = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{2})", m.group(1)))
+
+    m = re.search(r"clarett_init_seq_%s\[\]\s*=\s*\{(.*?)\};" % key, text, re.S)
+    steps = [(int(op, 16), int(off), int(ln)) for op, off, ln in
+             re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}", m.group(1))]
+    return blob, steps
+
+
+def band0_mux(key):
+    """The model's band-0 routing table as [(src_pin, dst_pin)], padding entries dropped.
+
+    Mirrors clarett_band0_mux() in the driver: SET_MUX payload is {u32 header, u32 entry[]} with
+    header = band << 16, and each entry = (src_pin << 12) | dst_pin. entry == 0 is zero padding
+    (dst 0 is not a valid pin); src == 0 with a real dst means a present-but-unrouted destination.
+    """
+    blob, steps = load_init_blob(key)
+    for opcode, off, ln in steps:
+        if opcode != FCP_SET_MUX or ln < 4:
+            continue
+        if int.from_bytes(blob[off:off + 4], "little") >> 16 != 0:
+            continue
+        data = blob[off + 4:off + ln]
+        entries = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+        return [((e >> 12) & 0xfff, e & 0xfff) for e in entries if e]
+    return []
+
+
+# Pin naming is DIRECTION-SCOPED and PER-MODEL — the same number means different things as a source
+# vs a destination (0x408 = S/PDIF in as a source, Monitor Out 1 as a destination), and the smaller
+# models remap (the 2Pre reaches S/PDIF *input* at 0x186/0x187 where the 8PreX has S/PDIF *output*,
+# and its two analogue inputs are 0x400/0x402, skipping 0x401). So names are derived from the pins
+# the model actually presents, by position within each group, never by a fixed table.
+def name_destinations(dsts):
+    """dst pin -> (name, mixer_input_index or None), for the pins this model routes to."""
+    out = OD()
+    analogue = sorted(p for p in dsts if 0x400 <= p <= 0x409)
+    # 8PreX-style: 0x408/0x409 are the monitor pair and the 0x400 block starts at Line Output 3.
+    monitor_pair = 0x408 in dsts
+    for pin in sorted(dsts):
+        if 0x186 <= pin <= 0x187:
+            out[pin] = (f"S/PDIF Output {pin - 0x186 + 1}", None)
+        elif 0x200 <= pin <= 0x20f:
+            out[pin] = (f"ADAT Output {pin - 0x200 + 1}", None)
+        elif 0x300 <= pin <= 0x31f:
+            out[pin] = (f"Mixer Input {pin - 0x300 + 1:02d}", pin - 0x300)
+        elif pin in (0x408, 0x409):
+            out[pin] = (f"Monitor Output {pin - 0x408 + 1}", None)
+        elif 0x400 <= pin <= 0x407:
+            n = analogue.index(pin) + (3 if monitor_pair else 1)
+            out[pin] = (f"Line Output {n}", None)
+        elif 0x600 <= pin <= 0x61f:
+            out[pin] = (f"PCM {pin - 0x600 + 1:02d}", None)
+    return out
+
+
+def name_sources(srcs):
+    """src pin -> name. Pin 0 ("Off") is excluded: fcp-server rejects a router-pin <= 0."""
+    out = OD()
+    analogue = sorted(p for p in srcs if 0x400 <= p <= 0x407)
+    for pin in sorted(p for p in srcs if p):
+        if 0x186 <= pin <= 0x187:
+            out[pin] = f"S/PDIF {pin - 0x186 + 1}"
+        elif 0x200 <= pin <= 0x20f:
+            out[pin] = f"ADAT {pin - 0x200 + 1}"
+        elif 0x300 <= pin <= 0x30f:
+            out[pin] = f"Mix {chr(ord('A') + pin - 0x300)}"
+        elif pin in (0x408, 0x409):
+            out[pin] = f"S/PDIF {pin - 0x408 + 1}"
+        elif 0x400 <= pin <= 0x407:
+            out[pin] = f"Analogue {analogue.index(pin) + 1}"
+        elif 0x600 <= pin <= 0x61f:
+            out[pin] = f"PCM {pin - 0x600 + 1}"
+    return out
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum ("mli3" | "ml2" | None)
 MODELS = {
-    "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level",
+    "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
                           n_analogue=2, outputs=4,
                           modes={0: "mli3", 1: "mli3"}),
-    "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level",
+    "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="4pre",
                           n_analogue=4, outputs=6,
                           modes={0: "mli3", 1: "mli3"}),
-    "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level",
+    "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level", init=None,
                           n_analogue=8, outputs=10,
                           modes={0: "mli3", 1: "mli3"}),
-    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Mode",
+    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Mode", init="8prex",
                           n_analogue=8, outputs=10,
                           modes={0: "mli3", 1: "mli3",
                                  2: "ml2", 3: "ml2", 4: "ml2",
@@ -76,6 +160,32 @@ for slug, spec in MODELS.items():
         phys_out.append(OD(name=f"Output {n+1}",
                            controls=OD(level=OD(index=out_index(n), member="outputVolume"))))
 
+    # ---- routing / mixer tables, recovered from the model's own bring-up blob ----
+    # The band-0 SET_MUX the driver replays at arm IS the device's live routing table, so the pins it
+    # names are exactly the ones GET_MUX will report back — which matters because fcp-server aborts
+    # ALL mux controls if a devmap destination's router-pin is absent from the live table.
+    # router-pin is a STRING parsed with atoi(), i.e. decimal (fcp-server's error message prints it
+    # as 0x%s, which is misleading — a device-provided devmap may well use another convention).
+    dev_sources, dev_dests, alsa_sources, alsa_sinks = [], [], [], []
+    if spec["init"]:
+        pairs = band0_mux(spec["init"])
+        src_names = name_sources({s for s, _ in pairs})
+        dst_names = name_destinations({d for _, d in pairs})
+        assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"
+        assert len(set(n for n, _ in dst_names.values())) == len(dst_names), f"{slug}: dup sink name"
+
+        for pin, nm in src_names.items():
+            dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
+            alsa_sources.append(OD([("device_name", nm), ("alsa_name", nm)]))
+        for pin, (nm, mix_idx) in dst_names.items():
+            entry = OD([("name", nm), ("router-pin", str(pin))])
+            if mix_idx is not None:
+                # Marks this destination as a mixer input; fcp-server addresses the SET_MIX matrix
+                # as mix_output * mix_input_count + mixer-input-index (dims come from MIX_INFO).
+                entry["mixer-input-index"] = mix_idx
+            dev_dests.append(entry)
+            alsa_sinks.append(OD([("device_name", nm), ("alsa_name", nm)]))
+
     devmap = OD()
     devmap["_note"] = (f"DRAFT — hand-authored device-map for the {spec['name']} (Thunderbolt), paired with "
                        f"fcp-alsa-map-{slug}.json for fcp-server. Loaded from file so fcp-server can create "
@@ -105,9 +215,20 @@ for slug, spec in MODELS.items():
         "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
         "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver "
         "relays a wildcard ~0).",
+        "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob "
+        "(tools/gen_fcp_maps.py parses clarett_init_<model>.h), so the router-pins are exactly what the "
+        "device reports via GET_MUX after our arm. Pin meaning is DIRECTION-SCOPED and per-model: 0x408 "
+        "is S/PDIF-in as a source but Monitor Out 1 as a destination, the 2Pre reaches S/PDIF input at "
+        "0x186/0x187 (where the 8PreX has S/PDIF output), and its analogue inputs are 0x400/0x402, "
+        "skipping 0x401. Never copy a pin table between models.",
+        "router-pin is emitted as a DECIMAL string because fcp-server parses it with atoi(); if a "
+        "device-provided devmap ever turns up using hex strings, that parse silently yields 0.",
     ]
     devmap["structs"] = OD(APP_SPACE=OD(members=members))
     devmap["device-specification"] = OD([("physical-inputs", phys_in), ("physical-outputs", phys_out)])
+    if dev_sources:
+        devmap["device-specification"]["sources"] = dev_sources
+        devmap["device-specification"]["destinations"] = dev_dests
     # REQUIRED, not decoration: fcp-server's create_global_control() hard-fails (-1) if
     # enums.eDEV_FCP_USER_MESSAGE_TYPE.enumerators is absent, so an empty "enums" silently kills
     # EVERY global control (mute, dim, Firmware Version). Only eMSG_FLASH_CTRL is read from it: it
@@ -140,8 +261,16 @@ for slug, spec in MODELS.items():
     alsamap["_provenance"] = ("Names/types from the snd-clarett in-kernel control set + the shipped "
                               "fcp-alsa-map-821d.json schema. Clean-room: no vendor map.")
     alsamap["_todo"] = [
-        "Add S/PDIF, ADAT, and the mux/mix routing sections (sources/sinks/output-group-sources) once the "
-        "device's MUX/MIX capability + offsets are confirmed on the bench.",
+        "Routing sources/sinks are generated from the model's band-0 SET_MUX bring-up table. LIMITATION: "
+        "the SOURCE list is the set of pins that table actually routes, which is the factory-default "
+        "patch, NOT the device's full source inventory — e.g. the 8PreX only ever routes Mix C-F, so "
+        "Mix A/B and Mix G-P are absent as selectable sources, and only some PCM playback pins appear. "
+        "Widening it means asserting pins we have not observed the device accept; verify on the bench "
+        "(pick a destination, try a pin outside the list, confirm GET_MUX reflects it) before adding.",
+        "The Clarett 8Pre has NO bring-up blob in the driver (it needs an 8Pre capture), so it gets no "
+        "routing/mixer sections at all — same gap as its in-kernel routing controls.",
+        "output-group-sources / output-link are not emitted: those drive the Scarlett 4th gen's output "
+        "group controls, which this line does not appear to have.",
         "Add output mute once its offset is captured (omitted; see the devmap _todo).",
         "Add global masterVolume + firmware-version once backing members/offsets are confirmed (masterVolume "
         "overlaps output 0/1 at 32/33, so it is left out of this slice to avoid double-driving one offset).",
@@ -178,6 +307,10 @@ for slug, spec in MODELS.items():
         ("muteSwitch", OD(name="Mute Playback Switch", type="bool")),
         ("dimSwitch",  OD(name="Dim Playback Switch",  type="bool")),
     ])
+
+    if alsa_sources:
+        alsamap["sources"] = alsa_sources
+        alsamap["sinks"] = alsa_sinks
 
     with open(f"{OUTDIR}/fcp-alsa-map-{slug}.json", "w") as f:
         json.dump(alsamap, f, indent=2)

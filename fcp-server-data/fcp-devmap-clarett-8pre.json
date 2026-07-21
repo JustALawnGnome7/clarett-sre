@@ -9,7 +9,9 @@
     "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
     "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic artifact of the layout, to be fixed with the real devmap.",
     "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
-    "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0)."
+    "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0).",
+    "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob (tools/gen_fcp_maps.py parses clarett_init_<model>.h), so the router-pins are exactly what the device reports via GET_MUX after our arm. Pin meaning is DIRECTION-SCOPED and per-model: 0x408 is S/PDIF-in as a source but Monitor Out 1 as a destination, the 2Pre reaches S/PDIF input at 0x186/0x187 (where the 8PreX has S/PDIF output), and its analogue inputs are 0x400/0x402, skipping 0x401. Never copy a pin table between models.",
+    "router-pin is emitted as a DECIMAL string because fcp-server parses it with atoi(); if a device-provided devmap ever turns up using hex strings, that parse silently yields 0."
   ],
   "structs": {
     "APP_SPACE": {
