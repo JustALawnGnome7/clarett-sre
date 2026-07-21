@@ -8,8 +8,7 @@
  * The FCP wire packet is our mailbox packet exactly (opcode/size/seq/error/pad/data) and the FCP
  * opcodes are our opcodes, so FCP_IOCTL_CMD maps straight onto clarett_fcp_cmd().
  *
- * Created only when in_kernel_controls=0 (mutually exclusive with the in-kernel control set, which
- * would otherwise contend for c->seq and the mailbox). The device is still armed in-kernel at probe
+ * This is the driver's only control surface. The device is still armed in-kernel at probe
  * (clarett_arm_device); this just hands the mailbox to userspace afterwards.
  *
  * STATUS: complete ABI — PVERSION + CMD + INIT + SET_METER_MAP/LABELS + the notification

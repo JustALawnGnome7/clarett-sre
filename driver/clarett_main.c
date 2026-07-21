@@ -91,20 +91,6 @@ MODULE_PARM_DESC(monitor_enables,
 		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
 		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
 
-/*
- * In-kernel control layer toggle. Default true = the driver creates the full ALSA mixer/routing/
- * meter control set itself (the current behaviour). The long-term direction for this line is the
- * in-kernel FCP model used by the 4th-gen Scarlett (sound/usb/fcp.c): a minimal kernel driver that
- * exposes a hwdep interface and lets Geoffrey Bennett's userspace `fcp-server` implement the
- * controls. Set 0 to run that way — no in-kernel controls (the hwdep transport is a later step; for
- * now this simply yields a controls-less card). Naming/behaviour will firm up as the hwdep lands.
- */
-static bool in_kernel_controls = true;
-module_param(in_kernel_controls, bool, 0444);
-MODULE_PARM_DESC(in_kernel_controls,
-		 "Create the mixer/routing/meter controls in-kernel (default 1). Set 0 to defer them to "
-		 "the userspace fcp-server over a hwdep interface (fcp.c model; hwdep not yet implemented).");
-
 static bool seed_dump;
 module_param(seed_dump, bool, 0444);
 MODULE_PARM_DESC(seed_dump,
@@ -1147,64 +1133,14 @@ static void clarett_notify_work(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, notify_work);
 	u32 ev = atomic_xchg(&c->notify_bits, 0);
-	int i, err;
 
 	if (!ev)
 		return;
 
-	/* hwdep/fcp-server path: userspace owns the control re-reads, so relay the event and stop.
-	 * The in-kernel monitor re-read below (and its snd_ctl_notify) target controls that do not
-	 * exist here, and would only add pointless mailbox traffic against fcp-server. */
-	if (!in_kernel_controls) {
-		clarett_hwdep_notify(c, ev);
-		return;
-	}
-
-	err = clarett_get_data(c, MONITOR_CFG_OFFSET, MONITOR_CFG_LEN);
-	if (err) {
-		/* Rate-limited: on a walled device the periodic unsatisfied config-change notification
-		 * (cause 0x3 ~every few s) makes this GET time out repeatedly; dev_warn would flood dmesg. */
-		dev_warn_ratelimited(&c->pci->dev, "notify 0x%x: monitor re-read failed (%d)\n",
-				     ev, err);
-	} else {
-		const u8 *r = c->resp_buf;
-		u32 echo;
-		u16 size;
-
-		dma_rmb();	/* order the DMAed response before we read resp_buf */
-		echo = r[FCP_RESP_ECHO_OFF] | r[FCP_RESP_ECHO_OFF + 1] << 8 |
-		       r[FCP_RESP_ECHO_OFF + 2] << 16 | r[FCP_RESP_ECHO_OFF + 3] << 24;
-		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-
-		/* Guard on echo AND size: our device returns echo+0x03 success with size=0 and no
-		 * payload (config backend dormant), so consuming resp[16+] would copy stale buffer
-		 * bytes into the monitor shadow. Require the full region before refreshing. */
-		if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= MONITOR_CFG_LEN) {
-			const u8 *data = r + FCP_RESP_DATA_OFF;
-
-			/* data[i] == config[MONITOR_CFG_OFFSET + i]. These three read back live, so
-			 * mark them known: the put skip is sound for them (no spurious relay click on a
-			 * no-op mute/dim toggle), unlike the bytes the device never reports. */
-			c->shadow[24]  = data[24  - MONITOR_CFG_OFFSET];
-			c->shadow[28]  = data[28  - MONITOR_CFG_OFFSET];
-			c->shadow[112] = data[112 - MONITOR_CFG_OFFSET];
-			set_bit(24,  c->shadow_known);
-			set_bit(28,  c->shadow_known);
-			set_bit(112, c->shadow_known);
-		} else {
-			/* Empty/absent payload — keep the write-through shadow. On our device this is
-			 * the normal case (echo present, size=0: config backend dormant); echo=0 is the
-			 * older first-GET-at-load case. Either way, don't seed the shadow with stale bytes. */
-			dev_dbg(&c->pci->dev,
-				"notify 0x%x: empty GET response (echo=0x%08x size=%u) — shadow kept\n",
-				ev, echo, size);
-		}
-	}
-
-	for (i = 0; i < c->n_ctls; i++)
-		if (c->ctls[i].activate == MONITOR_ACTIVATE && c->ctls[i].kctl)
-			snd_ctl_notify(c->card, SNDRV_CTL_EVENT_MASK_VALUE,
-				       &c->ctls[i].kctl->id);
+	/* Controls live in userspace (fcp-server), so a device notification is simply relayed: it
+	 * re-reads whatever it owns. The driver keeps no control state to refresh, and re-reading the
+	 * monitor region here would only add mailbox traffic competing with fcp-server's own reads. */
+	clarett_hwdep_notify(c, ev);
 
 	dev_dbg(&c->pci->dev, "async notification handled: 0x%x\n", ev);
 }
@@ -1213,8 +1149,8 @@ static void clarett_notify_work(struct work_struct *work)
  * GET_METER heartbeat. Focusrite Control polls GET_METER continuously while connected, and that poll
  * turns out to be the device's required host heartbeat: without it, control writes complete (done=1,
  * fcperr=0) but never reach hardware (front-panel state frozen). We replay FC's exact 8-byte payload
- * (pad=0, num_meters=0x30=48, magic=1) and re-arm ourselves every meter_poll_ms. The DMAed response
- * (48 u32 levels) is snapshotted into c->meter_levels for the "Level Meter" control.
+ * (pad=0, num_meters=0x30=48, magic=1) and re-arm ourselves every meter_poll_ms. The response is
+ * discarded: fcp-server owns the meter control and issues its own GET_METER through the hwdep.
  * Self-requeuing delayed_work; cancelled at remove.
  */
 static void clarett_meter_work(struct work_struct *work)
@@ -1223,23 +1159,11 @@ static void clarett_meter_work(struct work_struct *work)
 	static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
 	int delay = meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS;
 
-	if (meter_poll_ms > 0 && !clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req))) {
-		const u8 *r = c->resp_buf;
-		u16 size;
-		int i;
-
-		dma_rmb();	/* order the DMAed response before reading it */
-		size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-		if (clarett_get_le32(r + FCP_RESP_ECHO_OFF) == (CMD_EXEC_FLAG | FCP_GET_METER)) {
-			int n = min_t(int, size / 4, CLARETT_N_METERS);
-
-			for (i = 0; i < n; i++) {
-				u32 lvl = clarett_get_le32(r + FCP_RESP_DATA_OFF + i * 4);
-
-				c->meter_levels[i] = min(lvl, (u32)CLARETT_METER_MAX);
-			}
-		}
-	}
+	/* The poll IS the payload: the device needs the heartbeat, and the levels it returns are read
+	 * by whoever owns the meter control — which is now fcp-server, through its own GET_METER in the
+	 * hwdep meter path. Nothing in the driver consumes the response, so it is not snapshotted. */
+	if (meter_poll_ms > 0)
+		clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
 
 	if (meter_poll_ms > 0)
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
@@ -1504,28 +1428,22 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		clarett_error_probe(c);
 	}
 
-	/* In-kernel control layer (skipped in the fcp-server/hwdep direction). The device is still
-	 * armed and the session/heartbeat run either way; this only governs the ALSA controls. */
-	if (in_kernel_controls) {
-		err = clarett_create_controls(c);
+	/* Make Mute/Dim actually affect Monitor Out 1-2 by setting the per-output enable bits: the
+	 * master flag alone does nothing until an output opts in. This is a hardware-side write, so it
+	 * is needed whoever owns the controls — fcp-server drives the same Mute/Dim bytes. Needs the
+	 * seeded shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
+	if (!seeded && monitor_enables) {
+		err = clarett_enable_monitor_hw_controls(c);
 		if (err)
-			goto err_free;
-
-		/* Make the global Mute/Dim controls actually affect Monitor Out 1-2. Needs the seeded
-		 * shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
-		if (!seeded && monitor_enables) {
-			err = clarett_enable_monitor_hw_controls(c);
-			if (err)
-				dev_warn(&pci->dev,
-					 "could not enable monitor hardware mute/dim (%d)\n", err);
-		}
-	} else {
-		/* fcp-server transport path: expose the FCP hwdep instead of in-kernel controls. */
-		err = clarett_hwdep_init(c);
-		if (err)
-			dev_warn(&pci->dev, "FCP hwdep create failed (%d)\n", err);
-		err = 0;
+			dev_warn(&pci->dev,
+				 "could not enable monitor hardware mute/dim (%d)\n", err);
 	}
+
+	/* Controls live in userspace: expose the FCP hwdep for fcp-server. */
+	err = clarett_hwdep_init(c);
+	if (err)
+		dev_warn(&pci->dev, "FCP hwdep create failed (%d)\n", err);
+	err = 0;
 
 	if (!early_msi) {
 		clarett_enable_msi(c);	/* old order, for A/B */
@@ -1689,7 +1607,7 @@ static const struct clarett_model clarett_8prex = {
  * Clarett 2Pre (Thunderbolt). Control-plane values from the XML diff against the 8PreX
  * (vendor-reference/Devices/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
- * jack, not a software mode; see clarett_mode_li. clarett_ctl.values handles the value mapping).
+ * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
  * trace). The bring-up replay is the captured 2Pre attach (clarett_init_2pre.h). Selected via the model=
  * param: the whole Clarett TB line shares PCI id 1cb5:0002 and an identical PCIe interface, so the model

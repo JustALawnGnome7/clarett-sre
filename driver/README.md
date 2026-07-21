@@ -21,52 +21,10 @@ Built from the clean-room notes in `../spec/`.
 
 - PCI bring-up for `1cb5:0002` (BAR0 map, bus master, 32-bit DMA response buffer).
 - FCP mailbox transport: `SET_DATA` / `DATA_CMD` / poll-for-completion.
-- ALSA mixer controls (all confirmed single-byte fields):
-  - `Mute` / `Dim` (monitor section, named to match the USB unit) and
-    `Master HW Playback Volume` — a **read-only** reflection of the hardware
-    monitor-volume knob (offset 112, refreshed from the device on notifications),
-    named/typed to match the scarlett2 driver's `Master HW Playback Volume`
-  - per-output analogue volumes, 1 dB/step, −127..0 dB TLV, plus a per-output
-    `Line Out NN Volume Control Playback Enum` (`SW`/`HW` — the `enable-hardware-gain`
-    bit: `HW` follows the hardware monitor knob). As on scarlett2, an output's volume
-    fader goes **read-only while its select is `HW`** (the knob owns the level)
-  - per-output `Line NN Mute Playback Switch` (scarlett2 `MUTE_SWITCH`). Note the
-    Clarett has no independent per-output mute: this is the `enable-hardware-mute`
-    bit — the output is muted when this switch is **on and the global `Mute` is
-    active** (the master flag alone does nothing until an output opts in)
-  - per analogue input: `Air` switch + input-mode enum
-  - `S/PDIF Source Capture Enum` (input) and `S/PDIF Output Mode Playback Enum`
-    (`None`/`Optical`/`RCA`) on 4Pre/8Pre/8PreX
-  - `Meter Source Capture Enum` (8PreX): which channel set the hardware meters
-    show (`Analogue`/`S/PDIF`/`ADAT 1`/`ADAT 2`) — writes the per-band meter index
-    tables + the source byte + `DATA_CMD{8}`, replaying FC's cycle
-  - **routing (patchbay)**: a source-selection enum per destination — outputs
-    (`… Playback Enum`) and PCM-capture / mixer-input (`… Capture Enum`), decoded
-    from the arm blob's default `SET_MUX` matrix. **Writable**: changing one
-    edits that destination's entry in each sample-rate band's payload (seeded
-    verbatim from the blob) and resends all three `SET_MUX` commands — the arm's
-    known-good matrix plus one delta, matching FC's routing-change cycle. Source
-    names come from the confident pin ranges; destination names are 8PreX-accurate
-    and approximate for smaller models pending per-model pin maps. **The mux writes
-    are not yet hardware-verified — see the note in Known limitations.**
-  - **mixer gain matrix**: `Mix X Input NN Playback Volume` for every (bus, input)
-    slot (8PreX: 16 × 30 = 480), a 0.5 dB-step volume (−80..+12 dB, TLV) matching
-    scarlett2. A change rewrites one 16-bit coefficient in that bus's `SET_MIX` row
-    (seeded from the blob's all-unity default) and resends it. Same
-    not-yet-hardware-verified caveat as the routing writes
-  - **`Level Meter`**: a read-only 48-channel control (0..4095), snapshotted from
-    the `GET_METER` heartbeat the driver already runs. Marked volatile so userspace
-    re-reads live. Channels are the raw device meter order (scarlett2 reorders via a
-    per-model meter map, not yet derived here). See `Meter Source` above for
-    selecting which channel set the *hardware* meters display
-- **Control names match the in-kernel scarlett2 driver.** For the models with a USB
-  sibling (2Pre/4Pre/8Pre): inputs are `Line In N Air Capture Switch` /
-  `Line In N Level Capture Enum`, and outputs are `Line NN (descr) Playback Volume`
-  (e.g. `Line 01 (Monitor L) Playback Volume`), so `alsactl`/`alsa-scarlett-gui` see
-  the same names as on the USB units. The **8PreX** follows the same scheme
-  (`Line In N Air ...`, `Line NN (...) Playback Volume`) but keeps `Mode` in place of
-  `Level` for its input-mode enum, since it exposes a richer Mic/Line/Inst mode than
-  scarlett2's Line/Inst "Level".
+- **FCP hwdep** (`clarett_hwdep.c`) presenting the same ABI as the mainline USB FCP
+  driver (`sound/usb/fcp.c`), so Geoffrey Bennett's userspace **`fcp-server`** drives
+  this device unmodified: mixer, routing patchbay, per-output levels, preamp air/mode,
+  mute/dim and metering are all implemented in userspace. See *Controls* below.
 - **Device session bring-up** at probe (`clarett_arm_device`): replays the 232-command
   vendor init from `clarett_init_8prex.h` (`CONFIG_PUSH`×122, subsystem enables, 8 KB config
   sync, `SET_MIX`×16 + `SET_MUX`×3). Required on a **fresh** device — a self-booted 8PreX
@@ -85,60 +43,51 @@ sudo insmod snd-clarett.ko
 
 `make KDIR=/path/to/kernel` to build against another tree.
 
-## Direction: toward the FCP userspace model
+## Controls: the userspace FCP model
 
-The controls above are all implemented in-kernel today. The intended end state for
-this line — matching the in-kernel FCP driver used by the 4th-gen Scarlett
-(`sound/usb/fcp.c`) — is a **minimal kernel driver that exposes a hwdep interface**
-and lets Geoffrey Bennett's userspace **`fcp-server`** implement the mixer, routing,
-metering, etc. The first step of that transition is in place:
+This driver follows the in-kernel FCP model used by the 4th-gen Scarlett
+(`sound/usb/fcp.c`): **a minimal kernel driver that exposes a hwdep interface**, with
+Geoffrey Bennett's userspace **`fcp-server`** implementing the controls. There is no
+in-kernel mixer — the control layer and its `in_kernel_controls` toggle were removed
+once the hwdep path was working on hardware (see git history if you need the old
+control set; the encodings it carried live on in `../spec/` and in the device maps).
 
 ```sh
-sudo insmod snd-clarett.ko in_kernel_controls=0   # no in-kernel mixer; device is still armed
+sudo insmod snd-clarett.ko
+cd ../fcp-server-data && sudo fcp-server <card>
 ```
 
-`in_kernel_controls=0` skips the in-kernel control layer and instead exposes an
-**FCP hwdep** (`clarett_hwdep.c`) presenting the same ABI as the mainline USB FCP
-driver (`sound/usb/fcp.c`), the interface `fcp-server` drives. The device is still
-armed in-kernel at probe; the hwdep hands the mailbox to userspace afterwards.
-It's the `=0` path only — mutually exclusive with in-kernel controls, which would
-otherwise contend for the mailbox. Default is `1` (full in-kernel controls).
+The hwdep ABI is complete: `PVERSION`, `CMD`, `INIT`, `SET_METER_MAP`/`SET_METER_LABELS`,
+and the notification `read()`/`poll()` relay.
 
-Implemented so far:
+- `CMD` maps straight onto the mailbox — the FCP wire packet *is* our mailbox packet
+  and the opcodes are ours.
+- `INIT` runs `INIT_1`/`INIT_2` with the opcodes `fcp-server` passes and returns the
+  firmware-info block in `step2[]`. `step0` is zero-filled (its USB `STEP0` class
+  request has no mailbox equivalent; `fcp-server` ignores it), and `c->seq` is *not*
+  reset — the in-kernel `GET_METER` heartbeat shares it, and the device only echoes seq.
+- `SET_METER_MAP`/`SET_METER_LABELS` let `fcp-server` create and drive `Level Meter`:
+  it installs a channel→raw-slot map (the control's `.get` polls `GET_METER` and
+  projects through it) plus an optional `FCP_CHANNEL_LABELS` TLV.
+- The notification relay blocks until the device signals a change (the `0x400` cause).
+  **Adaptation:** the USB FCP device carries a precise notification bitmask in its
+  interrupt message; this TB device only signals *that* something changed, so we
+  deliver an all-categories event (`~0`) and `fcp-server` re-reads every notifiable
+  control — broad but correct. Wakes are debounced ~200 ms: the device notifies at
+  ~30 Hz when idle, and an unthrottled relay makes `fcp-server` re-read everything on
+  every one, which is enough traffic to stop control writes manifesting.
 
-- `FCP_IOCTL_PVERSION` and `FCP_IOCTL_CMD` — the command relay maps straight onto
-  our mailbox (the FCP wire packet *is* our mailbox packet, and the opcodes are ours).
-- `FCP_IOCTL_INIT` — runs the `INIT_1`/`INIT_2` handshake with the opcodes
-  `fcp-server` passes, returning the firmware-info block in `step2[]`. Two device
-  adaptations: `step0` is zero-filled (its USB `STEP0` class request has no mailbox
-  equivalent; `fcp-server` ignores it), and `c->seq` is *not* reset (the in-kernel
-  `GET_METER` heartbeat shares it and the device only echoes seq). See the code's
-  BENCH RISK note about re-running `INIT_1` on the already-armed device.
-- `FCP_IOCTL_SET_METER_MAP`/`SET_METER_LABELS` — `fcp-server` creates and drives the
-  `Level Meter` control: it installs a channel→raw-slot map (the control's `.get`
-  polls `GET_METER` and projects through it) and an optional `FCP_CHANNEL_LABELS`
-  TLV naming each channel. This is the userspace-owned counterpart to the in-kernel
-  `Level Meter` (which uses a fixed 48-slot layout).
+**Device maps.** This device does not self-describe — `DEVMAP_INFO` returns size 0, so
+`fcp-server`'s device-provided map path yields nothing. The maps in `../fcp-server-data/`
+are authored instead, keyed on the model slug the driver publishes at
+`/proc/asound/cardN/clarett` (the whole line shares PCI id `1cb5:0002`, so the id cannot
+select a model). They currently require local `fcp-server` patches — model-slug keying,
+inverted-value support, and chunked `MUX_READ` — see `../fcp-server-data/README.md`.
 
-- The notification read/poll relay — `read()`/`poll()` on the hwdep block until the
-  device signals a change (the `0x400` cause, routed via `clarett_notify_work` on
-  this path), then return a u32 event bitmask, exactly as `fcp-server` expects.
-  **Adaptation:** the USB FCP device carries the precise FCP notification bitmask in
-  its interrupt message, but this TB device only signals *that* a notification
-  occurred (the FCP notification word is on no readable surface), so we deliver an
-  all-categories event (`~0`) and `fcp-server` re-reads every notifiable control — a
-  correct if broad re-sync. If a real notification word is later decoded, carry it
-  through in place of the wildcard.
-
-This is the complete hwdep ABI — `fcp-server` can now drive the device end-to-end
-(bench-testing pending). Note `fcp-server` recognises devices via a device-map it
-can read *from the device* (`DEVMAP_INFO`/`DEVMAP_READ` opcodes `0x80000c`/`0x80000d`)
-— whether this TB unit answers those is bench-testable now through `CMD`; if not, a
-device-map JSON can be authored from our known controls.
-
-The in-kernel `GET_METER` heartbeat still runs on this path; since `fcp-server`
-polls the meter itself, whether the heartbeat should stand down here is tied to the
-pending re-audit of the "heartbeat needed to apply writes" hypothesis.
+The in-kernel `GET_METER` heartbeat still runs, since the device appears to need it to
+apply control writes; its response is discarded (`fcp-server` polls the meter itself).
+That "heartbeat needed to apply writes" hypothesis predates the wall crossing and is
+still pending re-audit.
 
 ## Model selection (auto-detected; `model=` overrides)
 
@@ -214,21 +163,20 @@ Never load this while the VM is using the device.
 
 ## Known limitations / TODO
 
-- **Routing and mixer-gain writes are not hardware-verified.** The patchbay enums resend the whole
-  `SET_MUX` matrix and the mixer-gain controls resend a `SET_MIX` row (both seeded verbatim from the
-  arm blob, one entry/coefficient edited), matching FC's traced change cycles — but neither has been
-  exercised on a device. Verify on the bench before relying on them. Also pending on routing:
-  per-model destination pin maps (names are 8PreX-accurate), the full source space (the enum lists
-  the sources present in the default matrix), and routing a source dropped at a higher sample-rate
-  band into a destination that survives it.
+- **Routing and mixer-gain writes are not hardware-verified.** They now live in the device maps
+  (`../fcp-server-data/`) rather than in-kernel: `fcp-server` creates the patchbay enums and the
+  mixer matrix, and reads decode correctly against the device's own tables (`PCM 01 Capture Enum`
+  reads `Analogue 1` for the table's `400 600`), but no write has been exercised. Also pending: the
+  source list is only the pins the factory-default matrix routes, not the device's full source
+  inventory, and the 8Pre has no bring-up blob so it gets no routing at all.
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
   DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass at the
   **same off-wire/below-driver wall** as the control plane (`../spec/clarett-data-plane.md`).
   Experimental capture PCM is opt-in (`enable_pcm=1`); see the 2Pre note below.
-- **Mixer "get" returns a shadow**: write-through on put, and the **monitor bytes
-  are refreshed from the DMAed GET response on a front-panel notification**, so
-  those reflect live hardware. Other bytes stay write-through and default to
-  0 dB / unmuted / Mic / Air-off at probe, which may not match the hardware.
+- **The config shadow is write-through.** `clarett_set_data()` keeps a shadow of the config space so
+  the probe-time monitor-enable write can do a correct read-modify-write. It is seeded from the
+  device at probe (`GET_DATA(24,92)`); bytes the device never reports back stay at their written
+  value. Nothing reads it for display any more — `fcp-server` reads the device directly.
 - **Mailbox completion is polled**, not MSI-driven. MSI *is* enabled, but only
   for **async notifications** (vec0 / cause `0x400`): a front-panel button raises
   the §11 dim-mute/monitor mask, and the ISR → workqueue re-reads the monitor

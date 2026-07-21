@@ -380,47 +380,17 @@ struct clarett_model {
 					  * GET_DATA reads span exactly [0, 8392) and its
 					  * writebacks fall inside that range */
 
-/* --- mixer control descriptor ------------------------------------------- */
-enum clarett_ctl_type {
-	CT_SWITCH,	/* 1 byte, 0/1 (optionally inverted)        */
-	CT_GAIN,	/* 1 byte, 7-bit attenuation code = |dB|    */
-	CT_ENUM,	/* 1 byte, enumerated                       */
-	CT_ROUTE,	/* routing enum: enum value = route_val, texts = source list, route_dst = dst pin */
-	CT_MIX,		/* mixer gain: 16-bit coeff at offset in mix_rows[mix_row]; value 0..184 (0.5 dB) */
-	CT_METER,	/* read-only multi-channel level meter (c->meter_levels[]) */
-	CT_METERSRC,	/* hardware-meter source select: writes the per-band tables + source byte + cmd 8 */
-};
-
 /* A hardware-meter source option: its device value and the three per-band channel-index tables the
- * host writes (@136/146/156) when selecting it, alongside SET_DATA{184}=value + DATA_CMD{8}. */
+ * host writes (@136/146/156) when selecting it, alongside SET_DATA{184}=value + DATA_CMD{8}. Kept as
+ * per-model RE data (referenced by the model table); the control that consumed it is now fcp-server's. */
 struct clarett_meter_source {
 	const char *name;
 	u8 value;			/* Analogue=1 / S/PDIF=2 / ADAT1=4 / ADAT2=8 */
 	u8 tbl[3][10];			/* meters-l, meters-m, meters-h (per sample-rate band) */
 };
 
-#define CLARETT_MAX_MIXES        20    /* upper bound on mix buses (8PreX = 16)              */
-#define CLARETT_MIX_MAX_VALUE    184   /* mixer gain ALSA value: 0..184, 0.5 dB/step, 160 = 0 dB */
 #define CLARETT_N_METERS         48    /* GET_METER returns 48 u32 levels (num_meters=0x30)  */
 #define CLARETT_METER_MAX        4095  /* meter level range 0..4095 (matches scarlett2)       */
-
-struct clarett_ctl {
-	char name[44];
-	enum clarett_ctl_type type;
-	u32 offset;			/* config-space byte offset (SET_DATA target) */
-	u8  activate;			/* DATA_CMD activate code (XML "command")     */
-	u8  invert;			/* CT_SWITCH: device 1 == "off" in ALSA terms */
-	u8  readonly;			/* read-only reflection of a hardware control (e.g. Master HW) */
-	u8  mask;			/* != 0: operate on these bits of shadow[offset] (RMW), not the whole byte */
-	const char * const *texts;	/* CT_ENUM / CT_ROUTE                          */
-	int n_texts;
-	const u8 *values;		/* CT_ENUM: item index -> device byte; NULL = identity (per-model) */
-	u16 route_val;			/* CT_ROUTE: current source item this destination is routed to */
-	u16 route_dst;			/* CT_ROUTE: this destination's mux pin */
-	u8  mix_row;			/* CT_MIX: which mix bus (index into c->mix_rows); offset = coeff byte */
-	struct snd_kcontrol *kctl;	/* for snd_ctl_notify on async events         */
-	struct clarett_ctl *vol_link;	/* SW/HW enum only: the volume fader it makes R/O when set to HW */
-};
 
 struct clarett;
 
@@ -477,36 +447,15 @@ struct clarett {
 	 * hardware (and to sustain streaming). See FCP_GET_METER / clarett_meter_work(). */
 	struct delayed_work meter_work;
 
-	struct clarett_ctl *ctls;	/* descriptor array, lifetime = card */
-	int n_ctls;
-
-	/* Writable routing (mux): a mutable copy of each sample-rate band's SET_MUX payload, seeded
-	 * verbatim from the arm blob. A routing put edits the target destination's entry (src field) in
-	 * each band and resends all three SET_MUX commands — the arm's known-good matrix plus one delta.
-	 * mux_src_pins maps a routing enum item to its source pin (shared across all routing controls). */
-	u8 *mux_band[3];
-	u32 mux_band_len[3];
-	const u16 *mux_src_pins;
-
-	/* Mixer gain matrix: a mutable copy of each mix bus's SET_MIX payload ({u16 mix, u16 coeff[]}),
-	 * seeded from the arm blob. A CT_MIX put rewrites one coefficient and resends that bus's row. */
-	u8 *mix_rows[CLARETT_MAX_MIXES];
-	u32 mix_row_len;
-	int n_mix;
-
-	/* Latest level-meter snapshot, refreshed from the GET_METER response by the meter heartbeat and
-	 * read by the "Level Meter" control. Lock-free: torn reads are harmless for a display meter. */
-	u16 meter_levels[CLARETT_N_METERS];
-
 	/*
-	 * FCP hwdep level meter (in_kernel_controls=0 path only). fcp-server creates the "Level Meter"
+	 * FCP hwdep level meter. fcp-server creates the "Level Meter"
 	 * control via FCP_IOCTL_SET_METER_MAP: hwdep_meter_map[i] indexes the device's raw meter array
 	 * (or -1 = no source) for output channel i; hwdep_meter_levels is the GET_METER scratch buffer
 	 * (hwdep_n_meter_slots u32s). hwdep_meter_labels_tlv carries the channel-name TLV set by
 	 * FCP_IOCTL_SET_METER_LABELS. All devm-allocated (freed at detach). Mirrors sound/usb/fcp.c. */
 	struct mutex hwdep_lock;		/* serialises the hwdep meter ioctls vs the control callbacks */
 	/*
-	 * hwdep notification relay (in_kernel_controls=0 path). A device notification (0x400 cause,
+	 * hwdep notification relay. A device notification (0x400 cause,
 	 * detected in clarett_irq -> clarett_notify_work) sets hwdep_notify_event and wakes any
 	 * fcp-server blocked in read()/poll(). Lock-free: atomic_or to accumulate, atomic_xchg to drain.
 	 */
@@ -706,7 +655,6 @@ u32 clarett_rl(struct clarett *c, u32 off);
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
 
 /* mixer.c */
-int clarett_create_controls(struct clarett *c);
 
 /* main.c — data-plane engine (shared with pcm.c) */
 void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1);
