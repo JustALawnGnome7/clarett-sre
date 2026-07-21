@@ -623,9 +623,24 @@ static inline u32 clarett_period_bytes(u8 channels)
 #define CLARETT_DESC_WRAP_TX	0x01	/* last-entry flag, block 0 (TX): bit0 = end-of-list/wrap */
 #define CLARETT_DESC_WRAP_RX	0x03	/* last-entry flag, block 1 (RX): bit0 wrap | bit1 (IRQ?), per dump */
 
+/*
+ * A descriptor covers CLARETT_FRAG_FRAMES of audio TIME, then is rounded up to the 0x100 alignment
+ * the engine requires. The old rule was lcm(0x100, frame_bytes) — the smallest aligned span — which
+ * makes the frame count fall out of the channel width instead of being fixed: 28ch and 4ch both land
+ * on 16 frames (which is why it looked right on the models it was derived from), but the 4Pre's 8ch
+ * TX ring lands on 8. Its RX ring is 16, so the two rings advanced at different rates in time and a
+ * free-running full-duplex engine desynced immediately — observed as ptr0/ptr1 diverging (14 vs 3)
+ * and the engine stalling with the 0x300 counter never ticking.
+ *
+ * 16 frames is also what the vendor's counter unit resolves to: +0xc per 4 ms period event at 48k
+ * = 192 frames / 12 = 16. Rounding up to alignment reproduces every previously documented value
+ * (28ch->0x700, 4ch->0x100, 14ch->0x700) and changes only the 8ch case, 0x100 -> 0x200.
+ */
+#define CLARETT_FRAG_FRAMES	16
+
 static inline u32 clarett_frag_bytes(u8 channels)
 {
-	return lcm((u32)CLARETT_DESC_ALIGN, (u32)channels * 4);
+	return lcm((u32)CLARETT_DESC_ALIGN, (u32)channels * 4 * CLARETT_FRAG_FRAMES);
 }
 /* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
  * No +1 terminator slot — the wrap flag on the last entry is the terminator. */

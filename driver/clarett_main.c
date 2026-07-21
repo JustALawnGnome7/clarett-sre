@@ -854,8 +854,12 @@ static int clarett_stream_service(void *data)
 		}
 		usleep_range(100, 200);
 	}
-	dev_info(&c->pci->dev, "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u)\n",
-		 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks);
+	/* PTR tells whether the engine walked the descriptor table at all — the thing ctr=0 leaves open. */
+	dev_info(&c->pci->dev,
+		 "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u ptr0=0x%x ptr1=0x%x)\n",
+		 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
 	return 0;
 }
 
@@ -908,6 +912,24 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm (0x0 is stream-stop) */
 
 	c->stream_on = true;
+
+	/*
+	 * Post-arm state. The vendor's 0x300 counter counts DESCRIPTORS consumed (12 per 4 ms period
+	 * event x 16 frames per fragment = 192 frames = 4.00 ms at 48k), and it reads 0xc even on the
+	 * arms that go on to stall — while ours reads 0, i.e. the engine signals a period without
+	 * consuming a single descriptor. So capture whether the bases latched and where the per-block
+	 * pointers start; PTR is the vendor's own progress read (0x21c/0x31c in its steady-state sweep).
+	 */
+	dev_info(&c->pci->dev,
+		 "engine armed: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ctrl=%08x ptr=%08x\n",
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_CTRL),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_CTRL),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
 }
 
 /* Start the persistent 0x300 servicer kthread. The caller flips stream_run to release ACKing. */

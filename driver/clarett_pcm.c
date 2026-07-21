@@ -194,12 +194,20 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 		}
 	}
 
+	/*
+	 * The pre-arm triple, in the vendor's order: 0x6004, 0x6002, 0x6005 — NOT 0x6004 twice.
+	 * Every occurrence of these opcodes in 4pre_boot_to_stream_end.log is that triple (sometimes
+	 * doubled for full duplex, which is where the old "VM issues twice" note came from), and the
+	 * triple at 21:58:18.70 is what immediately precedes the one arm that streams: the vendor
+	 * arms and fails exactly as we do — 0x110=7, one period event, 0x110=0 + 0x100=0xf, retry —
+	 * four times over, then issues this batch, re-arms once, and the counter starts advancing.
+	 */
 	e_en1    = clarett_fcp(c, FCP_STREAM_ENABLE, NULL, 0);
-	e_en2    = clarett_fcp(c, FCP_STREAM_ENABLE, NULL, 0);
+	e_en2    = clarett_fcp(c, FCP_GET_62, NULL, 0);
 	e_commit = clarett_fcp(c, FCP_STREAM_COMMIT, NULL, 0);
 
 	dev_info(&c->pci->dev,
-		 "stream-handshake: SET_CLOCK{%u,24}=%d CONFIG_PUSH=%d(err=%d) 0x6004=%d/%d 0x6005=%d\n",
+		 "stream-handshake: SET_CLOCK{%u,24}=%d CONFIG_PUSH=%d(err=%d) 0x6004=%d 0x6002=%d 0x6005=%d\n",
 		 rate, e_clk, pushes, push_err, e_en1, e_en2, e_commit);
 }
 
