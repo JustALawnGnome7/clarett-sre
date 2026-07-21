@@ -177,51 +177,35 @@
     "sources": [
       {
         "name": "ADAT 1",
-        "router-pin": "512",
-        "peak-index": 10,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "512"
       },
       {
         "name": "ADAT 2",
-        "router-pin": "513",
-        "peak-index": 11,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "513"
       },
       {
         "name": "ADAT 3",
-        "router-pin": "514",
-        "peak-index": 12,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "514"
       },
       {
         "name": "ADAT 4",
-        "router-pin": "515",
-        "peak-index": 13,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "515"
       },
       {
         "name": "ADAT 5",
-        "router-pin": "516",
-        "peak-index": 14,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "516"
       },
       {
         "name": "ADAT 6",
-        "router-pin": "517",
-        "peak-index": 15,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "517"
       },
       {
         "name": "ADAT 7",
-        "router-pin": "518",
-        "peak-index": 16,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "518"
       },
       {
         "name": "ADAT 8",
-        "router-pin": "519",
-        "peak-index": 17,
-        "_peak-index-provenance": "inferred"
+        "router-pin": "519"
       },
       {
         "name": "Mix A",
@@ -336,15 +320,11 @@
       {
         "name": "Mixer Input 01",
         "router-pin": "768",
-        "peak-index": 28,
-        "_peak-index-provenance": "measured",
         "mixer-input-index": 0
       },
       {
         "name": "Mixer Input 02",
         "router-pin": "769",
-        "peak-index": 29,
-        "_peak-index-provenance": "measured",
         "mixer-input-index": 1
       },
       {
@@ -489,39 +469,27 @@
       },
       {
         "name": "Line Output 1",
-        "router-pin": "1024",
-        "peak-index": 18,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1024"
       },
       {
         "name": "Line Output 2",
-        "router-pin": "1025",
-        "peak-index": 19,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1025"
       },
       {
         "name": "Line Output 3",
-        "router-pin": "1026",
-        "peak-index": 20,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1026"
       },
       {
         "name": "Line Output 4",
-        "router-pin": "1027",
-        "peak-index": 21,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1027"
       },
       {
         "name": "Line Output 5",
-        "router-pin": "1028",
-        "peak-index": 22,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1028"
       },
       {
         "name": "Line Output 6",
-        "router-pin": "1029",
-        "peak-index": 23,
-        "_peak-index-provenance": "block-measured"
+        "router-pin": "1029"
       },
       {
         "name": "PCM 01",

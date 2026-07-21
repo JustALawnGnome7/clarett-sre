@@ -123,23 +123,16 @@ METER_SLOTS = {
         0x404: (4,  "inferred"), 0x405: (5,  "inferred"),
         0x406: (6,  "inferred"), 0x407: (7,  "inferred"),
         0x408: (8,  "inferred"), 0x409: (9,  "inferred"),   # S/PDIF in, continuing the block
-        # ADAT inputs follow the analogue block; count fits exactly, order inferred.
-        0x200: (10, "inferred"), 0x201: (11, "inferred"),
-        0x202: (12, "inferred"), 0x203: (13, "inferred"),
-        0x204: (14, "inferred"), 0x205: (15, "inferred"),
-        0x206: (16, "inferred"), 0x207: (17, "inferred"),
     },
 }
-# Destination-side slots, same run. 18-23 lit together as a block whenever a routed input played, so
-# the SET (six slots = the 4Pre's six line outputs) is measured but the order WITHIN it is not.
-METER_SLOTS_DST = {
-    "clarett-4pre": {
-        0x400: (18, "block-measured"), 0x401: (19, "block-measured"),
-        0x402: (20, "block-measured"), 0x403: (21, "block-measured"),
-        0x404: (22, "block-measured"), 0x405: (23, "block-measured"),
-        0x300: (28, "measured"), 0x301: (29, "measured"),   # mixer inputs 1/2 - the only fed ones
-    },
-}
+# NO destination peak-index. fcp-server rejects any index >= the count the device reports from
+# METER_INFO (0x001000, resp[0]), and a 4Pre rejected index 10 - so it exposes at most 10 meter
+# slots, exactly the size of the analogue block (8 analogue + S/PDIF 1-2). The slots we measured
+# downstream (18-23 line outputs, 28/29 mixer inputs) are real - GET_METER serves them when asked
+# for 48 - but they are outside what METER_INFO advertises, and ONE out-of-range entry makes
+# fcp-server discard the whole map (meter.c goto done), taking the measured analogue slots with it.
+# ADAT (10-17, inferred) is dropped for the same reason.
+METER_SLOTS_DST = {}
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum ("mli3" | "ml2" | None)
 MODELS = {
