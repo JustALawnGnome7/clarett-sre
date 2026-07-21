@@ -97,6 +97,50 @@ def name_sources(srcs):
             out[pin] = f"PCM {pin - 0x600 + 1}"
     return out
 
+# --- GET_METER slot map (peak-index) -------------------------------------------------------------
+# fcp-server needs a "peak-index" on a source/destination to build its meter map: the raw GET_METER
+# slot that channel's level lands in. USB FCP devices read these from the device's own devmap; the
+# Clarett TB line serves none (DEVMAP_INFO returns size 0), so they have to be MEASURED — put signal
+# on one channel at a time and see which slot moves (tools/fcp_meter_watch.c).
+#
+# Measured on a Clarett 4Pre, July 20 2026. Signal on analogue inputs 1-4 moved slots 0,1,2,3
+# respectively — four independent readings, so the "analogue input N -> slot N-1" rule is solid.
+# Inputs 1 and 2 additionally lit slots 18-23 (all six line outputs, via the mix they feed) and
+# slots 28/29; inputs 3 and 4 lit nothing else, which is exactly right — the routing table patches
+# only Analogue 1/2 into the mixer (400->300, 401->301), so 3/4 reach neither the buses nor the
+# outputs. That also refutes reading 28-47 as PCM captures: 0x402 -> 0x602 would have lit a PCM
+# slot for input 3, and none moved.
+#
+# ONLY the 4Pre is listed. The slot order is not transferable: the models differ in ADAT width
+# (8 vs 16) and in their analogue pin blocks (the 2Pre's inputs are 0x400/0x402, skipping 0x401,
+# and it reaches S/PDIF at 0x186/0x187), so any other model must be measured on its own hardware.
+METER_SLOTS = {
+    "clarett-4pre": {
+        # pin: (slot, provenance)
+        0x400: (0,  "measured"), 0x401: (1,  "measured"),
+        0x402: (2,  "measured"), 0x403: (3,  "measured"),
+        # Same block, same order — inferred, not measured (no signal source on 5-8 at the time).
+        0x404: (4,  "inferred"), 0x405: (5,  "inferred"),
+        0x406: (6,  "inferred"), 0x407: (7,  "inferred"),
+        0x408: (8,  "inferred"), 0x409: (9,  "inferred"),   # S/PDIF in, continuing the block
+        # ADAT inputs follow the analogue block; count fits exactly, order inferred.
+        0x200: (10, "inferred"), 0x201: (11, "inferred"),
+        0x202: (12, "inferred"), 0x203: (13, "inferred"),
+        0x204: (14, "inferred"), 0x205: (15, "inferred"),
+        0x206: (16, "inferred"), 0x207: (17, "inferred"),
+    },
+}
+# Destination-side slots, same run. 18-23 lit together as a block whenever a routed input played, so
+# the SET (six slots = the 4Pre's six line outputs) is measured but the order WITHIN it is not.
+METER_SLOTS_DST = {
+    "clarett-4pre": {
+        0x400: (18, "block-measured"), 0x401: (19, "block-measured"),
+        0x402: (20, "block-measured"), 0x403: (21, "block-measured"),
+        0x404: (22, "block-measured"), 0x405: (23, "block-measured"),
+        0x300: (28, "measured"), 0x301: (29, "measured"),   # mixer inputs 1/2 - the only fed ones
+    },
+}
+
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum ("mli3" | "ml2" | None)
 MODELS = {
     "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
@@ -174,11 +218,23 @@ for slug, spec in MODELS.items():
         assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"
         assert len(set(n for n, _ in dst_names.values())) == len(dst_names), f"{slug}: dup sink name"
 
+        meter_src = METER_SLOTS.get(slug, {})
+        meter_dst = METER_SLOTS_DST.get(slug, {})
+
         for pin, nm in src_names.items():
-            dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
+            entry = OD([("name", nm), ("router-pin", str(pin))])
+            if pin in meter_src:
+                slot, how = meter_src[pin]
+                entry["peak-index"] = slot
+                entry["_peak-index-provenance"] = how
+            dev_sources.append(entry)
             alsa_sources.append(OD([("device_name", nm), ("alsa_name", nm)]))
         for pin, (nm, mix_idx) in dst_names.items():
             entry = OD([("name", nm), ("router-pin", str(pin))])
+            if pin in meter_dst:
+                slot, how = meter_dst[pin]
+                entry["peak-index"] = slot
+                entry["_peak-index-provenance"] = how
             if mix_idx is not None:
                 # Marks this destination as a mixer input; fcp-server addresses the SET_MIX matrix
                 # as mix_output * mix_input_count + mixer-input-index (dims come from MIX_INFO).
@@ -213,6 +269,15 @@ for slug, spec in MODELS.items():
         "pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic "
         "artifact of the layout, to be fixed with the real devmap.",
         "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
+        "peak-index is present for the 4Pre ONLY, and each entry carries _peak-index-provenance: "
+        "\"measured\" (analogue in 1-4 -> slots 0-3, one signal source at a time), \"block-measured\" "
+        "(slots 18-23 lit together as the six line outputs, so the set is measured but the order "
+        "within it is not), or \"inferred\" (continuing the pin block: analogue 5-8, S/PDIF, ADAT). "
+        "Other models have NO peak-index and so get no Level Meter: slot order is not transferable "
+        "across this line (ADAT width differs 8 vs 16, and the 2Pre's analogue pins are 0x400/0x402 "
+        "skipping 0x401), so each model must be measured with tools/fcp_meter_watch.c. Also unverified: "
+        "fcp-server rejects any peak-index >= the slot count the device reports via fcp_meter_info(), "
+        "and we have assumed 48 from the request payload rather than reading that answer back.",
         "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver "
         "relays a wildcard ~0).",
         "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob "

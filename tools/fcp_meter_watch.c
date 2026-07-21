@@ -35,7 +35,14 @@ struct fcp_cmd {
 
 #define GET_METER   0x001001
 #define N_SLOTS     48		/* num_meters=0x30, as Focusrite Control requests */
-#define NOISE       8		/* below this a slot is treated as idle (range is 0..4095) */
+#define MARGIN      40		/* a slot must exceed its own baseline by this to count as "moved" */
+#define BASE_TICKS  10		/* first second of samples establishes each slot's idle baseline */
+
+/*
+ * A slot is a 32-bit word carrying a 16-BIT level, replicated into both halves (0x020a020a = 522).
+ * Mask the low half; a plain u32 read is ~8000x over the 0..4095 full scale.
+ */
+#define LEVEL(w)    ((w) & 0xffff)
 
 /* Request is {u16 pad, u16 num_meters, u32 magic=1} — the same payload the driver's heartbeat uses. */
 static int meter_read(int fd, __u32 *out)
@@ -64,7 +71,7 @@ int main(int argc, char **argv)
 {
 	const char *dev = argc > 1 ? argv[1] : "/dev/snd/hwC5D0";
 	int seconds = argc > 2 ? atoi(argv[2]) : 20;
-	__u32 now[N_SLOTS], peak[N_SLOTS];
+	__u32 now[N_SLOTS], peak[N_SLOTS], base[N_SLOTS];
 	int fd, i, ticks = 0;
 
 	fd = open(dev, O_RDWR);
@@ -73,39 +80,58 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	memset(peak, 0, sizeof(peak));
+	memset(base, 0, sizeof(base));
 
-	printf("Watching %d meter slots for %ds. Put signal on ONE input and note which slot moves.\n",
-	       N_SLOTS, seconds);
-	printf("(Ctrl-C to stop early; the peak table prints at the end.)\n\n");
+	printf("Watching %d meter slots for %ds.\n", N_SLOTS, seconds);
+	printf("The first %d samples set each slot's idle baseline; after that, put signal on ONE\n",
+	       BASE_TICKS);
+	printf("input and watch which slot rises. Levels are 0..4095.\n\n");
 
 	for (; ticks < seconds * 10; ticks++) {
 		if (meter_read(fd, now)) {
 			fprintf(stderr, "GET_METER failed: %s\n", strerror(errno));
 			return 1;
 		}
-		for (i = 0; i < N_SLOTS; i++)
-			if (now[i] > peak[i])
-				peak[i] = now[i];
+		for (i = 0; i < N_SLOTS; i++) {
+			__u32 lvl = LEVEL(now[i]);
 
-		/* Live line: only the slots currently above the noise floor, so a moving channel stands out. */
+			/* Baseline = the highest idle reading seen in the first second. Everything here
+			 * sits on a noise floor of several hundred, so absolute thresholds are useless:
+			 * what identifies a channel is rising above ITS OWN idle level. */
+			if (ticks < BASE_TICKS) {
+				if (lvl > base[i])
+					base[i] = lvl;
+				continue;
+			}
+			if (lvl > peak[i])
+				peak[i] = lvl;
+		}
+		if (ticks < BASE_TICKS) {
+			printf("\rmeasuring baseline...");
+			fflush(stdout);
+			goto tick;
+		}
+
+		/* Live line: only slots currently above their own baseline, so a moving channel stands out. */
 		printf("\r\033[K");
 		for (i = 0; i < N_SLOTS; i++)
-			if (now[i] > NOISE)
-				printf(" [%02d]=%-4u", i, now[i]);
+			if (LEVEL(now[i]) > base[i] + MARGIN)
+				printf(" [%02d]=%-4u", i, LEVEL(now[i]));
 		fflush(stdout);
+tick:
 
 		nanosleep(&(struct timespec){ .tv_nsec = 100000000 }, NULL);
 	}
 
-	printf("\n\nPer-slot peak over the run:\n");
-	for (i = 0; i < N_SLOTS; i++) {
-		if (i % 8 == 0)
-			printf("\n  %02d:", i);
-		printf(" %5u", peak[i]);
-	}
-	printf("\n\nSlots that saw signal (peak > %d):", NOISE);
+	printf("\n\nSlot:  baseline -> peak  (rise)\n");
 	for (i = 0; i < N_SLOTS; i++)
-		if (peak[i] > NOISE)
+		printf("  %02d: %5u -> %5u  (%+d)%s\n", i, base[i], peak[i],
+		       (int)peak[i] - (int)base[i],
+		       peak[i] > base[i] + MARGIN ? "   <== MOVED" : "");
+
+	printf("\nSlots that rose more than %d above their baseline:", MARGIN);
+	for (i = 0; i < N_SLOTS; i++)
+		if (peak[i] > base[i] + MARGIN)
 			printf(" %d", i);
 	printf("\n");
 

@@ -9,6 +9,7 @@
     "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
     "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic artifact of the layout, to be fixed with the real devmap.",
     "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
+    "peak-index is present for the 4Pre ONLY, and each entry carries _peak-index-provenance: \"measured\" (analogue in 1-4 -> slots 0-3, one signal source at a time), \"block-measured\" (slots 18-23 lit together as the six line outputs, so the set is measured but the order within it is not), or \"inferred\" (continuing the pin block: analogue 5-8, S/PDIF, ADAT). Other models have NO peak-index and so get no Level Meter: slot order is not transferable across this line (ADAT width differs 8 vs 16, and the 2Pre's analogue pins are 0x400/0x402 skipping 0x401), so each model must be measured with tools/fcp_meter_watch.c. Also unverified: fcp-server rejects any peak-index >= the slot count the device reports via fcp_meter_info(), and we have assumed 48 from the request payload rather than reading that answer back.",
     "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver relays a wildcard ~0).",
     "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob (tools/gen_fcp_maps.py parses clarett_init_<model>.h), so the router-pins are exactly what the device reports via GET_MUX after our arm. Pin meaning is DIRECTION-SCOPED and per-model: 0x408 is S/PDIF-in as a source but Monitor Out 1 as a destination, the 2Pre reaches S/PDIF input at 0x186/0x187 (where the 8PreX has S/PDIF output), and its analogue inputs are 0x400/0x402, skipping 0x401. Never copy a pin table between models.",
     "router-pin is emitted as a DECIMAL string because fcp-server parses it with atoi(); if a device-provided devmap ever turns up using hex strings, that parse silently yields 0."
@@ -176,35 +177,51 @@
     "sources": [
       {
         "name": "ADAT 1",
-        "router-pin": "512"
+        "router-pin": "512",
+        "peak-index": 10,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 2",
-        "router-pin": "513"
+        "router-pin": "513",
+        "peak-index": 11,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 3",
-        "router-pin": "514"
+        "router-pin": "514",
+        "peak-index": 12,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 4",
-        "router-pin": "515"
+        "router-pin": "515",
+        "peak-index": 13,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 5",
-        "router-pin": "516"
+        "router-pin": "516",
+        "peak-index": 14,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 6",
-        "router-pin": "517"
+        "router-pin": "517",
+        "peak-index": 15,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 7",
-        "router-pin": "518"
+        "router-pin": "518",
+        "peak-index": 16,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "ADAT 8",
-        "router-pin": "519"
+        "router-pin": "519",
+        "peak-index": 17,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "Mix A",
@@ -232,43 +249,63 @@
       },
       {
         "name": "Analogue 1",
-        "router-pin": "1024"
+        "router-pin": "1024",
+        "peak-index": 0,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Analogue 2",
-        "router-pin": "1025"
+        "router-pin": "1025",
+        "peak-index": 1,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Analogue 3",
-        "router-pin": "1026"
+        "router-pin": "1026",
+        "peak-index": 2,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Analogue 4",
-        "router-pin": "1027"
+        "router-pin": "1027",
+        "peak-index": 3,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Analogue 5",
-        "router-pin": "1028"
+        "router-pin": "1028",
+        "peak-index": 4,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "Analogue 6",
-        "router-pin": "1029"
+        "router-pin": "1029",
+        "peak-index": 5,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "Analogue 7",
-        "router-pin": "1030"
+        "router-pin": "1030",
+        "peak-index": 6,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "Analogue 8",
-        "router-pin": "1031"
+        "router-pin": "1031",
+        "peak-index": 7,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "S/PDIF 1",
-        "router-pin": "1032"
+        "router-pin": "1032",
+        "peak-index": 8,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "S/PDIF 2",
-        "router-pin": "1033"
+        "router-pin": "1033",
+        "peak-index": 9,
+        "_peak-index-provenance": "inferred"
       },
       {
         "name": "PCM 1",
@@ -299,11 +336,15 @@
       {
         "name": "Mixer Input 01",
         "router-pin": "768",
+        "peak-index": 28,
+        "_peak-index-provenance": "measured",
         "mixer-input-index": 0
       },
       {
         "name": "Mixer Input 02",
         "router-pin": "769",
+        "peak-index": 29,
+        "_peak-index-provenance": "measured",
         "mixer-input-index": 1
       },
       {
@@ -448,27 +489,39 @@
       },
       {
         "name": "Line Output 1",
-        "router-pin": "1024"
+        "router-pin": "1024",
+        "peak-index": 18,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "Line Output 2",
-        "router-pin": "1025"
+        "router-pin": "1025",
+        "peak-index": 19,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "Line Output 3",
-        "router-pin": "1026"
+        "router-pin": "1026",
+        "peak-index": 20,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "Line Output 4",
-        "router-pin": "1027"
+        "router-pin": "1027",
+        "peak-index": 21,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "Line Output 5",
-        "router-pin": "1028"
+        "router-pin": "1028",
+        "peak-index": 22,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "Line Output 6",
-        "router-pin": "1029"
+        "router-pin": "1029",
+        "peak-index": 23,
+        "_peak-index-provenance": "block-measured"
       },
       {
         "name": "PCM 01",
