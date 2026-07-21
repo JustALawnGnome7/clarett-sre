@@ -297,8 +297,29 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 	/* Copy the response payload out while still holding the lock (resp_buf is stable until the next
 	 * command, which can't start before we unlock). Only on success and only if the caller asked. */
 	if (!ret && resp_out && resp_len) {
+		const u8 *r = c->resp_buf;
+		u16 have;
+
 		dma_rmb();
-		memcpy(resp_out, (const u8 *)c->resp_buf + FCP_RESP_DATA_OFF, resp_len);
+		have = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+		/*
+		 * Honour the response's own size. The device answers some commands with LESS than the
+		 * caller asked for — MUX_READ caps every reply at 28 entries (112 bytes) however large
+		 * a count is requested — and copying the full requested length then hands the caller
+		 * whatever the PREVIOUS command left in resp_buf. That is stale DMA content presented
+		 * as device data (it disguised the MUX_READ cap as a truncated routing table for some
+		 * time), and via the hwdep it is also a kernel-memory disclosure. Zero-fill the tail so
+		 * a short reply is unmistakably short. size == 0 is left alone: not every command fills
+		 * the field, and a zero-length answer is judged by outcome (see the note above).
+		 */
+		if (have && have < resp_len) {
+			memcpy(resp_out, r + FCP_RESP_DATA_OFF, have);
+			memset(resp_out + have, 0, resp_len - have);
+			dev_dbg(&c->pci->dev, "op 0x%06x: short response %u < %u requested\n",
+				opcode, have, resp_len);
+		} else {
+			memcpy(resp_out, r + FCP_RESP_DATA_OFF, resp_len);
+		}
 	}
 
 	c->seq++;

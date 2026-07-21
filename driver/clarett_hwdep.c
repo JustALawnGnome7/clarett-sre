@@ -52,7 +52,9 @@ static int clarett_hwdep_cmd(struct clarett *c, struct fcp_cmd __user *arg)
 
 	buf_size = max(cmd.req_size, cmd.resp_size);
 	if (buf_size) {
-		data = kmalloc(buf_size, GFP_KERNEL);
+		/* Zeroed: the reply may be shorter than resp_size, and uninitialised kernel memory
+		 * must never reach userspace through the gap. */
+		data = kzalloc(buf_size, GFP_KERNEL);
 		if (!data)
 			return -ENOMEM;
 	}

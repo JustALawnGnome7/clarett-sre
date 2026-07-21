@@ -390,6 +390,44 @@ static void clarett_hw_init(struct clarett *c)
  * range was fully read — the replay echoes THIS boot's device state, byte geometry unchanged.
  * Allocation failure degrades to the verbatim replay.
  */
+/*
+ * The arm has to run before the device can say what it is, so it necessarily replays the id_table
+ * default's bring-up blob (the 2Pre's). That is fine for the model-agnostic parts of bring-up, but
+ * it leaves a non-2Pre device holding the 2Pre's ROUTING and MIXER tables — the wrong patch for the
+ * hardware. Observed on a 4Pre: its live table routed 14 of its 20 PCM captures and 10 of its 30
+ * mixer inputs, with the outputs wired as a 2Pre's and S/PDIF appearing as an input rather than an
+ * output. (The device's own MUX_INFO still reports the correct 4Pre sizes, 74/70/68 — only the
+ * contents were wrong.)
+ *
+ * Once detection has corrected c->model, replay just that model's SET_MUX/SET_MIX steps, in blob
+ * order so the SET_MIX buses land before the SET_MUX bands. Those are the same two commands a
+ * runtime routing or mixer edit issues, so this is an ordinary operation on an armed session —
+ * unlike a full re-init, which is documented to wedge GET_DATA on an already-armed device.
+ */
+static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with)
+{
+	const struct clarett_model *m = c->model;
+	int i, sent = 0, fails = 0;
+
+	if (m == armed_with || !m->init_blob)	/* right tables already, or no blob (8Pre) */
+		return;
+
+	for (i = 0; i < m->n_init_steps; i++) {
+		const struct clarett_init_step *s = &m->init_seq[i];
+
+		if (s->opcode != FCP_SET_MUX && s->opcode != FCP_SET_MIX)
+			continue;
+		if (clarett_fcp(c, s->opcode, m->init_blob + s->off, s->len) < 0)
+			fails++;
+		else
+			sent++;
+	}
+
+	dev_info(&c->pci->dev,
+		 "re-applied %s routing/mixer tables after detect (armed as %s; %d sent, %d failed)\n",
+		 m->name, armed_with->name, sent, fails);
+}
+
 static int clarett_arm_device(struct clarett *c)
 {
 	int i, err, fails = 0, echoed = 0, verbatim = 0;
@@ -1395,6 +1433,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * resp_buf after its command returns, and the meter worker shares that buffer. */
 	if (!forced) {
 		const struct clarett_model *det = clarett_detect_model(c);
+		const struct clarett_model *armed_with = c->model;
 
 		if (det)
 			c->model = det;
@@ -1404,6 +1443,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 				 c->model->name);
 		dev_info(&pci->dev, "model: %s%s\n", c->model->name,
 			 det ? " (auto-detected)" : "");
+		/* The arm used armed_with's tables; give the detected model its own. */
+		clarett_apply_model_routing(c, armed_with);
 	}
 
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
