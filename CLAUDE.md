@@ -109,7 +109,10 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   `GET_METER=0x001001` (GUI polls continuously — the trace "noise").
 - **Device-specific init-only:** `0x5000` (config push), `0x6000-2`, `0x7000-3`,
   `0x0002`. Not decoded; not replayed by the driver (works without so far).
-- **Open:** `0x3001` query triple; a 1 KB bulk `SET_DATA`; the init handshake.
+- **`MUX_READ=0x003001`** — routing read-back, decoded on hardware July 20 2026 (transport spec §8):
+  request `{u8 offset, u8 pad, u8 count, u8 mux_num}`, **reply capped at 28 entries (112 B)** whatever
+  `count` says, and `offset` is a **flat** entry index crossing band boundaries. Callers must window.
+- **Open:** a 1 KB bulk `SET_DATA`; the init handshake.
 
 ### The control-plane model (the key result)
 A config write = `SET_DATA{offset, len, value}` then `DATA_CMD{activate}`, where

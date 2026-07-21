@@ -53,7 +53,7 @@ These are the `scarlett2` USB values. Expect the 8PreX to match or be close; **v
 | `0x00800002` | DATA_CMD | **commit/activate** a config write: payload `{u32 activate}` |
 | `0x00001001` | GET_METER | read level meters (GUI polls this continuously) |
 | `0x00002001` / `0x00002002` | GET_MIX / **SET_MIX** | mixer-gain coefficients (§6 of control-plane spec). **SET_MIX confirmed** — see §8 |
-| `0x00003001` / `0x00003002` | GET_MUX / **SET_MUX** | routing matrix (§8 of control-plane spec). **SET_MUX confirmed** — see §8 |
+| `0x00003001` / `0x00003002` | **MUX_READ** / **SET_MUX** | routing matrix (§8 of control-plane spec). **Both confirmed on hardware** — see §8; MUX_READ's windowed reply is §8's last subsection |
 | `0x00006004` | GET_SYNC | clock-sync / lock status |
 
 **This resolves the open questions in the control-plane spec:**
@@ -402,6 +402,40 @@ So the 8PreX **does** have a routing matrix; outputs/captures/mixer-input-slots 
 via `SET_MUX`, while per-input mix *levels* come from `SET_MIX`. `fcp_decode.py` decodes mux entries
 (`dst<-src`) natively. NOTE: `SET_MUX`/appspace payloads run to ~1 KB; the decoder's mailbox capture
 window was widened to `MBOX_BASE+0x410` to see them in full (earlier it truncated at 256 B → `??`).
+
+### `MUX_READ` (`0x003001`) — CONFIRMED on hardware, reply is WINDOWED `[HW — Clarett 4Pre, July 20 2026]`
+Reading the routing table back. This closes the control-plane spec's "`0x3001` query triple" open item;
+it was decoded not from a capture but by asking a live armed device directly
+(`tools/fcp_mux_probe.c`, plus a write-then-read-back test).
+
+- **Request** = `{u8 offset, u8 pad, u8 count, u8 mux_num}` — `mux_num` is the sample-rate band
+  (0/1/2, as `SET_MUX`), `count` the number of entries wanted, `offset` where to start.
+- **Response** = `u32 entry[]` in the same `(src_pin << 12) | dst_pin` packing `SET_MUX` writes.
+- **THE REPLY IS CAPPED AT 28 ENTRIES (112 bytes)**, however large a `count` is requested. Asking for
+  74 returns 28 real entries and nothing more; the caller must walk `offset` in ≤28-entry windows to
+  read a whole band. Confirmed by reading one table both ways: a single `count=74` request and three
+  `count=28` windows agree on words 0–27 and diverge from word 28 on, where the windowed reads return
+  real entries (`400 300`, `401 301`, …) and the big read returns filler.
+- **`offset` is a FLAT entry index that crosses band boundaries** — it is not relative to the band.
+  On the 4Pre, whose bands declare 74/70/68 words, reading at flat offset 56 returns the tail of band 0,
+  then two words of inter-band content (`000 000`, `000 121`), then **band 1's table restarting at flat
+  index 76**. So band 0 occupies flat 0–75 (74 entries + 2), and `mux_num` selects a base that `offset`
+  is added to rather than an independent address space.
+
+**Method note — why this took several passes, and the trap to remember.** A short reply is not
+self-announcing: our own transport copied the full *requested* length out of `resp_buf` regardless of
+how much the device wrote, so the tail of every short reply was **the remains of the previous command's
+response**. That fabricated a coherent and very persuasive "the routing table is truncated at entry 28"
+story — one that survived cross-checks, because the stale bytes were real device data from an earlier
+read and therefore matched other observations. It was broken only by a **write-then-read-back**
+experiment: writing a known-good 74-entry table from userspace and reading it back in windows showed
+the table was complete all along and the *read* was lying. Same shape as the manifestation wall
+(`clarett-manifestation-wall.md` §8): the instrument, not the device, was generating the anomaly.
+Fixed in `clarett_mailbox.c` — the copy now honours the response's own size field and zero-fills the
+tail, so a short reply is unmistakably short (it was also a kernel-memory disclosure via the hwdep).
+
+**Consumer note.** `fcp-server`'s `fcp_mux_read()` requests a whole band in one command and believes
+the answer, so it needs a chunking patch to read any table longer than 28 entries.
 
 ## 9. Caveats
 
