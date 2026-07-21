@@ -411,8 +411,26 @@ void clarett_hwdep_notify(struct clarett *c, u32 ev)
 	 * ~200 ms so a storm of idle notifications becomes one re-read, not thirty. A real change is
 	 * delivered within the debounce window — imperceptible for a control refresh.
 	 */
+	if (!c->hwdep_ready)
+		return;
 	atomic_or(~0u, &c->hwdep_notify_event);
 	mod_delayed_work(system_wq, &c->hwdep_notify_dwork, msecs_to_jiffies(200));
+}
+
+/*
+ * Stop the relay. MUST run before c is freed: the debounced wake holds a timer pointing at c, and
+ * because the device notifies at ~30 Hz idle one is essentially always armed — a surprise removal
+ * (the device powered off on its Thunderbolt link) that frees c with the timer live fires
+ * wake_up_interruptible() into freed memory. Call after the last thing that can re-arm the dwork
+ * (clarett_notify_work), and note the flag also covers probe-error teardowns that never reached
+ * clarett_hwdep_init(), where the delayed_work is still all zeroes.
+ */
+void clarett_hwdep_free(struct clarett *c)
+{
+	if (!c->hwdep_ready)
+		return;
+	c->hwdep_ready = false;
+	cancel_delayed_work_sync(&c->hwdep_notify_dwork);
 }
 
 static long clarett_hwdep_read(struct snd_hwdep *hw, char __user *buf,
@@ -425,10 +443,15 @@ static long clarett_hwdep_read(struct snd_hwdep *hw, char __user *buf,
 	if (count < sizeof(event))
 		return -EINVAL;
 
+	/* card->shutdown terminates the wait on removal: snd_card_free() blocks until the last
+	 * handle closes, so a reader parked here forever would hang the PCI remove thread. */
 	err = wait_event_interruptible(c->hwdep_notify_wait,
-				       atomic_read(&c->hwdep_notify_event));
+				       atomic_read(&c->hwdep_notify_event) ||
+				       c->card->shutdown);
 	if (err)
 		return err;
+	if (c->card->shutdown)
+		return -ENODEV;
 
 	event = atomic_xchg(&c->hwdep_notify_event, 0);
 	if (copy_to_user(buf, &event, sizeof(event)))
@@ -443,6 +466,8 @@ static __poll_t clarett_hwdep_poll(struct snd_hwdep *hw, struct file *file,
 	struct clarett *c = hw->private_data;
 
 	poll_wait(file, &c->hwdep_notify_wait, wait);
+	if (c->card->shutdown)
+		return EPOLLHUP | EPOLLERR;
 	return atomic_read(&c->hwdep_notify_event) ? EPOLLIN | EPOLLRDNORM : 0;
 }
 
@@ -465,6 +490,8 @@ int clarett_hwdep_init(struct clarett *c)
 	hw->ops.ioctl_compat = clarett_hwdep_ioctl;
 	hw->ops.read = clarett_hwdep_read;
 	hw->ops.poll = clarett_hwdep_poll;
+
+	c->hwdep_ready = true;		/* dwork is live from here; clarett_hwdep_free() must run */
 
 	dev_info(&c->pci->dev,
 		 "FCP hwdep created (fcp-server transport; PVERSION+CMD+INIT+METER+notify)\n");

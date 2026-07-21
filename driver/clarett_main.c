@@ -1287,6 +1287,10 @@ static void clarett_card_free(struct snd_card *card)
 	 * more notify after the cancel above; re-cancel now that free_irq has synced them all
 	 * (a straggler that already started runs its GET on the poll fallback — harmless). */
 	cancel_work_sync(&c->notify_work);
+	/* Last, because notify_work is what re-arms it: the debounced hwdep relay wake. c is freed
+	 * the moment this returns to snd_card_free, and a live 200 ms timer into freed memory panics
+	 * the host — which is exactly what a surprise removal (device powered off) used to do. */
+	clarett_hwdep_free(c);
 }
 
 /*
@@ -1523,6 +1527,11 @@ static void clarett_remove(struct pci_dev *pci)
 	/* Blocks: disconnect → wait for the last userspace handle to close (the final
 	 * mailbox transactions run the normal MSI-paced cycle) → clarett_card_free()
 	 * teardown → frees c. Only then is the device quiesced. */
+	/* Disconnect first and kick the relay waiters: snd_card_free() waits for the last handle to
+	 * close, and fcp-server parked in read()/poll() on hwdep_notify_wait would never be woken by
+	 * the disconnect alone — the wait re-checks card->shutdown, which snd_card_disconnect sets. */
+	snd_card_disconnect(card);
+	wake_up_interruptible(&c->hwdep_notify_wait);
 	snd_card_free(card);
 	/* Devres releases in REVERSE order after remove returns: the response buffer is
 	 * freed (and IOMMU-unmapped) BEFORE pcim's disable clears bus master — so without
@@ -1542,8 +1551,7 @@ static void clarett_shutdown(struct pci_dev *pci)
 		return;
 	c = card->private_data;
 	cancel_delayed_work_sync(&c->meter_work);
-	if (!in_kernel_controls)
-		cancel_delayed_work_sync(&c->hwdep_notify_dwork);	/* only armed on the hwdep path */
+	clarett_hwdep_free(c);		/* no-op unless the hwdep path armed the relay */
 	/* Persist a just-made change before the reboot tears the device down (mailbox still up). */
 	if (cancel_delayed_work_sync(&c->save_work))
 		clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
