@@ -143,14 +143,19 @@ out:
  * heartbeat uses) and projects the raw levels through the map. SET_METER_LABELS attaches an
  * FCP_CHANNEL_LABELS TLV naming each channel. Mirrors sound/usb/fcp.c's meter control.
  *
- * LEVELS ARE u16 `[HW — 4Pre, July 20 2026]`. This was u32 (48 u32s, inherited from the removed
- * in-kernel meter), which came from reading the request's num_meters=0x30 and assuming an element
- * width — never checked against a reply. Dumping an actual response shows each u32 is two identical
- * u16s: 0x020a020a = {522, 522}, 0x020e020e = {526, 526}. 522/526 are sane idle levels in the
- * 0..4095 range; 34210314 is not. So a u32 read merged two channels and clamped every one of them
- * to full scale — the old control would have pegged at 4095 across the board had anything ever read
- * it on hardware. Still to confirm: whether num_meters counts u16 slots (assumed here) or something
- * else, which a reply-length sweep settles.
+ * A LEVEL IS 16-BIT, REPLICATED INTO A 32-BIT SLOT `[HW — 4Pre, July 20 2026]`. The slot stride is
+ * 4 bytes (48 u32 words), but only the low 16 bits carry the level, so the old code's plain u32 read
+ * yielded values ~8000x over full scale and clamped every channel to CLARETT_METER_MAX. Observed
+ * words: 0x020a020a, 0x020e020e, and on a later run 0x01cf01cf, 0x01ca01ca — i.e. {522,522},
+ * {526,526}, {463,463}, {458,458}. Sane idle levels in the 0..4095 range, each duplicated.
+ *
+ * The halves being IDENTICAL in every sample across runs is what rules out "two u16 channels per
+ * word": two independent channels would not track each other exactly. Corroborating: slot 28 (byte
+ * offset 112) is live and moves with the rest between runs, which is past the end of a 48-entry u16
+ * reply (96 bytes), so the reply really is 48 u32 words.
+ *
+ * Still unconfirmed: whether num_meters counts slots 1:1 (assumed) — a reply-length sweep against
+ * num_meters settles it, and would also explain why only slots 0 and 18-23 ever carry signal here.
  */
 static int clarett_hwdep_meter_info(struct snd_kcontrol *kctl,
 				    struct snd_ctl_elem_info *ui)
@@ -178,11 +183,11 @@ static int clarett_hwdep_meter_get(struct snd_kcontrol *kctl,
 
 	mutex_lock(&c->hwdep_lock);
 	err = clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
-			      (u8 *)c->hwdep_meter_levels, n * sizeof(__le16));
+			      (u8 *)c->hwdep_meter_levels, n * sizeof(__le32));
 	if (!err) {
 		for (i = 0; i < c->hwdep_meter_channels; i++) {
 			int idx = c->hwdep_meter_map[i];
-			u32 v = idx < 0 ? 0 : le16_to_cpu(c->hwdep_meter_levels[idx]);
+			u32 v = idx < 0 ? 0 : (le32_to_cpu(c->hwdep_meter_levels[idx]) & 0xffff);
 
 			uc->value.integer.value[i] = min(v, (u32)CLARETT_METER_MAX);
 		}
@@ -251,7 +256,7 @@ static int clarett_hwdep_set_meter_map(struct clarett *c, struct fcp_meter_map _
 		return -EINVAL;
 	if (map.map_size < 1 || map.map_size > 255 ||
 	    map.meter_slots < 1 || map.meter_slots > 255 ||
-	    map.meter_slots * sizeof(__le16) > resp_cap)	/* GET_METER response must fit resp_buf */
+	    map.meter_slots * sizeof(__le32) > resp_cap)	/* GET_METER response must fit resp_buf */
 		return -EINVAL;
 
 	tmp = kmalloc_array(map.map_size, sizeof(s16), GFP_KERNEL);
@@ -269,8 +274,8 @@ static int clarett_hwdep_set_meter_map(struct clarett *c, struct fcp_meter_map _
 	if (!c->hwdep_meter_ctl) {
 		s16 *new_map = devm_kmalloc_array(&c->pci->dev, map.map_size,
 						  sizeof(s16), GFP_KERNEL);
-		__le16 *levels = devm_kmalloc_array(&c->pci->dev, map.meter_slots,
-						    sizeof(__le16), GFP_KERNEL);
+		__le32 *levels = devm_kmalloc_array(&c->pci->dev, map.meter_slots,
+						    sizeof(__le32), GFP_KERNEL);
 		struct snd_kcontrol *kctl = NULL;
 
 		if (new_map && levels)
