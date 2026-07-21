@@ -115,14 +115,21 @@ def name_sources(srcs):
 # (8 vs 16) and in their analogue pin blocks (the 2Pre's inputs are 0x400/0x402, skipping 0x401,
 # and it reaches S/PDIF at 0x186/0x187), so any other model must be measured on its own hardware.
 METER_SLOTS = {
-    # Measured on a 2Pre, July 20 2026: analogue in 1 -> slot 0, analogue in 2 -> slot 1. Note its
-    # router pins are 0x400/0x402 (0x401 is skipped on this model) yet the slots are 0/1 — so meter
-    # slots are a COMPACT CHANNEL INDEX, not derived from the pin number. Nothing else is listed:
-    # S/PDIF/ADAT would need a digital source to excite, and both models answer METER_INFO with the
-    # same 00 02 0c 00, so the "12" in it is a family constant rather than this model's channel
-    # count and cannot be used to infer where the remaining inputs sit.
+    # Measured on a 2Pre: analogue in 1/2 -> slots 0/1, S/PDIF in 1/2 -> slots 2/3. Its router pins
+    # are 0x400/0x402 (0x401 skipped) and S/PDIF is at 0x186/0x187, yet the slots are 0..3 — meter
+    # slots are a COMPACT CHANNEL INDEX, unrelated to pin numbering.
+    #
+    # THE RULE, now measured on two models: slots are packed PER MODEL in category order — analogue
+    # inputs fill 0..n-1, then S/PDIF. The 2Pre puts S/PDIF at 2/3 (after 2 analogue), the 4Pre at
+    # 8/9 (after 8). ADAT is expected to follow S/PDIF but is unmeasured on both.
+    #
+    # METER_INFO answers 00 02 0c 00 on BOTH models, so the 12 in it is a family constant, not a
+    # per-model channel count (it happens to equal the 2Pre's 2+2+8 input total, and does not match
+    # the 4Pre's 18). fcp-server uses it as the bound on peak-index, which is why the 4Pre's ADAT
+    # slots (10-17) are unreachable while the 2Pre's predicted 4-11 would fit.
     "clarett-2pre": {
         0x400: (0, "measured"), 0x402: (1, "measured"),
+        0x186: (2, "measured"), 0x187: (3, "measured"),   # S/PDIF in (optical), measured
     },
     "clarett-4pre": {
         # pin: (slot, provenance)

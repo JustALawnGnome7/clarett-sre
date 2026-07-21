@@ -141,11 +141,15 @@
     "sources": [
       {
         "name": "S/PDIF 1",
-        "router-pin": "390"
+        "router-pin": "390",
+        "peak-index": 2,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "S/PDIF 2",
-        "router-pin": "391"
+        "router-pin": "391",
+        "peak-index": 3,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT 1",
