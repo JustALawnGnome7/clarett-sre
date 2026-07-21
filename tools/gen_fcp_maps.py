@@ -128,10 +128,12 @@ METER_SLOTS = {
         # pin: (slot, provenance)
         0x400: (0,  "measured"), 0x401: (1,  "measured"),
         0x402: (2,  "measured"), 0x403: (3,  "measured"),
-        # Same block, same order — inferred, not measured (no signal source on 5-8 at the time).
-        0x404: (4,  "inferred"), 0x405: (5,  "inferred"),
-        0x406: (6,  "inferred"), 0x407: (7,  "inferred"),
-        0x408: (8,  "inferred"), 0x409: (9,  "inferred"),   # S/PDIF in, continuing the block
+        # Bracketed rather than free guesses: analogue 1-4 are measured at 0-3 and S/PDIF at 8-9,
+        # so on an 8-analogue-input device the four slots between can only be analogue 5-8.
+        0x404: (4,  "bracketed"), 0x405: (5,  "bracketed"),
+        0x406: (6,  "bracketed"), 0x407: (7,  "bracketed"),
+        # Measured: optical S/PDIF into the 4Pre (source byte @132 = Optical) lit 8 and 9 together.
+        0x408: (8,  "measured"), 0x409: (9,  "measured"),
     },
 }
 # NO destination peak-index. fcp-server rejects any index >= the count the device reports from

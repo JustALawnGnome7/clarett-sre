@@ -259,37 +259,37 @@
         "name": "Analogue 5",
         "router-pin": "1028",
         "peak-index": 4,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "bracketed"
       },
       {
         "name": "Analogue 6",
         "router-pin": "1029",
         "peak-index": 5,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "bracketed"
       },
       {
         "name": "Analogue 7",
         "router-pin": "1030",
         "peak-index": 6,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "bracketed"
       },
       {
         "name": "Analogue 8",
         "router-pin": "1031",
         "peak-index": 7,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "bracketed"
       },
       {
         "name": "S/PDIF 1",
         "router-pin": "1032",
         "peak-index": 8,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "S/PDIF 2",
         "router-pin": "1033",
         "peak-index": 9,
-        "_peak-index-provenance": "inferred"
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 1",
