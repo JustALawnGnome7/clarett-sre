@@ -202,12 +202,33 @@ struct snd_pcm_substream;
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 
-/* No-arg session-lifecycle commands the VM issues per stream-config, in-session, before arming the engine
- * (2pre_streamstart.log; both models). Names are by observation, not confirmed semantics. The device appears
- * to reset stream-mode (flat vs descriptor) when idle, so this handshake must be re-run at PCM prepare — see
- * clarett_stream_handshake() / spec §9 step 5 / dataplane memory. */
-#define FCP_STREAM_ENABLE        0x006004   /* VM issues twice */
-#define FCP_STREAM_COMMIT        0x006005
+/*
+ * CLOCK/SYNC category (0x006xxx) — these are QUERIES, not commands `[HW — 4Pre, July 20 2026]`.
+ *
+ * They were named FCP_STREAM_ENABLE/FCP_STREAM_COMMIT from watching the vendor issue them in-session
+ * immediately before arming the engine, and that inference was WRONG: the category number is the
+ * sync category (fcp-server: FCP_OPCODE_CATEGORY_SYNC = 0x006, SYNC_READ = 0x006004), and reading
+ * them back on a live 4Pre returns state, not acknowledgement:
+ *
+ *   0x006004 -> 1        sync lock status (0 = unlocked, 1 = locked)   [== fcp-server SYNC_READ]
+ *   0x006002 -> 48000    current rate (the rate we had just set)
+ *   0x006005 -> 48000    rate
+ *   0x006000 -> 0x30018  caps/bitmask (undecoded)
+ *   0x006001 -> 44100    rate
+ *   0x006003 -> 44100    rate
+ *
+ * So the vendor was POLLING whether its clock had locked, not enabling a stream — which also explains
+ * its 3-second stall before streaming with zero MMIO writes in it. Consequence for us: the stream
+ * handshake has NO enabling function beyond SET_CLOCK and the CONFIG_PUSH burst; issuing these three
+ * is inert. They are kept (and still issued) only to keep our command stream byte-identical to the
+ * vendor's, and because their responses are worth reading — a device reporting unlocked would explain
+ * a dead engine. Ours reports LOCKED at 48000, so the data-plane stall is not a clock problem.
+ */
+#define FCP_SYNC_READ            0x006004   /* u32 lock status; was misnamed FCP_STREAM_ENABLE */
+#define FCP_SYNC_RATE            0x006005   /* u32 rate; was misnamed FCP_STREAM_COMMIT */
+/* Back-compat aliases: the old names appear in comments/specs written before the decode. */
+#define FCP_STREAM_ENABLE        FCP_SYNC_READ
+#define FCP_STREAM_COMMIT        FCP_SYNC_RATE
 
 /*
  * Firmware init-handshake opcodes, replayed verbatim at probe (see clarett_init_handshake).

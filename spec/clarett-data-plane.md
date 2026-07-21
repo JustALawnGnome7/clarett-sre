@@ -592,3 +592,52 @@ session log raw `0x300` values at info to derive this model's ctr unit/modulus e
 ctr-delta × 16 frames (modulo the observed wrap) instead of 4 frames/event, then validate audio
 content. Note the reload path re-arms an already-armed device — the old "re-arm wedges GET_DATA"
 finding predates the gated ack and gets tested implicitly (DC power-cycle if it wedges).
+
+## 11. The 0x600x block is CLOCK/SYNC, and it is queries (July 20 2026) `[HW — Clarett 4Pre]`
+
+**`FCP_STREAM_ENABLE` / `FCP_STREAM_COMMIT` never existed.** Those names came from watching the vendor
+issue `0x6004`/`0x6002`/`0x6005` in-session immediately before arming the engine and inferring "enable,
+then commit". The category number says otherwise — `0x006` is the **sync** category (fcp-server:
+`FCP_OPCODE_CATEGORY_SYNC = 0x006`, `SYNC_READ = 0x006004`) — and reading them on a live armed 4Pre
+returns state, not acknowledgement:
+
+| opcode | value | meaning |
+|---|---|---|
+| `0x006004` | `1` | **sync lock status** (0 = unlocked, 1 = locked) |
+| `0x006002` | `48000` | current rate (the rate just set) |
+| `0x006005` | `48000` | rate |
+| `0x006000` | `0x00030018` | caps/bitmask, undecoded |
+| `0x006001` | `44100` | rate |
+| `0x006003` | `44100` | rate |
+
+So the vendor was **polling whether its clock had locked**, not enabling anything. That also explains
+its 3-second pre-stream stall containing *zero* MMIO writes (§10 read it as a mystery trigger): it was
+waiting to lock, polling sync at ~16 Hz. Consequence: our stream handshake has **no enabling function**
+beyond `SET_CLOCK` and the `CONFIG_PUSH` burst — the triple is inert, kept only to stay byte-identical
+and because the answers are worth reading.
+
+**Our 4Pre reports LOCKED at 48000, so the stall is not a clock problem.**
+
+### Corrections to §10 from the same session
+- **The counter difference was not real.** §10 leant on the vendor reading `ctr=0xc` where we read `0x0`.
+  The vendor's counter reads `0xc, 0xc, 0xc` across all three of its failing period events — **constant,
+  not advancing** — and only jumps to `0x18` when streaming begins. `0xc` is stale from an earlier session
+  on a device that was never power-cycled. Functionally identical to our `0`.
+- **"Arms, one period event, stalls" is not a bug signature.** The vendor does exactly that **four times
+  in a row** before it streams, tearing down (`0x110=0`, `0x100=0xf`) and retrying each time.
+- **The engine setup is exonerated.** Our post-arm state is byte-identical to the vendor's at the same
+  point: its failing arms read `0x218=0xe 0x21c=0xd→0xe 0x318=0x3 0x31c=0x3`, and so do we. `ptr0=0xe`
+  is a fixed prefetch depth, not progress — proven by doubling the TX fragment and watching it not move.
+- **The vendor's pre-arm re-init batch is not the trigger.** Replaying it verbatim (`INIT_2`, `INIT_1`×8
+  ids 1–8, `INIT_2`, count queries, `0x004001`×6) is accepted with `err=0` and changes nothing
+  (`stream_batch=1`, default off).
+- **Fixed en route:** `clarett_frag_bytes()` sized descriptors by alignment, so frames-per-descriptor
+  fell out of the channel width — 8 for the 4Pre's 8ch TX ring against 16 for its 20ch RX ring, i.e. the
+  two rings advancing at 2:1 in **time**. Now sized by duration (16 frames) then aligned; only the 8ch
+  case changes.
+
+**Next lead: the TX ring's CONTENTS.** Everything host-visible now matches the vendor and the engine still
+will not start, which points off-BAR. In the vendor capture Windows was actively playing audio, so its TX
+ring held real samples; ours holds silence. This engine has shown content sensitivity before — the `0xAA`
+RX pre-fill was recorded as "the lone diff that made it clock" — and DMA content is precisely what an MMIO
+trace cannot see.
