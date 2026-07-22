@@ -3,19 +3,26 @@
 Supported: **Clarett 8PreX**, **Clarett 8Pre**, **Clarett 4Pre**, and **Clarett 2Pre** (one module,
 per-model descriptor).
 
-Status: **control plane only** (mixer-only sound card). PCM/streaming is not yet
-implemented (and is gated off for the 2Pre until its stream geometry is captured).
+Status: **control plane works** (mixer-only sound card — no working PCM yet).
 Built from the clean-room notes in `../spec/`.
 
-> **⚠️ Control changes do not physically take effect.** The driver brings up the
-> device and every mixer write completes without error, but the hardware does not act
-> on them (e.g. the front-panel Mute LED does not move) and `GET_DATA` reads come back
-> empty — the device backend stays **dormant for our driver**. This is **not** a
-> control-plane protocol bug (our FCP traffic matches the vendor byte-for-byte) and
-> **not** a missing data plane (the vendor moves the same LEDs at idle with no stream):
-> it is a proven **off-wire / below-the-driver** boundary — see "Known limitations" and
-> `../spec/clarett-manifestation-wall.md`. Also: the device-arming init replay only
-> works on a **freshly power-cycled** device.
+> **Control changes take physical effect.** Confirmed on hardware: preamp Mode and Air
+> move a 2Pre's relays and front-panel LEDs, monitor Mute/Dim act on the outputs, the
+> SW/HW selector hands an output to the front-panel knob, and `GET_DATA` returns real
+> data — including the knob's own position, live. Encodings are verified by reading the
+> device's bytes back (`../tools/fcp_cfg_read.c`), not by watching the hardware, since a
+> relay clicks the same for a right and a wrong value.
+>
+> This was not always so: for most of this project's life every write completed and
+> nothing happened, a wall attributed to an "off-wire / below-driver" boundary after
+> four independent methods agreed. That attribution was **wrong**, and the record of how
+> it fell is worth reading before trusting any negative result here —
+> `../spec/clarett-manifestation-wall.md` §8. The cause was a trailing doorbell ack sent
+> before the device's response DMA had landed; every "known-good" vendor trace had been
+> captured under MMIO trapping slow enough to hide it.
+>
+> Still true: the device-arming init replay only works on a **freshly power-cycled**
+> device.
 
 ## What works
 
@@ -191,9 +198,12 @@ Never load this while the VM is using the device.
   the three captured models the source list is only the pins the factory-default matrix routes, not
   the device's full source inventory (the 8Pre, whose map is not table-derived, lists all of them).
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
-  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass at the
-  **same off-wire/below-driver wall** as the control plane (`../spec/clarett-data-plane.md`).
-  Experimental capture PCM is opt-in (`enable_pcm=1`); see the 2Pre note below.
+  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass
+  (`../spec/clarett-data-plane.md`). It used to be attributed to the same wall as the
+  control plane; that attribution died with the wall and the stall is **unexplained**.
+  Our post-arm state is byte-identical to the vendor's, whose own arms stall the same way
+  several times before streaming, so the engine setup is exonerated and the next lead is
+  the TX ring's contents. Experimental capture PCM is opt-in (`enable_pcm=1`).
 - **The config shadow is write-through.** `clarett_set_data()` keeps a shadow of the config space so
   the probe-time monitor-enable write can do a correct read-modify-write. It is seeded from the
   device at probe (`GET_DATA(24,92)`); bytes the device never reports back stay at their written
@@ -227,30 +237,29 @@ Never load this while the VM is using the device.
   entire 232-command arm + seed — a device-visible pre-command-#0 config-state
   difference present in every walled run (including the Fedora-guest control), invisible
   to the BAR-only pre-mailbox replay. Set `0` for the old late enable (A/B).
-- **Control changes don't physically manifest — a proven below-driver boundary** (the
-  headline gap). After a correct bring-up, monitor `Mute`/`Dim` writes complete
-  (`done=1, fcperr=0`) and `GET_DATA` returns empty (`size=0`) — the device backend is
-  dormant for our driver even though our FCP traffic matches the vendor app byte-for-byte.
-  The earlier "needs the **data plane** (streaming)" theory is **disproven** (the vendor
-  moves the same LEDs at idle, no stream). The differentiator has been localized to
-  **off-wire bus-master DMA / transport below the driver**, invisible to every host-side
-  software trace, and confirmed by **four independent methods**: Windows/vfio MMIO
-  (byte-identical on every surface), macOS DTrace of the working kext (device returns rich
-  real data to identical `GET_DATA` requests that return empty for us), our Linux replay,
-  and WinDbg kernel-debug of the working Windows driver (its entire init DMA footprint is
-  attribute-equivalent to ours — cached-coherent, 64-bit, nothing extra programmed to the
-  device at init). It is **not** a control-plane protocol bug and **not** fixable from the
-  driver's observable surface; the remaining leads (TB/PCIe bus analyzer, vendor-binary
-  disassembly) are excluded. Full analysis: `../spec/clarett-manifestation-wall.md`.
+- ~~**Control changes don't physically manifest — a proven below-driver boundary.**~~
+  **RESOLVED July 16 2026.** Kept here as a marker, because this was the headline gap for
+  most of the project and the eliminations behind it were all real: the vendor's MMIO,
+  config space, DMA footprint and cold-boot behaviour genuinely did match ours on every
+  host-visible surface, confirmed by four independent methods. What was wrong was the
+  conclusion drawn from them — that the difference must therefore be off-wire. It was a
+  race we had introduced: the trailing doorbell ack (`0x408=2`) was sent as soon as the
+  command completed, before the device's response DMA had landed, which the device answers
+  by refusing the session outright. Every vendor trace was captured under MMIO trapping at
+  ~20 µs per access, under which the response had always landed long before the ack — so
+  the traces could not show a precondition they always satisfied. Gating the ack on the
+  response actually arriving fixed it. Full account: `../spec/clarett-manifestation-wall.md` §8.
 - **Device bring-up replay is fresh-device-only.** `clarett_arm_device` arms a
   power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
   (double-init). TODO: probe with a `GET` and skip the replay when already armed.
-- **Packed bitfield controls** (per-output hardware gain/dim/mute enables): the
-  per-output mute enables (byte 72/73) are now exposed as `Line NN Mute Playback
-  Switch`, and the gain enables (byte 52) as the SW/HW volume-control enums. The
-  Monitor Out 1-2 mute+dim enables are still force-set at probe so the global
-  `Mute`/`Dim` act on the monitors by default. The per-output **dim** enables are
-  not individually exposed (scarlett2 has no per-output dim).
+- **Packed bitfield controls** (per-output hardware gain/dim/mute enables). The gain
+  enables (byte 52 + 4·(out/2), bit out%2) are exposed by the device maps as the SW/HW
+  volume-control selector — hardware-confirmed: an output set to HW follows the
+  front-panel knob. The Monitor Out 1-2 mute+dim enables are force-set at probe so the
+  global `Mute`/`Dim` act on the monitors by default; the rest of the mute enables
+  (byte 72/73) are **not** exposed, and neither are the dim enables. Note these are
+  *enables* — whether the master section reaches an output — not per-output mute: this
+  hardware has no per-output mute at all (one `<mute>` in every model's descriptor).
 ## Settings persistence & `alsactl` (device-owns-the-state)
 
 This driver follows the same policy as the in-kernel scarlett2 / 4th-gen Scarlett
