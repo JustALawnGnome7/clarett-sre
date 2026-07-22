@@ -76,7 +76,8 @@ def channel_controls(physical, control_configs):
                 continue
             name = cfg["name"] % (i + 1)
 
-            if cfg["type"] == "bool":
+            # bool-bitmap is a bool to ALSA; the bit addressing is fcp-server's business
+            if cfg["type"] in ("bool", "bool-bitmap"):
                 ctl("MIXER", name, "false",
                     ["access 'read write'", "type BOOLEAN", "count 1"])
             elif cfg["type"] == "enum":

@@ -69,9 +69,14 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	printf("config[%u..%u]:", off, off + len - 1);
-	for (i = 0; i < (int)len; i++)
+	/* 16 bytes to a line, each tagged with its absolute offset: dumping a range at two settings of
+	 * some physical control and diffing the two is how you find which byte backs it, and that only
+	 * works if a changed byte shows up as one changed line. */
+	for (i = 0; i < (int)len; i++) {
+		if (i % 16 == 0)
+			printf("%s%4u:", i ? "\n" : "", off + i);
 		printf(" %02x", cmd->data[i]);
+	}
 	printf("\n");
 
 	close(fd);

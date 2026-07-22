@@ -22,3 +22,8 @@ driver/*.log
 # Vendor RE source material — keep out of the distributed repo (clean-room).
 # Facts are carried into the authored spec/ instead; see CLAUDE.md.
 vendor-reference/
+
+# Compiled bench tools (sources are tools/fcp_*.c; build them where you need them)
+tools/fcp_cfg_read
+tools/fcp_meter_watch
+tools/fcp_mux_probe
