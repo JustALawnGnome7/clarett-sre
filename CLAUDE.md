@@ -158,6 +158,11 @@ tools/bar_profile.py                  vfio_region_* -> per-register activity pro
                                       outside the control-plane map (data-plane reg discovery).
 tools/notify_correlate.py             vfio_region_* -> correlates 0x400 notify-cause transitions with
                                       the mailbox command around each (proved 0x400 = command-phase reg).
+tools/fcp_*.c                         Bench tools driving the hwdep directly (stop fcp-server first —
+                                      it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
+                                      byte range, the only way to see what actually reached the device;
+                                      fcp_meter_watch: which meter slot a channel moves; fcp_mux_probe:
+                                      MUX_READ windowing.
 vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).
