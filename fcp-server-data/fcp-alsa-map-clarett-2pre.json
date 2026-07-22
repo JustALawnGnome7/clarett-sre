@@ -40,6 +40,10 @@
       "db-min": -127,
       "db-max": 0,
       "invert": true
+    },
+    "hw-gain": {
+      "name": "Line Out %d Volume Control Playback Enum",
+      "type": "bool-bitmap"
     }
   },
   "output-link": [],
@@ -53,6 +57,16 @@
     "muteSwitch": {
       "name": "Mute Playback Switch",
       "type": "bool"
+    },
+    "monitorVolume": {
+      "name": "Master HW Playback Volume",
+      "type": "int",
+      "access": "readonly",
+      "min": -127,
+      "max": 0,
+      "db-min": -127,
+      "db-max": 0,
+      "invert": true
     },
     "dimSwitch": {
       "name": "Dim Playback Switch",

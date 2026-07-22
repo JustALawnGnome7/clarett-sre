@@ -320,13 +320,32 @@ for slug, spec in MODELS.items():
     # notify-device is the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server issues
     # it via fcp_data_notify after the write). From the snd-clarett driver: air=7, mode=6, gain=1,
     # monitor mute/dim=2. Without it the SET_DATA stages but never manifests.
+    # notify-client is the mask fcp-server re-reads a control on when the DEVICE announces a change.
+    # It costs a mailbox round trip per control per notification, and this device notifies steadily,
+    # so it is set only where the device can actually change the value behind us: mute, dim and the
+    # monitor gain (the front-panel knob). Air/mode/SW-HW are host-owned — there is no front-panel
+    # control for any of them on this line, so nothing but us ever writes them — and the firmware
+    # version is static. See spec/clarett-control-plane.md and the config-ownership notes.
     members = OD()
     members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0, note="PLACEHOLDER offset; see _todo")
     members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute @ 24; activate 2. 1 = muted, 0 = unmuted (trace-confirmed, and confirmed on a 2Pre) - no inversion, same as dim @ 28")
     members["dimSwitch"]  = member(28, "bool", nd=2, note="monitor dim @ 28; activate 2")
-    members["air"]  = member(174, "bool",  shape=na, nd=7, note="per-input air @ 174+i; commit activate 7")
-    members["mode"] = member(166, "uint8", shape=na, nd=6, note="per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6")
+    # The monitor section's 8-bit gain, which is where the front-panel knob's position shows up:
+    # one of the three monitor bytes (24/28/112) the device refreshes on a front-panel notification.
+    # Read-only — the knob is the master and software cannot override it.
+    members["monitorVolume"] = member(112, "uint8", nd=2, note="monitor gain @ 112; attenuation code, same encoding as the output gains; read-only reflection of the front-panel knob")
+    members["air"]  = member(174, "bool",  shape=na, nd=7, nc=0, note="per-input air @ 174+i; commit activate 7")
+    members["mode"] = member(166, "uint8", shape=na, nd=6, nc=0, note="per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6")
     members["outputVolume"] = member(32, "uint8", shape=out_shape, nd=1, note="attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4); commit activate 1")
+    # SW/HW per output: enable-hardware-gain, one BIT per output, two outputs to a byte, the bytes
+    # stepping by 4 exactly as the gains do — byte 52 + 4*(out/2), bit out%2 [XML, all four models].
+    # Set = the monitor knob drives that output (HW); clear = the software fader does (SW). One
+    # member per byte, since a control addresses a bit within one member.
+    for pair in range((nout + 1) // 2):
+        members[f"hwGainEnable{pair}"] = member(52 + 4 * pair, "bool", nd=3, nc=0,
+                                                note=f"enable-hardware-gain bits for outputs "
+                                                     f"{2*pair+1}/{2*pair+2} @ {52 + 4*pair}, "
+                                                     f"bit 0/1; commit activate 3")
 
     phys_in = []
     for i in range(na):
@@ -339,8 +358,14 @@ for slug, spec in MODELS.items():
 
     phys_out = []
     for n in range(nout):
-        phys_out.append(OD(name=f"Output {n+1}",
-                           controls=OD(level=OD(index=out_index(n), member="outputVolume"))))
+        phys_out.append(OD(name=f"Output {n+1}", controls=OD([
+            # "index" addresses the member: a byte index for the gain, a BIT index for the enable.
+            # The control's NAME comes from the output's position here, not from index — which
+            # needs the fcp-server patch that separates the two, or the strided gains come out
+            # named "Line 1, Line 2, Line 5, Line 6".
+            ("level",   OD(index=out_index(n), member="outputVolume")),
+            ("hw-gain", OD(index=n % 2, member=f"hwGainEnable{n // 2}")),
+        ])))
 
     # ---- routing / mixer tables, recovered from the model's own bring-up blob ----
     # The band-0 SET_MUX the driver replays at arm IS the device's live routing table, so the pins it
@@ -502,10 +527,19 @@ for slug, spec in MODELS.items():
     # 127 = -127 dB), which runs backwards. "invert" (our Stage-2 fcp-server patch) maps
     # device = invert-base - alsa, base 0 — so the ALSA side keeps the natural ascending dB range
     # and a valid DB_MINMAX TLV, and alsamixer behaves like every other volume control.
-    alsamap["output-controls"] = OD(level=OD([("name", "Line %d Playback Volume"), ("type", "int"),
-                                              ("min", -127), ("max", 0),
-                                              ("db-min", -127), ("db-max", 0),
-                                              ("invert", True)]))
+    alsamap["output-controls"] = OD([
+        ("level", OD([("name", "Line %d Playback Volume"), ("type", "int"),
+                      ("min", -127), ("max", 0),
+                      ("db-min", -127), ("db-max", 0),
+                      ("invert", True)])),
+        # SW/HW. A boolean carrying scarlett2's control name, which ends in "Enum" because on the
+        # USB models it is one; alsa-scarlett-gui keys its SW/HW button on that exact substring and
+        # renders it as a two-state toggle either way, so matching the name is what makes the
+        # control appear. Value 1 = HW = the monitor knob drives the output, which is the bit's own
+        # sense, so no inversion.
+        ("hw-gain", OD([("name", "Line Out %d Volume Control Playback Enum"),
+                        ("type", "bool-bitmap")])),
+    ])
     alsamap["output-link"] = []
     alsamap["global-controls"] = OD([
         # Infrastructure, not cosmetics: fcp-server writes its socket path into this control's TLV
@@ -522,6 +556,15 @@ for slug, spec in MODELS.items():
         # made the GUI's mute button unmute the device. Upstream's Scarlett map says the same thing
         # by saying nothing, and alsa-scarlett-gui reads value 1 as muted.
         ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool")])),
+        # The front-panel monitor knob, read-only. scarlett2's name for the same thing, which
+        # alsa-scarlett-gui matches exactly to draw it as the "HW" dial next to the output faders -
+        # the partner of the per-output SW/HW toggles, since it is what drives every output set to
+        # HW. Same attenuation encoding as the output gains, so the same invert.
+        ("monitorVolume", OD([("name", "Master HW Playback Volume"), ("type", "int"),
+                              ("access", "readonly"),
+                              ("min", -127), ("max", 0),
+                              ("db-min", -127), ("db-max", 0),
+                              ("invert", True)])),
         ("dimSwitch",  OD(name="Dim Playback Switch",  type="bool")),
     ])
 

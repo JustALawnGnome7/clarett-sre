@@ -38,6 +38,13 @@
           "notify-client": 1,
           "_note": "monitor dim @ 28; activate 2"
         },
+        "monitorVolume": {
+          "offset": 112,
+          "type": "uint8",
+          "notify-device": 2,
+          "notify-client": 1,
+          "_note": "monitor gain @ 112; attenuation code, same encoding as the output gains; read-only reflection of the front-panel knob"
+        },
         "air": {
           "offset": 174,
           "type": "bool",
@@ -45,7 +52,7 @@
             8
           ],
           "notify-device": 7,
-          "notify-client": 1,
+          "notify-client": 0,
           "_note": "per-input air @ 174+i; commit activate 7"
         },
         "mode": {
@@ -55,7 +62,7 @@
             8
           ],
           "notify-device": 6,
-          "notify-client": 1,
+          "notify-client": 0,
           "_note": "per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6"
         },
         "outputVolume": {
@@ -67,6 +74,41 @@
           "notify-device": 1,
           "notify-client": 1,
           "_note": "attenuation code 0..127; strided gains (pairs at base+{0,1}, pairs step 4); commit activate 1"
+        },
+        "hwGainEnable0": {
+          "offset": 52,
+          "type": "bool",
+          "notify-device": 3,
+          "notify-client": 0,
+          "_note": "enable-hardware-gain bits for outputs 1/2 @ 52, bit 0/1; commit activate 3"
+        },
+        "hwGainEnable1": {
+          "offset": 56,
+          "type": "bool",
+          "notify-device": 3,
+          "notify-client": 0,
+          "_note": "enable-hardware-gain bits for outputs 3/4 @ 56, bit 0/1; commit activate 3"
+        },
+        "hwGainEnable2": {
+          "offset": 60,
+          "type": "bool",
+          "notify-device": 3,
+          "notify-client": 0,
+          "_note": "enable-hardware-gain bits for outputs 5/6 @ 60, bit 0/1; commit activate 3"
+        },
+        "hwGainEnable3": {
+          "offset": 64,
+          "type": "bool",
+          "notify-device": 3,
+          "notify-client": 0,
+          "_note": "enable-hardware-gain bits for outputs 7/8 @ 64, bit 0/1; commit activate 3"
+        },
+        "hwGainEnable4": {
+          "offset": 68,
+          "type": "bool",
+          "notify-device": 3,
+          "notify-client": 0,
+          "_note": "enable-hardware-gain bits for outputs 9/10 @ 68, bit 0/1; commit activate 3"
         }
       }
     }
@@ -185,6 +227,10 @@
           "level": {
             "index": 0,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 0,
+            "member": "hwGainEnable0"
           }
         }
       },
@@ -194,6 +240,10 @@
           "level": {
             "index": 1,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 1,
+            "member": "hwGainEnable0"
           }
         }
       },
@@ -203,6 +253,10 @@
           "level": {
             "index": 4,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 0,
+            "member": "hwGainEnable1"
           }
         }
       },
@@ -212,6 +266,10 @@
           "level": {
             "index": 5,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 1,
+            "member": "hwGainEnable1"
           }
         }
       },
@@ -221,6 +279,10 @@
           "level": {
             "index": 8,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 0,
+            "member": "hwGainEnable2"
           }
         }
       },
@@ -230,6 +292,10 @@
           "level": {
             "index": 9,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 1,
+            "member": "hwGainEnable2"
           }
         }
       },
@@ -239,6 +305,10 @@
           "level": {
             "index": 12,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 0,
+            "member": "hwGainEnable3"
           }
         }
       },
@@ -248,6 +318,10 @@
           "level": {
             "index": 13,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 1,
+            "member": "hwGainEnable3"
           }
         }
       },
@@ -257,6 +331,10 @@
           "level": {
             "index": 16,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 0,
+            "member": "hwGainEnable4"
           }
         }
       },
@@ -266,6 +344,10 @@
           "level": {
             "index": 17,
             "member": "outputVolume"
+          },
+          "hw-gain": {
+            "index": 1,
+            "member": "hwGainEnable4"
           }
         }
       }

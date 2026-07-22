@@ -325,6 +325,12 @@ Record pin → default hardware-input index, with per-band remap (`input-m`/`inp
 - Monitoring config region: offset **24**, length **92** bytes.
 - Master `mute`: 1 bit @ 24, opcode 2. `dim`: 1 bit @ 28, opcode 2. `gain`: 8-bit @ 112, opcode 2.
   These three are an `exclusive` group.
+- **112 is the front-panel monitor knob, and the device keeps it live** `[HW-CONFIRMED, 2Pre,
+  July 21 2026]` — `GET_DATA` reads it back tracking the physical knob in real time (`0x7f` at the
+  floor, `0x00` at unity, same attenuation code as the output gains), at any request window: 1 byte
+  at 112 reads as live as the whole 92-byte monitor region. That makes it the exception to the
+  config-ownership rule in §4: unlike Mode/Air, which read 0 until the host writes them, this byte
+  is **published by the device**. Turning the knob also raises a config-change notification.
 - **Polarity: 1 = engaged, 0 = released, for both mute and dim — not active-low.**
   `[TRACE-CONFIRMED, 8prex_monitor_mutedim.log]` FC muting writes `01` to 24 and unmuting writes
   `00`; dim writes `01`/`00` to 28 the same way. `[HW-CONFIRMED on a 2Pre, July 21 2026]` — the
