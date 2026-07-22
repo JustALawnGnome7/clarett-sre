@@ -73,9 +73,17 @@ and the notification `read()`/`poll()` relay.
   **Adaptation:** the USB FCP device carries a precise notification bitmask in its
   interrupt message; this TB device only signals *that* something changed, so we
   deliver an all-categories event (`~0`) and `fcp-server` re-reads every notifiable
-  control — broad but correct. Wakes are debounced ~200 ms: the device notifies at
-  ~30 Hz when idle, and an unthrottled relay makes `fcp-server` re-read everything on
-  every one, which is enough traffic to stop control writes manifesting.
+  control — broad but correct, and the device gives us nothing narrower: the `0x400`
+  signal is a **periodic heartbeat at ~13.4 Hz**, not a change event (measured — the rate
+  is identical idle, under load, and while a front-panel control is being turned). So it
+  says "re-read me" on a fixed cadence and never says what changed, which caps
+  front-panel tracking at one update per ~75 ms. Wakes are **rate-limited** to one per
+  `notify_ms` (default 50, runtime-writable) so a burst collapses into one re-read.
+  It must be a rate limit (`schedule_delayed_work`, fire one interval after the *first*
+  of a burst) and not a debounce (`mod_delayed_work`, one interval after the *last*):
+  against a source that never goes idle a debounce never fires at all. It was a debounce until
+  July 21 2026, so userspace saw exactly one notification per session and no
+  front-panel change — knob, mute, dim — ever reached `fcp-server`.
 
 **Device maps.** This device does not self-describe — `DEVMAP_INFO` returns size 0, so
 `fcp-server`'s device-provided map path yields nothing. The maps in `../fcp-server-data/`

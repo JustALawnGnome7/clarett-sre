@@ -409,7 +409,34 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
  * correct, if broad, re-read of all notifiable controls. If a real notification word is ever
  * decoded (e.g. a future capture or a DEVMAP field), carry it through here instead of the wildcard.
  */
-/* Coalesced wake: fires ~200 ms after the last notification, so a burst collapses to one wake. */
+/*
+ * Minimum gap between notification wakes. Writable at runtime:
+ *   echo 0 > /sys/module/snd_clarett/parameters/notify_ms       # no limiting at all
+ * Each wake costs userspace a re-read of every control it marks notifiable — ~17 mailbox round
+ * trips on a 2Pre (the routing and mixer controls are not notifiable, so they cost nothing), so
+ * 20 Hz would be roughly 160 round trips a second.
+ *
+ * 50 ms rather than something smaller because MEASURED (2Pre, July 21 2026): the 0x400 config-change
+ * signal is a PERIODIC HEARTBEAT at ~13.4 Hz, not a change event. Counting notifications reaching
+ * fcp-server over 10 s gave ~135 at every limiter setting from 50 ms down to 0, ~135 after halving
+ * the re-read work per wake, and ~133 while the monitor knob was turned continuously for the whole
+ * 10 s. Neither the timer, nor the workload, nor actual device activity moves that number.
+ *
+ * So the device says "re-read me" on a fixed cadence and says nothing about what changed — which is
+ * why the relay is a wildcard, and why front-panel tracking is capped at one update per ~75 ms.
+ * 50 ms passes essentially everything on offer while still collapsing a burst; going faster needs
+ * the driver to poll the monitor bytes and synthesise a notification on change, not a shorter timer.
+ * (The "~30 Hz idle" figure in the older comments here was wrong.)
+ */
+static uint notify_ms = 50;
+module_param(notify_ms, uint, 0644);
+MODULE_PARM_DESC(notify_ms,
+		 "Minimum ms between notification wakes to userspace (default 50; 0 = every "
+		 "notification). The device itself only announces at ~13.5 Hz, so lowering this "
+		 "further changes nothing; raise it to cut mailbox traffic.");
+
+/* Coalesced wake: fires ~notify_ms after the FIRST notification of a burst — see the rate-limit
+ * note in clarett_hwdep_notify() for why it must not be the last one. */
 static void clarett_hwdep_notify_wake(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, hwdep_notify_dwork.work);
@@ -422,14 +449,21 @@ void clarett_hwdep_notify(struct clarett *c, u32 ev)
 	/*
 	 * The device asserts the 0x400 config-change notification steadily (~30 Hz idle), and we can
 	 * only relay a wildcard (~0) since the FCP notification word is not exposed — so every wake
-	 * makes fcp-server re-read *every* control. Coalesce: set the event now, but debounce the wake
-	 * ~200 ms so a storm of idle notifications becomes one re-read, not thirty. A real change is
-	 * delivered within the debounce window — imperceptible for a control refresh.
+	 * makes fcp-server re-read every control it marks notifiable. Coalesce: set the event now, and
+	 * wake at most once per notify_ms so a storm of idle notifications becomes one re-read.
+	 *
+	 * schedule_delayed_work(), NOT mod_delayed_work(): it is a no-op while the work is already
+	 * queued, so the wake lands 200 ms after the FIRST notification of a burst. mod_delayed_work()
+	 * pushes the deadline out on every arrival, which is a debounce — and against a source that
+	 * never goes idle it never fires at all. That was the bug: the flag was set forever behind a
+	 * wake that never came, so userspace received exactly one notification (whatever was pending
+	 * when it opened the hwdep) and nothing afterwards. Front-panel changes — the monitor knob,
+	 * mute, dim — therefore never reached fcp-server, while the driver logged every one of them.
 	 */
 	if (!c->hwdep_ready)
 		return;
 	atomic_or(~0u, &c->hwdep_notify_event);
-	mod_delayed_work(system_wq, &c->hwdep_notify_dwork, msecs_to_jiffies(200));
+	schedule_delayed_work(&c->hwdep_notify_dwork, msecs_to_jiffies(notify_ms));
 }
 
 /*
