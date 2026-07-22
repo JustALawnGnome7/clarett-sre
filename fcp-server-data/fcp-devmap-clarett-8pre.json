@@ -29,7 +29,7 @@
           "type": "bool",
           "notify-device": 2,
           "notify-client": 1,
-          "_note": "monitor mute @ 24; activate 2. Active-low: the device byte is 1 when UNMUTED, so the alsa-map marks it invert/invert-base 1 (needs the Stage-2 fcp-server patch)"
+          "_note": "monitor mute @ 24; activate 2. 1 = muted, 0 = unmuted (trace-confirmed, and confirmed on a 2Pre) - no inversion, same as dim @ 28"
         },
         "dimSwitch": {
           "offset": 28,

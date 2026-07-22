@@ -55,9 +55,7 @@
     },
     "muteSwitch": {
       "name": "Mute Playback Switch",
-      "type": "bool",
-      "invert": true,
-      "invert-base": 1
+      "type": "bool"
     },
     "dimSwitch": {
       "name": "Dim Playback Switch",

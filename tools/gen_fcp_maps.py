@@ -322,7 +322,7 @@ for slug, spec in MODELS.items():
     # monitor mute/dim=2. Without it the SET_DATA stages but never manifests.
     members = OD()
     members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0, note="PLACEHOLDER offset; see _todo")
-    members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute @ 24; activate 2. Active-low: the device byte is 1 when UNMUTED, so the alsa-map marks it invert/invert-base 1 (needs the Stage-2 fcp-server patch)")
+    members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute @ 24; activate 2. 1 = muted, 0 = unmuted (trace-confirmed, and confirmed on a 2Pre) - no inversion, same as dim @ 28")
     members["dimSwitch"]  = member(28, "bool", nd=2, note="monitor dim @ 28; activate 2")
     members["air"]  = member(174, "bool",  shape=na, nd=7, note="per-input air @ 174+i; commit activate 7")
     members["mode"] = member(166, "uint8", shape=na, nd=6, note="per-input mode @ 166+i, byte 0=Mic/1=Line/2=Inst; commit activate 6")
@@ -514,11 +514,14 @@ for slug, spec in MODELS.items():
         # can connect. Keyed on the backing member; interface/name are what fcp-socket looks up.
         ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
                                     ("access", "readonly"), ("type", "int")])),
-        # Active-low: the device byte is 1 when unmuted (the in-kernel control carries .invert = 1
-        # for the same reason). invert-base 1 gives device = 1 - alsa. Dim, at offset 28, is NOT
-        # inverted — verified against the driver, not assumed from its neighbour.
-        ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool"),
-                           ("invert", True), ("invert-base", 1)])),
+        # NOT inverted: 1 = muted, straight through. Was marked invert/invert-base 1 on the strength
+        # of the in-kernel control's .invert = 1, which was itself wrong - it inverted mute while
+        # leaving dim, an identical 1-bit field two bytes along, alone. The trace settles it
+        # (8prex_monitor_mutedim.log): muting in FC writes 01 to offset 24 and unmuting writes 00,
+        # exactly as dim writes 01/00 to offset 28. Confirmed on a 2Pre, where the inverted version
+        # made the GUI's mute button unmute the device. Upstream's Scarlett map says the same thing
+        # by saying nothing, and alsa-scarlett-gui reads value 1 as muted.
+        ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool")])),
         ("dimSwitch",  OD(name="Dim Playback Switch",  type="bool")),
     ])
 

@@ -325,6 +325,12 @@ Record pin → default hardware-input index, with per-band remap (`input-m`/`inp
 - Monitoring config region: offset **24**, length **92** bytes.
 - Master `mute`: 1 bit @ 24, opcode 2. `dim`: 1 bit @ 28, opcode 2. `gain`: 8-bit @ 112, opcode 2.
   These three are an `exclusive` group.
+- **Polarity: 1 = engaged, 0 = released, for both mute and dim — not active-low.**
+  `[TRACE-CONFIRMED, 8prex_monitor_mutedim.log]` FC muting writes `01` to 24 and unmuting writes
+  `00`; dim writes `01`/`00` to 28 the same way. `[HW-CONFIRMED on a 2Pre, July 21 2026]` — the
+  fcp-server map had mute (and only mute) marked active-low, carried over from an in-kernel control
+  that inverted it, and the GUI's mute button unmuted the device until it was removed. There is no
+  asymmetry between these two fields: whatever holds for dim holds for mute.
 - Monitor presets (which outputs the master section controls): `1-2`(opt 2), `1-4`(4), `1-6`(6),
   `1-8`(8), `All`(1), `None`(0), each with a 10-slot output mapping mask.
 
