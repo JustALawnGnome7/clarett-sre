@@ -210,10 +210,15 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     `arm_pre`/`arm_settle_ms`), **elapsed time**, and **TX-ring contents** (`tx_tone`, a 1 kHz sine, no
     effect → retires the old "content sensitivity" lead). Also **settled: `0x214`/`0x314` is a genuine
     64-bit address high word and we handle it right** (`base_hi=2` faults at `0x2_ffe00000`; closes the
-    `dma_bits` ambiguity). **Surviving lead:** the 2Pre wants a **flat** sample ring, not a descriptor
-    table (its RAM dump is flat audio; the reverted flat path was the only config that got its counter
-    advancing, `ctr=0x1c10`). Re-open a per-model flat path + fresh pre-arm `pmemsave` of the sample area
-    (RAM-at-arm is the last unobserved channel). Levers: `rekick`/`rekick_ms`/`arm_pre`/`tx_tone`/`base_hi`.
+    `dma_bits` ambiguity). **Flat-buffer hypothesis FALSIFIED (spec §13):** a flat ring at `0x210`/`0x310`
+    IOMMU-faults immediately — the engine dereferences the ring contents as pointers (zeroed ring → writes
+    a 16-frame fragment to GPA 0: `0x0/0x80/…/0x300` = `0x380` = 14ch×4×16). So the 2Pre wants a
+    **descriptor table** too (its "flat audio" dump was the fragment buffers, not the table); descriptor
+    mode's `ctr=0` and flat mode's fault storm are the *same* engine reading a table, so **the real defect
+    is our table FORMAT**. `flat_buffer` false on all models; `force_flat` param re-tests it. **Priority:**
+    the pre-arm/in-stream `pmemsave` of what `0x210`/`0x310` point at (`tools/dma_bases.py` +
+    `dma_classify.py`) to read off the real entry stride/count/tag. Levers:
+    `rekick`/`arm_pre`/`tx_tone`/`base_hi`/`force_flat`.
   - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so

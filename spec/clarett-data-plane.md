@@ -799,3 +799,42 @@ model=2pre enable_pcm=1`; `arecord -D hw:N -c14 -f S32_LE -r48000 /dev/null`; wa
 periods=… ctr=…`. Success is `ctr` advancing continuously (the reverted flat path reached `ctr=0x1c10`,
 28 passes); the descriptor-mode baseline was `ctr=0` frozen. `tx_tone=1` now fills the flat TX ring
 (at offset 0, no table) if a non-silent TX ring turns out to be required.
+
+### Flat path FALSIFIED on hardware — the engine dereferences the ring as a table (July 23 2026) `[HW — Clarett 2Pre]`
+
+`insmod model=2pre enable_pcm=1` with the flat path armed the flat rings cleanly
+(`flat rings: TX 16384 B + RX 57344 B`, bases `fffc0000`/`fffc4000`, gap `0x4000` = TX ring) and then
+**IOMMU-faulted immediately, before `arecord` ran**:
+
+```
+AMD-Vi IO_PAGE_FAULT ... address=0x0    flags=0x0020
+                         address=0x80
+                         address=0x100
+                         ... 0x180 0x200 0x280 0x300   (seven, stepping 0x80)
+                         address=0x0    flags=0x0000
+```
+
+Seven `0x80` steps = `0x380` = `14ch × 4 B × 16 frames` = **one 16-frame capture fragment**, exactly the
+§9 fault decode. The RX engine read entry 0 of the "flat" ring, took the zeroed value **as a pointer**
+(target GPA 0), and wrote a 16-frame fragment to `0x0/0x80/.../0x300`; the trailing `0x0 flags=0x0000`
+is the benign TX position writeback. `periods=0 ctr=0`.
+
+**Conclusion: the 2Pre engine dereferences the contents of `0x210`/`0x310` as DMA pointers — it wants a
+descriptor TABLE, not a flat sample ring, same as the 8PreX.** The "2Pre wants flat" hypothesis (§9/§13)
+is **falsified**. The 2Pre "flat audio" RAM dump was therefore the **fragment buffers** (what a table's
+entries point at), not the table at the ring base — a dump-address misattribution, not two device modes.
+This also unifies the picture: descriptor mode gives no faults but `ctr=0` (valid pointers, engine reads
+the table, consumes nothing); flat mode gives the deref-fault storm (zeroed "pointers" → writes to GPA 0).
+Both are the *same* engine reading a table; the real defect is our descriptor table FORMAT, not the mode.
+
+**In tree:** `flat_buffer` stays false on every model; `force_flat` (module param) can still force it for
+a pmemsave-guided re-test, but the default 2Pre load is back to the non-faulting descriptor baseline.
+`c->flat_buffer` is now a per-instance field (model default, `force_flat` override).
+
+**The priority is now the descriptor-table FORMAT, and the pmemsave capture is how to get it.** Dump what
+the VM's `0x210`/`0x310` point at during a live 2Pre stream and classify with `dma_classify.py`:
+- If `descriptor-table` (expected, per this result): read off the real entry stride, count, and high-word
+  tag from the classifier's `--hex` output and rebuild our table to match (§9's `0x1c0` clocks one pass,
+  `0x700` gave `periods=0` — the true stride is between/other, and the RAM dump settles it).
+- If `flat-audio`: then the base we dumped in §9 was the table's first fragment pointer, and we must dump
+  the ADDRESS STORED at the base (one indirection up) to see the table itself.

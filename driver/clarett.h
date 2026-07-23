@@ -504,6 +504,7 @@ struct clarett {
 	 * the engine runs (vec1/vec2 period IRQs + DMA pointer advancing). See clarett_engine_start().
 	 */
 	bool stream_on;
+	bool flat_buffer;		/* effective buffer mode (model default, overridable by force_flat) */
 	void *stream_buf;		/* coherent streaming ring buffer */
 	dma_addr_t stream_dma;
 	size_t stream_size;
@@ -690,32 +691,32 @@ static inline size_t clarett_flat_rx_bytes(const struct clarett *c)
  */
 static inline size_t clarett_stream_total_bytes(const struct clarett *c)
 {
-	return c->model->flat_buffer
+	return c->flat_buffer
 		? clarett_flat_tx_bytes(c) + clarett_flat_rx_bytes(c)
 		: clarett_pcm_tx_ring(c) + clarett_pcm_rx_ring(c);
 }
 static inline size_t clarett_stream_tx_off(const struct clarett *c)
 {
-	return c->model->flat_buffer ? 0 : clarett_pcm_tbl_bytes();  /* flat: samples at 0; descr: past TX table */
+	return c->flat_buffer ? 0 : clarett_pcm_tbl_bytes();  /* flat: samples at 0; descr: past TX table */
 }
 static inline size_t clarett_stream_tx_area_bytes(const struct clarett *c)
 {
-	return c->model->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_samples(c);
+	return c->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_samples(c);
 }
 static inline size_t clarett_stream_rx_off(const struct clarett *c)
 {
-	return c->model->flat_buffer
+	return c->flat_buffer
 		? clarett_flat_tx_bytes(c)			     /* flat: RX samples abut TX samples */
 		: clarett_pcm_tx_ring(c) + clarett_pcm_tbl_bytes();  /* descr: past TX ring, past RX table */
 }
 static inline size_t clarett_stream_rx_area_bytes(const struct clarett *c)
 {
-	return c->model->flat_buffer ? clarett_flat_rx_bytes(c) : clarett_pcm_rx_samples(c);
+	return c->flat_buffer ? clarett_flat_rx_bytes(c) : clarett_pcm_rx_samples(c);
 }
 static inline size_t clarett_stream_r1_off(const struct clarett *c)
 {
 	/* base of block 1: its sample ring (flat) or its descriptor table (descriptor). */
-	return c->model->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_ring(c);
+	return c->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_ring(c);
 }
 
 /* mailbox.c */

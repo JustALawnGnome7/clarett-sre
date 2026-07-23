@@ -405,7 +405,7 @@ static void clarett_build_rings(struct clarett *c)
 	 * so there is nothing to build. NO prefill: the §9 "0xAA prefill" was a descriptor-mode artifact (the
 	 * engine dereferencing sample bytes as pointers); in a true flat ring the bytes are samples, not pointers.
 	 */
-	if (c->model->flat_buffer) {
+	if (c->flat_buffer) {
 		if (tx_tone)
 			clarett_fill_tx_tone(c);
 		dev_info(&c->pci->dev, "flat rings: TX %zu B + RX %zu B, no descriptor table\n",
@@ -458,7 +458,7 @@ int clarett_create_pcm(struct clarett *c)
 	dev_info(&c->pci->dev,
 		 "capture PCM registered (%uch S32_LE @%u, %s ring, ALSA buf %zu B @%pad)\n",
 		 c->model->capture_channels, CLARETT_PCM_RATE,
-		 c->model->flat_buffer ? "flat" : "descriptor", buf, &c->stream_dma);
+		 c->flat_buffer ? "flat" : "descriptor", buf, &c->stream_dma);
 
 	return 0;
 }

@@ -99,6 +99,20 @@ MODULE_PARM_DESC(base_hi,
 		 "upper 32 bits of the bus address, the historical behaviour; 2 = what every vendor "
 		 "capture writes). Discriminates address-high-word from flags-field.");
 
+/*
+ * Buffer-mode override (data-plane spec §13). The engine dereferences the ring contents at 0x210/0x310
+ * as DMA pointers — a flat sample ring handed to it is read as a descriptor table (a zeroed ring faults
+ * writing a 16-frame capture fragment to GPA 0: address 0/0x80/.../0x300 = 0x380 = 14ch*4*16, exactly
+ * the §9 decode). So NO current model uses flat mode; every model defaults to a descriptor table. This
+ * lever forces flat on regardless, only to re-test the flat hypothesis once the pre-arm pmemsave capture
+ * (spec §13) has shown what the VM actually seeds the ring with.
+ */
+static int force_flat = -1;
+module_param(force_flat, int, 0444);
+MODULE_PARM_DESC(force_flat,
+		 "Override buffer mode: -1 = model default (descriptor for all current models), 0 = force "
+		 "descriptor table, 1 = force flat sample ring (faults on a zeroed ring — see spec §13).");
+
 static int arm_settle_ms;
 module_param(arm_settle_ms, int, 0644);
 MODULE_PARM_DESC(arm_settle_ms,
@@ -1548,6 +1562,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	/* The arm used armed_with's tables; give the selected model its own. */
 	clarett_apply_model_routing(c, armed_with);
 
+	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
+	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
+
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
 	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the
 	 * monitor-enable writes below take effect like a real session. */
@@ -1816,8 +1833,10 @@ static const struct clarett_model clarett_2pre = {
 	.playback_channels = 4,			/* playback pin count */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
-	.flat_buffer = true,			/* 2Pre RAM dump = flat audio, no table (spec §9/§13); its engine
-						 * consumes 0 frames/period in descriptor mode, advances in flat mode */
+	/* Descriptor mode (spec §13): the "2Pre wants flat" hypothesis was falsified on hardware — the engine
+	 * dereferences the ring as a table, so a flat ring faults writing a 16-frame fragment to GPA 0. The
+	 * 2Pre "flat audio" RAM dump was the fragment buffers, not the table. flat_buffer stays false; re-test
+	 * only via force_flat=1 after the pre-arm pmemsave shows the real seed. */
 	.stream_tx_ids = clarett_2pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
 	.stream_rx_ids = clarett_2pre_stream_rx,
