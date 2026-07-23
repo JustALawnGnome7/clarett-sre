@@ -940,23 +940,27 @@ static int clarett_stream_service(void *data)
 		}
 
 		/*
-		 * Mirror the vendor's steady-state sweep EXACTLY (2pre_stream.log): every ~4 ms period
-		 * cycle FC reads 0x100,0x300,0x200,0x400,0x500 — all five blocks, 0x100 FIRST, and 0x100
-		 * reads 0x80000000 (bit31 asserted per period, read-to-clear). Our old sweep skipped
-		 * 0x100 and 0x400 to avoid racing the mailbox/notify paths — leaving a read-to-clear ack
-		 * channel unserviced, the same violation class as the manifestation wall (an armed 2Pre
-		 * emitted only a ctr=0 heartbeat at ~14 Hz vs the vendor's 250 Hz advancing counter).
-		 * 0x100 is skipped only while a mailbox command is in flight (the ISR owns its DONE bit);
-		 * the meter poll sets cmd_inflight around each GET_METER so the guard covers streaming.
-		 * Caveat: eating 0x400 here can starve the ISR's monitor-notify refresh during capture —
-		 * cosmetic, revisit once the engine streams.
+		 * Cause-register ownership (the fix for control-during-streaming skips + mailbox timeouts).
+		 * The vendor's steady-state sweep reads all five blocks (0x100,0x300,0x200,0x400,0x500), and we
+		 * do too WHEN IDLE — 0x100 asserts bit31 per period (read-to-clear), leaving it unserviced walls
+		 * the session (manifestation-wall class). But 0x100 (mailbox DONE), 0x400 (mailbox COMMAND-PHASE),
+		 * and 0x500 (IRQ summary) belong to the MAILBOX while a command is in flight: the servicer runs at
+		 * ~6.6 kHz, so read-clearing 0x400 mid-command corrupts the device's command-phase handshake — the
+		 * command times out (fcp-server "Connection timed out") and the stall cascades into an audible
+		 * stream skip. So during a command the servicer reads ONLY the stream period blocks it owns
+		 * (0x300/0x200); the mailbox sweep reciprocally skips those two while streaming (clarett_mailbox.c).
+		 * The meter poll and every fcp-server command set cmd_inflight, so the guard covers all of them.
 		 */
-		if (!atomic_read(&c->cmd_inflight))
-			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 per-period cause (bit31), read-to-clear */
-		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period event + counter */
-		readl(bar + STREAM_BLK0);		/* 0x200 TX cause */
-		readl(bar + REG_NOTIFY_CAUSE);		/* 0x400 */
-		readl(bar + 0x500);			/* 0x500 IRQ summary */
+		bool busy = atomic_read(&c->cmd_inflight);
+
+		if (!busy)
+			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 per-period cause (bit31) + mailbox DONE */
+		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period event + counter (owned) */
+		readl(bar + STREAM_BLK0);		/* 0x200 TX cause (owned) */
+		if (!busy) {
+			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 command-phase/notify — mailbox's during a command */
+			readl(bar + 0x500);		/* 0x500 IRQ summary */
+		}
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
 			u32 step;
