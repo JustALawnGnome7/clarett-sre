@@ -165,10 +165,14 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 pos, u32 nframes)
 	}
 }
 
-/* Guard: keep the playback fill this many frames clear of the engine's current TX read position, so a
- * concurrent DMA read is never torn by our write. Covers the max single-tick engine advance (the servicer
- * caps a ctr delta at CLARETT_CTR_STEP_MAX units) plus a period of margin. */
-#define CLARETT_TX_GUARD_FRAMES	(CLARETT_CTR_STEP_MAX * CLARETT_CTR_FRAMES + CLARETT_FRAG_FRAMES * CLARETT_IRQ_DESCS)
+/*
+ * Guard: keep the playback fill this many frames clear of the engine's current TX read position, so a
+ * concurrent DMA read is never torn by our write. It only has to exceed the engine's advance during ONE
+ * fill memcpy (a few frames — a ~64 KB copy is single-digit microseconds), NOT the whole inter-tick gap:
+ * the fill covers the ENTIRE ring ahead of the read, so even a lagged tick reads frames a prior tick
+ * already filled. It must also stay <= the app's steady-state lead (>= one ALSA period, min 256 frames),
+ * or the fill's near edge reads not-yet-written data — the PipeWire skipping. 64 frames satisfies both. */
+#define CLARETT_TX_GUARD_FRAMES	(4 * CLARETT_FRAG_FRAMES)	/* 64 frames */
 
 /*
  * Called from the servicer kthread on every 0x300 period event with the number of frames the engine
@@ -266,15 +270,21 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	runtime->hw.channels_min     = chans;
 	runtime->hw.channels_max     = chans;
 	runtime->hw.buffer_bytes_max = buf;
+	/*
+	 * Let the app choose its period between the hardware IRQ period (256 frames) and half the buffer, in
+	 * whole IRQ-period steps. A fixed tiny period forced PipeWire into a rigid 5 ms cadence it services
+	 * badly (audible skipping on music); a range lets it pick a comfortable larger period. The tick reports
+	 * period_elapsed off runtime->period_size, so any multiple of the hardware period works. The BUFFER is
+	 * still pinned to the ring size — the RX/TX copies map ALSA frame k to hardware ring frame k (mod ring).
+	 */
 	runtime->hw.period_bytes_min = period;
-	runtime->hw.period_bytes_max = period;
+	runtime->hw.period_bytes_max = buf / 2;			/* periods_min = 2 */
 	runtime->hw.periods_max      = buf / period;
 
-	/* Pin the buffer to the full ring size so the hardware ring and ALSA ring share one frame geometry. */
 	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
 	if (err < 0)
 		return err;
-	/* Period is fixed at the hardware IRQ period (CLARETT_IRQ_DESCS descriptors). */
+	/* Period must be a whole number of hardware IRQ periods (CLARETT_IRQ_DESCS descriptors). */
 	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, period);
 }
 
