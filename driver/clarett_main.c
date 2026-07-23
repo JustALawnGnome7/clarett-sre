@@ -114,20 +114,20 @@ MODULE_PARM_DESC(force_flat,
 		 "descriptor table, 1 = force flat sample ring (faults on a zeroed ring — see spec §13).");
 
 /*
- * RX scatter-gather experiment (even-channel capture drift). The capture drifts its channel alignment by
- * 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our RX buffer is
- * ONE contiguous coherent region, so the engine streams straight across fragment boundaries and the page
- * drift accumulates. The vendor's buffer is scatter-gathered (physically discontiguous fragments), which
- * restarts the engine per fragment. rx_frag_pad pads each RX descriptor fragment's SLOT by this many bytes
- * so consecutive fragments are no longer contiguous, forcing per-fragment DMA. 0 = the known-good
- * contiguous layout. Try a value that pushes the slot to a clean boundary (e.g. 128 -> 0x400 slot, 4 per
- * page). Caveat: a padded stride (0x700) gave periods=0 pre-IRQ-marker (spec §9); retest clocking.
+ * RX fragment slot stride (even-channel capture drift, spec §15 — FIXED). The capture drifted its channel
+ * alignment by 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our
+ * RX buffer was ONE contiguous coherent region, so the engine streamed across fragment boundaries and the
+ * page drift accumulated. Giving each RX fragment its own page-safe SLOT (a power of two, so it divides the
+ * page) over a page-aligned area makes every fragment page-contained, forcing per-fragment DMA like the
+ * vendor's scatter-gather. HARDWARE-CONFIRMED on the 2Pre: slot 0x400 -> channels 2-13 silent, ch0 a clean
+ * dropout-free tone, engine clocks normally. Default (-1) = auto = roundup_pow_of_two(fragment). 0 = the old
+ * contiguous layout (drifts — kept for A/B). >0 = fragment audio bytes + this many (manual experiment).
  */
-static int rx_frag_pad;
+static int rx_frag_pad = -1;
 module_param(rx_frag_pad, int, 0444);
 MODULE_PARM_DESC(rx_frag_pad,
-		 "Bytes of padding added to each RX descriptor fragment slot to break buffer contiguity "
-		 "(scatter-gather experiment for the even-channel drift; 0 = contiguous, the working default).");
+		 "RX fragment slot: -1 = auto page-safe pow2 (default, fixes the even-channel drift), "
+		 "0 = contiguous (old, drifts), >0 = audio bytes + this padding (manual).");
 
 static int arm_settle_ms;
 module_param(arm_settle_ms, int, 0644);
@@ -1596,8 +1596,15 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
 	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
-	/* RX fragment slot stride: audio bytes/fragment, plus optional padding to break contiguity. */
-	c->rx_slot = clarett_frag_bytes(c->model->capture_channels) + (rx_frag_pad > 0 ? rx_frag_pad : 0);
+	/* RX fragment slot stride (spec §15): default = page-safe pow2 (fixes the even-channel drift);
+	 * 0 = contiguous (old); >0 = audio + manual padding. */
+	{
+		u32 frag = clarett_frag_bytes(c->model->capture_channels);
+
+		c->rx_slot = rx_frag_pad < 0 ? roundup_pow_of_two(frag)
+			   : rx_frag_pad == 0 ? frag
+					      : frag + rx_frag_pad;
+	}
 
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
 	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the

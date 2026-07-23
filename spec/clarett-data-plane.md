@@ -941,3 +941,35 @@ a PCM source to a physical output (no default route). So the **full-duplex PCM p
 Refinements still open: the even-channel capture spikes (§ above, cosmetic); TX/playback on the 8PreX
 (and 4Pre/8Pre) with the corrected table; and simultaneous duplex stress (both directions at once — the
 shared-engine attach/detach was written for it but not yet stress-tested).
+
+---
+
+## 15. The even-channel capture drift: contiguous buffer vs page-granular DMA (July 23 2026) `[HW — Clarett 2Pre, FIXED]`
+
+Capture had a periodic channel-alignment **drift** (misread earlier as "rare spikes"): mapping a 1 kHz
+tone through the stream, the signal walked **−2 channels every ~73 frames**, cycling through all 14
+channels and realigning **every 512 frames**, with the real input (ch0) dropping to zero during each
+step. A raw RX-ring dump (`rx_dump`, since removed) confirmed the shift is in the bytes the **device**
+DMA'd — our frame-aligned copy is faithful.
+
+**Root cause.** The drift is exactly **8 bytes (2 samples) per 4096-byte page**: `512 frames × 56 B =
+28672 B = 7 × 4096`, and `LCM(0x380 fragment, 4096 page) = 28672`. Our RX buffer was ONE **contiguous**
+`dma_alloc_coherent` region, so the engine streamed straight across fragment boundaries and a
+page-granular DMA quirk accumulated 8 B/page. The `0x380` (896 B) fragment does not divide the 4 KB page
+(`4096/896 = 4.57`), so the misalignment never reset. The vendor's buffer is **scatter-gathered**
+(physically discontiguous fragments), which restarts the engine per fragment and never accumulates the
+drift — the one part of the vendor's descriptor layout we hadn't replicated. (TX never drifted: its
+`0x100` fragment divides the page.)
+
+**Fix (hardware-confirmed, now the default).** Give each RX fragment its own **page-safe slot** — the
+fragment audio size rounded up to a power of two (`0x380 → 0x400`), which divides the 4 KB page — over a
+**page-aligned** RX sample area. Every fragment is then page-contained and the engine cannot stream
+across the gaps (per-fragment DMA, like the vendor's scatter-gather). The RX geometry now separates a
+LOGICAL size (contiguous frames = the ALSA buffer + per-period math) from a DEVICE size (NDESC slots of
+`c->rx_slot`, allocated and strided by the descriptors, with gaps); the capture drain
+(`clarett_rx_drain`) gathers per fragment across the gaps and reduces to a linear copy when unpadded.
+
+Result on the 2Pre (`rx_frag_pad=-1`, the default, slot `0x400`): **channels 2–13 read exactly `0`**
+(were full of bursts), **ch0 is a clean 1000.00 Hz tone with zero dropouts**, and the engine clocks
+normally (`periods` climbing at ~234/s). `rx_frag_pad` kept as a lever: `0` = old contiguous (drifts,
+for A/B), `>0` = manual padding. TX/playback unchanged (already page-safe).

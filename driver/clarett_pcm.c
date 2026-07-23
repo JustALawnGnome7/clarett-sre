@@ -56,16 +56,6 @@ MODULE_PARM_DESC(tx_tone,
 		 "Fill the dummy TX ring with a 1 kHz -18 dBFS sine instead of silence (audible on the "
 		 "outputs if the engine runs). Tests whether the engine gates on TX content.");
 
-/*
- * Diagnostic (data-plane spec, even-channel glitch): dump the raw RX sample ring around a known glitch
- * position once, ~2 s into a capture. The capture shows a periodic channel-shifted burst at FIXED ring
- * positions (every 512 frames), which a frame-aligned copy cannot produce — so it is in the bytes the
- * device DMA'd. This prints the raw ring so we can see whether the device inserted foreign bytes (a
- * writeback) or genuinely shifted the sample stream. Frame 448 (ring byte 448*56 = 0x6200) is one glitch.
- */
-static bool rx_dump;
-module_param(rx_dump, bool, 0644);
-MODULE_PARM_DESC(rx_dump, "One-shot hex dump of the raw RX ring around a glitch position (~2s into capture).");
 
 /* One cycle of 1 kHz at 48 kHz, 24-bit signed; shifted left 8 for S32_LE MSB-justified. */
 static const s32 clarett_sine48[48] = {
@@ -234,15 +224,6 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 	}
 
 	c->pcm_frames += add_frames;
-
-	/* One-shot raw-ring dump around the glitch at ring frame 448 (byte 0x6200), ~2 s in. */
-	if (rx_dump && c->pcm_frames > 2 * CLARETT_PCM_RATE) {
-		rx_dump = false;
-		dev_info(&c->pci->dev, "RX ring raw dump around glitch (ring frames 444-459, ch order 0..13):\n");
-		print_hex_dump(KERN_INFO, "rx ", DUMP_PREFIX_OFFSET, 32, 4,
-			       clarett_rx_area(c) + 444 * (c->model->capture_channels * 4),
-			       16 * (c->model->capture_channels * 4), false);
-	}
 
 	/* Deliver period boundaries only between trigger START and STOP (the *_running gates). */
 	if (cs && READ_ONCE(c->pcm_running)) {
@@ -580,7 +561,7 @@ static void clarett_build_rings(struct clarett *c)
 	__le64 *tx_tbl = (__le64 *)c->stream_buf;
 	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + tx_ring);
 	dma_addr_t tx_smp = c->stream_dma + tbl;
-	dma_addr_t rx_smp = c->stream_dma + tx_ring + tbl;
+	dma_addr_t rx_smp = c->stream_dma + clarett_stream_rx_off(c);	/* page-aligned RX sample area */
 	unsigned int i;
 
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
