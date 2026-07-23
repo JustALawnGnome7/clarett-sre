@@ -878,3 +878,31 @@ marker; the PCM period model advances `clarett_irq_period_frames()` per `0x300` 
 Hardware test: `model=2pre enable_pcm=1`, `arecord -c14`; watch `stream-svc: periods=… ctr=…` — success is
 `ctr` advancing past the one-pass `0x1b3`/`0` wall. `dma_classify.py` gained `table_stats` (entries,
 stride, tags, scatter runs, flag positions) and a leading-run detector so an oversized dump still classifies.
+
+### ★ WALL BROKEN — continuous streaming on the 2Pre (July 23 2026) `[HW — Clarett 2Pre]` ★
+
+The §14 table rebuild WORKS. `model=2pre enable_pcm=1`, `arecord -c14 -f S32_LE -r48000`:
+
+```
+descriptor rings: 256 entries, frag tx=0x100 rx=0x380, RX IRQ every 16 desc (256 frames/period)
+stream-ev[0..7]: 0x300 = 0x8000000d,1a,27,34,41,4e,5b,68   (+0xd/event, ADVANCING)
+stream-svc: periods=7517 ctr=0x75 wraps=471   over ~32.7 s   (vs the old one-pass 0x1b3/0 stall)
+```
+
+The `0x300` counter advances continuously and wraps (the small modulus wraps ~every 16 events — "wraps"
+are modulo, not ring passes), exactly the vendor's steady-state. `arecord` ran the full 32 s to Ctrl-C
+with **no EIO and no XRUN** — capture plumbing works end to end. **The periodic RX IRQ marker (bit1 every
+CLARETT_IRQ_DESCS descriptors) was the fix**; a ring flagged only on the last entry gave `ctr=0` forever.
+This is the first sustained data-plane streaming in the project.
+
+**Open (refinements, not blockers):**
+- **Pitch calibration.** The counter steps `+0xd` (13) per event at ~235 events/s; `235 × 13 × 16 frames
+  ≈ 48 kHz`, so one ctr unit ≈ 16 frames (matching §10) and the true period is ~208 frames, NOT the 256
+  our fixed `CLARETT_IRQ_DESCS=16` models. Capture drifts ~23% fast. FIX: advance the PCM position by the
+  **measured ctr delta × 16 frames** per event (self-calibrating) instead of a fixed `irq_period_frames()`,
+  or set `CLARETT_IRQ_DESCS=13`. The vendor's own step is `+0xc` (12) — model-dependent, so ctr-delta is
+  the robust choice.
+- **Real-audio-content verification.** `arecord` to `/dev/null` proves the clock/plumbing, not the samples.
+  Capture a known input (tone into Analogue 1) to a WAV and inspect that the right channel carries it at
+  the right level/frequency.
+- **Playback (TX) and the 8PreX** still untested with the corrected table.
