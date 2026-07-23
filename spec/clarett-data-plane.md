@@ -919,7 +919,12 @@ This is the first sustained data-plane streaming in the project.
 - Minor artifact: rare isolated full-scale (`0x80000000`) spikes on the even channels (~0.01%, scattered,
   NOT ring-wrap-aligned) — cosmetic, chase later.
 
-**The data plane does clean 14ch/48k capture on the 2Pre.** Remaining: absolute pitch is still UNVERIFIED
-(the test signal was a guitar, not a known-frequency reference) — feed a known tone (e.g. 1 kHz) and
-measure the fundamental to confirm/trim `CLARETT_CTR_FRAMES`; then TX playback and the 8PreX with the
-corrected table; then the even-channel spike cleanup.
+**The data plane does clean 14ch/48k capture on the 2Pre.**
+
+**PITCH VERIFIED (July 23 2026):** a precise 1000.000 Hz reference (48k, played from a separate interface
+into Analogue 1) captured as **1000.91 Hz** (Goertzel over two 5.46 s windows, +0.090%, +1.5 cents). That
+is ~65× smaller than an off-by-one counter unit (±6%), so **`CLARETT_CTR_FRAMES=16` is confirmed exact**;
+the residual +0.09% is the two interfaces' unlocked-crystal offset (they were not word-clock-locked), not a
+2Pre rate error, and is inaudible. No driver change.
+
+Remaining: TX playback and the 8PreX with the corrected table; then the even-channel spike cleanup.
