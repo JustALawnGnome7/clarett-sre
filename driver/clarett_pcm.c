@@ -104,37 +104,41 @@ static size_t clarett_rx_ring_bytes(struct clarett *c)
 }
 
 /*
- * Called from the servicer kthread on every 0x300 period event. One event == the engine consuming one
- * IRQ-flagged RX descriptor (spec §14), which is CLARETT_IRQ_DESCS fragments == clarett_irq_period_frames()
- * frames of freshly-captured audio. Copies that period from the RX area into the ALSA buffer (same geometry,
- * 1:1 offsets), advances the modelled frame position, and reports a period boundary. No-op while idle/paused.
- * Position is modelled, not read back: 0x318 is a static status word (spec §9), so the event is the signal.
+ * Called from the servicer kthread on every 0x300 period event with the number of frames captured since
+ * the last event (the 0x300 counter delta * CLARETT_CTR_FRAMES — self-calibrating to the real hardware
+ * period, spec §14). Copies those freshly-captured frames from the RX area into the ALSA buffer (same
+ * geometry, 1:1 offsets), advances the frame position, and reports ALSA period boundaries. No-op while
+ * idle/paused. Position is modelled from the event stream: 0x318 is a static status word (spec §9).
  *
- * The RX ring is a whole number of periods (NDESC*FRAG_FRAMES / period_frames = 16), so the copy lands on a
- * period boundary and never crosses the ring end mid-copy.
+ * The engine fills the RX ring linearly and wraps at its end, so the copy of add_frames may straddle the
+ * ring boundary — split it. The ALSA buffer shares the RX ring's geometry, so ring offset == ALSA offset.
  */
-void clarett_pcm_tick(struct clarett *c)
+void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 {
 	struct snd_pcm_substream *ss = READ_ONCE(c->pcm_sub);
 	struct snd_pcm_runtime *runtime;
 	u32 frame  = (u32)c->model->capture_channels * 4;	/* bytes per interleaved S32_LE frame */
-	u32 pframes = clarett_irq_period_frames();		/* frames captured per 0x300 event */
-	u32 pbytes = pframes * frame;
 	u32 ring_frames = clarett_rx_ring_bytes(c) / frame;
 	u64 period, q;
-	u32 pos, off;
+	u32 pos;
 
-	if (!ss || !READ_ONCE(c->stream_run))
+	if (!ss || !READ_ONCE(c->stream_run) || !add_frames)
 		return;
 	runtime = ss->runtime;
 
 	q = c->pcm_frames;
 	pos = do_div(q, ring_frames);		/* frame position within the RX ring */
-	off = pos * frame;
-	if (runtime->dma_area)
-		memcpy(runtime->dma_area + off, clarett_rx_area(c) + off, pbytes);
+	if (runtime->dma_area) {
+		u32 first = min(add_frames, ring_frames - pos);	/* up to the ring end */
 
-	c->pcm_frames += pframes;
+		memcpy(runtime->dma_area + (size_t)pos * frame,
+		       clarett_rx_area(c) + (size_t)pos * frame, (size_t)first * frame);
+		if (add_frames > first)				/* remainder wraps to the ring start */
+			memcpy(runtime->dma_area, clarett_rx_area(c),
+			       (size_t)(add_frames - first) * frame);
+	}
+
+	c->pcm_frames += add_frames;
 
 	/* Deliver period boundaries to ALSA only between trigger START and STOP. ACKing (stream_run) runs
 	 * from prepare so the engine is serviced from the instant it is armed — it stalls within ms if not

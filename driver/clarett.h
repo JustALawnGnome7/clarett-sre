@@ -510,6 +510,7 @@ struct clarett {
 	struct task_struct *stream_svc;		/* polls/acks 0x300 to keep the engine clocked */
 	atomic_t stream_periods;		/* running period count (servicer -> hw pointer) */
 	u32 stream_ctr;				/* last 0x300 period counter (servicer-private) */
+	u32 stream_ctr_step;			/* last positive ctr delta (reused across counter wraps) */
 	bool stream_run;			/* servicer ACKs 0x300 only while set (PCM trigger gate) */
 
 	/*
@@ -633,11 +634,21 @@ static inline u32 clarett_frag_bytes(u8 channels)
 {
 	return (u32)channels * 4 * CLARETT_FRAG_FRAMES;
 }
-/* Frames advanced per 0x300 period IRQ (one IRQ-flagged descriptor consumed = CLARETT_IRQ_DESCS frags). */
+/* Frames advanced per 0x300 period IRQ (one IRQ-flagged descriptor consumed = CLARETT_IRQ_DESCS frags).
+ * Used only as the ALSA period granularity; the actual capture advance is ctr-delta driven (below). */
 static inline u32 clarett_irq_period_frames(void)
 {
 	return CLARETT_IRQ_DESCS * CLARETT_FRAG_FRAMES;
 }
+/*
+ * Frames per 0x300 counter unit (spec §10/§14). Hardware-derived: the vendor steps +0xc/period == 192
+ * frames == 4 ms at 48k, so one unit == 16 frames; our 2Pre steps +0xd (~208 frames/event ~= 48 kHz).
+ * The capture path advances by (measured ctr delta) * this, self-calibrating to the real hardware period
+ * regardless of the per-model step or our IRQ-marker spacing. Sanity cap so a glitched read can't
+ * over-advance the ring: a real delta is ~12-13, never dozens.
+ */
+#define CLARETT_CTR_FRAMES	16
+#define CLARETT_CTR_STEP_MAX	64
 /* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
  * No +1 terminator slot — the wrap flag on the last entry is the terminator. */
 static inline size_t clarett_pcm_tbl_bytes(void)
@@ -745,6 +756,6 @@ int clarett_engine_start(struct clarett *c);
 
 /* pcm.c */
 int clarett_create_pcm(struct clarett *c);
-void clarett_pcm_tick(struct clarett *c);
+void clarett_pcm_tick(struct clarett *c, u32 add_frames);
 
 #endif /* CLARETT_H */

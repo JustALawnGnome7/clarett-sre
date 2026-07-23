@@ -896,12 +896,13 @@ CLARETT_IRQ_DESCS descriptors) was the fix**; a ring flagged only on the last en
 This is the first sustained data-plane streaming in the project.
 
 **Open (refinements, not blockers):**
-- **Pitch calibration.** The counter steps `+0xd` (13) per event at ~235 events/s; `235 × 13 × 16 frames
-  ≈ 48 kHz`, so one ctr unit ≈ 16 frames (matching §10) and the true period is ~208 frames, NOT the 256
-  our fixed `CLARETT_IRQ_DESCS=16` models. Capture drifts ~23% fast. FIX: advance the PCM position by the
-  **measured ctr delta × 16 frames** per event (self-calibrating) instead of a fixed `irq_period_frames()`,
-  or set `CLARETT_IRQ_DESCS=13`. The vendor's own step is `+0xc` (12) — model-dependent, so ctr-delta is
-  the robust choice.
+- **Pitch calibration — FIX IMPLEMENTED (pending verification).** The counter steps `+0xd` (13) per event
+  (~208 frames/event ≈ 48 kHz ⇒ one ctr unit ≈ 16 frames, matching §10), but the fixed
+  `CLARETT_IRQ_DESCS=16` model advanced 256 frames/event → ~23% fast. Now the servicer computes the ctr
+  **delta** per event (reusing the last good step across the small-counter wrap; `CLARETT_CTR_STEP_MAX`
+  guards a glitch) and `clarett_pcm_tick` advances by `delta × CLARETT_CTR_FRAMES` (16), self-calibrating
+  to the real hardware period regardless of the per-model step (vendor `+0xc`) or our marker spacing. The
+  copy now splits at the ring wrap since the per-event advance is variable. VERIFY with a real capture.
 - **Real-audio-content verification.** `arecord` to `/dev/null` proves the clock/plumbing, not the samples.
   Capture a known input (tone into Analogue 1) to a WAV and inspect that the right channel carries it at
   the right level/frequency.

@@ -906,21 +906,35 @@ static int clarett_stream_service(void *data)
 		readl(bar + 0x500);			/* 0x500 IRQ summary */
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
+			u32 step;
 
-			/* First events of a session at info: raw counter values to derive the ctr
-			 * unit/modulus on this model (FC 2Pre: +12/event every 4 ms, wraps ~0xf0 —
-			 * the old one-tick-= 4-frames model is wrong; see data-plane spec). */
+			/* First events of a session at info: raw counter values (2Pre steps +0xd/event,
+			 * wraps at a small modulus — the frame advance is ctr-delta driven, spec §14). */
 			if (atomic_read(&c->stream_periods) < 8)
 				dev_info(&c->pci->dev, "stream-ev[%d]: 0x300=0x%08x\n",
 					 atomic_read(&c->stream_periods), c2);
 
-			if (seen && ctr < c->stream_ctr)
-				wraps++;
+			/*
+			 * Frames captured since the last event = ctr delta * CLARETT_CTR_FRAMES. The counter is a
+			 * small free-running period counter that wraps at an unknown modulus; on a forward step use
+			 * the real delta (which also captures a coalesced double-period), and on a wrap or a glitched
+			 * jump reuse the last good step (the hardware period is stable, ~0xd). This self-calibrates
+			 * the sample rate without needing the modulus.
+			 */
+			if (ctr > c->stream_ctr && ctr - c->stream_ctr <= CLARETT_CTR_STEP_MAX)
+				step = ctr - c->stream_ctr;
+			else {
+				step = c->stream_ctr_step;	/* wrap / glitch: reuse last */
+				if (seen)
+					wraps++;
+			}
+			if (step)
+				c->stream_ctr_step = step;
 			c->stream_ctr = ctr;
 			seen = true;
 			last_tick = jiffies;
 			atomic_inc(&c->stream_periods);
-			clarett_pcm_tick(c);		/* advance PCM pointer / period_elapsed (no-op if idle) */
+			clarett_pcm_tick(c, step * CLARETT_CTR_FRAMES);	/* advance by real captured frames (no-op if idle) */
 		} else if (rekick && seen &&
 			   time_after(jiffies, last_tick + msecs_to_jiffies(rekick_ms))) {
 			/* Stalled mid-stream: counter frozen for rekick_ms while still ACKing. Nudge it. */
@@ -1080,6 +1094,7 @@ void clarett_engine_run(struct clarett *c)
 {
 	atomic_set(&c->stream_periods, 0);
 	c->stream_ctr = 0;
+	c->stream_ctr_step = 0;
 	c->stream_svc = kthread_run(clarett_stream_service, c, "clarett-svc");
 	if (IS_ERR(c->stream_svc)) {
 		dev_warn(&c->pci->dev, "stream servicer failed to start: %ld\n", PTR_ERR(c->stream_svc));
