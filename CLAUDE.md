@@ -219,13 +219,15 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     faults dereferencing zeroed contents as pointers, proving the engine wants a table (the 2Pre "flat
     audio" dump was the fragment buffers). `flat_buffer` false on all models; `force_flat` param re-tests.
     Levers: `rekick`/`arm_pre`/`tx_tone`/`base_hi`/`force_flat`.
-  - **Playback (TX) implemented, hardware test pending.** The PCM is now full-duplex (1 playback + 1
-    capture) sharing the one engine: whichever direction prepares first arms it, the other attaches at the
-    shared `pcm_frames` clock. Each 0x300 tick drains RX→capture-ALSA (behind the write ptr) and refills
+  - **Playback (TX) WORKS on the 2Pre (July 23 2026).** Full-duplex PCM (1 playback 4ch + 1 capture 14ch)
+    sharing the one engine: whichever direction prepares first arms it, the other attaches at the shared
+    `pcm_frames` clock. Each 0x300 tick drains RX→capture-ALSA (behind the write ptr) and refills
     TX←playback-ALSA (ahead of the read ptr, past `CLARETT_TX_GUARD_FRAMES` so the current DMA read is
     never torn); `pcm_lock` serialises the copies vs `hw_free`. TX plays silence when no playback stream is
-    attached. If playback DMA works but is silent, suspect **routing** (the router must send Playback 1/2
-    to the monitor outs) — separate from the DMA path.
+    attached. **Confirmed audible** via `aplay` once **PCM 1 is routed to Analogue Output 1** in the router
+    (alsa-scarlett-gui) — there is NO default route, so playback is silent until a PCM source is wired to a
+    physical output (a mixer-config step, not a DMA problem). Not yet tested: 8PreX/4Pre/8Pre playback,
+    simultaneous duplex stress.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP

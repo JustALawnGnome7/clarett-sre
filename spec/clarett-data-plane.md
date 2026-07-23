@@ -928,3 +928,16 @@ the residual +0.09% is the two interfaces' unlocked-crystal offset (they were no
 2Pre rate error, and is inaudible. No driver change.
 
 Remaining: TX playback and the 8PreX with the corrected table; then the even-channel spike cleanup.
+
+### ★ PLAYBACK CONFIRMED — full duplex on the 2Pre (July 23 2026) `[HW — Clarett 2Pre]` ★
+
+`aplay -D hw:5 ref_1khz_48k_4ch_s32.wav` (native 4ch S32_LE) → **audible tone out the monitor output**
+once **PCM 1** is routed to **Analogue Output 1** in the router (alsa-scarlett-gui). The playback device
+enumerates (`aplay -l` shows the 2Pre, 4ch), the TX engine clocks from the playback-side arm, and the
+TX ring fill reaches the DACs. The DMA was never the blocker — playback is silent until the router sends
+a PCM source to a physical output (no default route). So the **full-duplex PCM path is complete on the
+2Pre**: 14ch capture + 4ch playback, one shared engine.
+
+Refinements still open: the even-channel capture spikes (§ above, cosmetic); TX/playback on the 8PreX
+(and 4Pre/8Pre) with the corrected table; and simultaneous duplex stress (both directions at once — the
+shared-engine attach/detach was written for it but not yet stress-tested).
