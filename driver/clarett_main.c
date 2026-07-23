@@ -1488,6 +1488,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_info(&pci->dev, "model: %s (forced by model=)\n", c->model->name);
 	mutex_init(&c->mbox_lock);
 	mutex_init(&c->hwdep_lock);
+	mutex_init(&c->pcm_lock);
 	init_waitqueue_head(&c->hwdep_notify_wait);
 	init_completion(&c->mbox_done);
 	INIT_WORK(&c->notify_work, clarett_notify_work);

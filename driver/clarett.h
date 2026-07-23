@@ -520,6 +520,7 @@ struct clarett {
 	 */
 	struct snd_pcm *pcm;
 	struct snd_pcm_substream *pcm_sub;	/* live capture substream (NULL when idle) */
+	struct snd_pcm_substream *pcm_play_sub;	/* live playback substream (NULL when idle) */
 	/*
 	 * The hardware rings live in ONE contiguous coherent buffer (c->stream_buf), the exact layout the
 	 * engine-start probe proved clocks — split allocations (separate table / ALSA buffer / TX ring) do
@@ -527,9 +528,12 @@ struct clarett {
 	 * (capture) the second. Captured samples are memcpy'd from the block-1 RX area into the ALSA buffer
 	 * each period (clarett_pcm_tick). FC always arms both blocks even for record-only (data-plane §9).
 	 */
-	bool pcm_running;			/* trigger START..STOP: gate snd_pcm_period_elapsed delivery */
-	u64 pcm_frames;				/* frames streamed (servicer model -> hw pointer) */
-	u64 pcm_last_period;			/* last period index reported via period_elapsed */
+	struct mutex pcm_lock;			/* guards the tick's ring<->ALSA copies vs hw_free teardown */
+	bool pcm_running;			/* capture trigger START..STOP: gate period delivery */
+	bool play_running;			/* playback trigger START..STOP: gate period delivery */
+	u64 pcm_frames;				/* engine frame clock since arm (shared by both directions) */
+	u64 pcm_last_period;			/* last capture period index reported via period_elapsed */
+	u64 play_last_period;			/* last playback period index reported via period_elapsed */
 
 	/*
 	 * Shadow of the config space backing mixer "get". Updated write-through on
