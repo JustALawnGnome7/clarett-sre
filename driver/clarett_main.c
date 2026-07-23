@@ -15,6 +15,7 @@
 #include <linux/workqueue.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/sched.h>		/* sched_set_fifo_low() — real-time priority for the stream servicer */
 #include <linux/bitmap.h>
 #include <linux/string.h>
 #include <linux/jiffies.h>
@@ -1151,7 +1152,17 @@ void clarett_engine_run(struct clarett *c)
 	if (IS_ERR(c->stream_svc)) {
 		dev_warn(&c->pci->dev, "stream servicer failed to start: %ld\n", PTR_ERR(c->stream_svc));
 		c->stream_svc = NULL;
+		return;
 	}
+	/*
+	 * Real-time priority for the servicer: it ACKs 0x300 and refills the TX ring on every ~4 ms period,
+	 * and if userspace preempts it (the mixer GUI's continuous meter polling + UI rendering was enough)
+	 * the TX fill falls behind and the engine replays stale audio — audible skips despite no XRUN. It
+	 * sleeps ~150 us between polls (work is microseconds), so it yields constantly and cannot starve the
+	 * system; SCHED_FIFO just guarantees it runs promptly when a period is due. Low RT priority so it
+	 * sits above normal tasks but below any other real-time thread.
+	 */
+	sched_set_fifo_low(c->stream_svc);
 }
 
 /*
