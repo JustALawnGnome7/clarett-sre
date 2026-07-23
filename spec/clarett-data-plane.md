@@ -640,4 +640,65 @@ and because the answers are worth reading.
 will not start, which points off-BAR. In the vendor capture Windows was actively playing audio, so its TX
 ring held real samples; ours holds silence. This engine has shown content sensitivity before — the `0xAA`
 RX pre-fill was recorded as "the lone diff that made it clock" — and DMA content is precisely what an MMIO
-trace cannot see.
+trace cannot see. **Refined by §12:** TX content is one of exactly TWO surviving candidates (the other is
+elapsed time), and §12 gives the levers that separate them.
+
+---
+
+## 12. The arm ritual: four failing arms, then a silent multi-second wait (July 23 2026) `[TRACE]`
+
+Desk re-reading of the three vendor stream captures, hunting for what distinguishes the arm that
+streams from the arms that don't. **The pattern is universal and we have never replayed it.**
+
+Every capture — `2pre_stream.log`, `4pre_boot_to_stream_end.log`, `8prex_stream.log` — opens with
+**exactly four throwaway arms**, then a **multi-second window with zero BAR traffic**, then **one more
+arm that streams**:
+
+| model | four arms | held each | gap between | silent window | arm that streams |
+|---|---|---|---|---|---|
+| 2Pre  | 52.733–52.776 (43 ms) | ~1.4 ms | 12–14 ms | **3.105 s** | 55.881 |
+| 4Pre  | 16.602–16.680 (78 ms) | 1.3–6.0 ms | 23–33 ms | 1.88 s + batch + **1.016 s** | 19.721 |
+| 8PreX | 47.373–47.415 (42 ms) | ~1.3 ms | 11–15 ms | **5.914 s** | 53.330 |
+
+Each throwaway arm is the **complete 14-write program** — `0x108=0x10`, `0x20c=1`, per-block
+CHANS/SIZE/BASEhi/BASElo, `0x10c=0x1e70700`, `0x110=7` — with the **same bases and the same geometry**
+as the arm that eventually streams (2Pre `0x680f7000`/`0x680fb000`, 4Pre `0x79998000`/`0x799ac000`).
+It is held ~1.5 ms, raises **no period at all** (`0x300` reads `0x0` at teardown), and is torn down with
+`0x110=0` → cause sweep → `0x100=0xf` → status reads `0x21c/0x218/0x31c/0x318` → fw-info block
+`0x800..0x8a4`. The per-block pointers **do** advance during a failing arm (2Pre `0x21c/0x218=0xd`,
+`0x31c/0x318=0x2`), i.e. the engine prefetches descriptors and then goes nowhere — our exact symptom.
+
+**The consequence is a hard narrowing.** The register program is *provably byte-identical* between the
+arms that fail and the arm that works, on three different models. So whatever changes across the silent
+window is in one of the only two channels an MMIO trace cannot see:
+
+1. **Elapsed time** — something in the device settles a few seconds after the first arm attempt.
+2. **Host RAM contents** — Windows filled the TX playback ring during the window (nothing else is
+   running; the bus is idle).
+
+Everything else is eliminated by the traces themselves. In particular:
+
+- **The re-init batch is not it.** Only the 4Pre has FCP in its window at all; the 2Pre and 8PreX
+  windows contain **zero MMIO of any kind**. That independently confirms the hardware result that
+  `stream_batch=1` changes nothing, and retires the §9 reading that the batch is what "flips" the engine.
+- **The pre-arm `0x6004/0x6002/0x6005` triple is not it** — same reason (absent from two of three
+  captures), consistent with §11 finding those opcodes are sync *queries*.
+- **It is not a missing register or a missing command**, since the failing arms already write
+  everything the working arm writes.
+
+**In tree (levers, all default off = historical behaviour):** `clarett_engine_arm()` is split into
+`clarett_engine_program()` (the 14 writes) + `clarett_engine_quiesce()` (the vendor's teardown: `0x110=0`,
+cause sweep, `0x100=0xf`), with `arm_pre` (throwaway arm count), `arm_hold_us`, `arm_gap_ms` and
+`arm_settle_ms` replaying the ritual, and `tx_tone` (clarett_pcm.c) filling the dummy TX ring with a
+1 kHz −18 dBFS sine instead of silence. The two hypotheses are orthogonal and separable in three runs:
+
+| run | levers | reads on |
+|---|---|---|
+| A | `arm_pre=4 arm_settle_ms=3500` | time/retry alone (TX still silent) |
+| B | `arm_pre=4 arm_settle_ms=3500 tx_tone=1` | both |
+| C | `tx_tone=1` | TX content alone |
+
+Signal to watch: `stream-svc: periods=… ctr=…` — the wall is `ctr` frozen after one pass; success is
+`ctr` advancing continuously (the vendor's own steady state is +0xc per 4 ms event). If B streams and
+A and C don't, the two are jointly required. `tx_tone` plays out of the monitor outputs the moment the
+engine runs, so a working engine should also be **audible**.

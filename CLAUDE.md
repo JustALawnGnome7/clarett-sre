@@ -198,9 +198,14 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   - Servicer ACKs `0x300` from `prepare()` (engine stalls in ms if unserviced from arm); `trigger` only
     gates `period_elapsed` via `pcm_running`.
   - **THE WALL:** engine streams exactly one ring pass then cleanly stalls (device alive). No driver-side
-    revive works — rewrite `0x110`/bases, full cause-block `pollall`, re-`activate=5` all fail. Our
-    descriptor table already matches the VM's, so the wrap is an unobserved runtime behaviour → next is a
-    fresh VM capture of a long capture session. Debug params: `rekick`/`rekick_ms`/`pollall`/`pcm_selftest`.
+    revive works — rewrite `0x110`/bases, full cause-block sweep, re-`activate=5` all fail. Our
+    descriptor table already matches the VM's, and our post-arm state is byte-identical to the vendor's.
+    **The live lead is the ARM RITUAL (spec §12):** all three vendor captures do four throwaway arms, then
+    wait multiple seconds touching nothing on the BAR, then arm once more — byte-identically — and stream.
+    Since the register program is identical between the failing and working arms, the difference is
+    **elapsed time or TX-ring RAM contents**, the only two channels an MMIO trace can't see. Levers to
+    separate them: `arm_pre`/`arm_hold_us`/`arm_gap_ms`/`arm_settle_ms` and `tx_tone` (plus
+    `rekick`/`rekick_ms`).
   - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so

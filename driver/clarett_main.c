@@ -56,6 +56,35 @@ static int rekick_ms = 20;
 module_param(rekick_ms, int, 0444);
 MODULE_PARM_DESC(rekick_ms, "Stall threshold for rekick: ms with no new 0x300 period before kicking.");
 
+/*
+ * The vendor's arm ritual (data-plane spec §12). EVERY vendor stream capture — 2Pre, 4Pre, 8PreX —
+ * opens with exactly FOUR throwaway arms ~13 ms apart, each held ~2 ms then torn down without ever
+ * raising a period, followed by a MULTI-SECOND window in which the host touches the BAR not at all,
+ * followed by one more arm, byte-identical to the four, which streams. Same bases, same geometry,
+ * same 14 writes. Since the register program is provably identical between the arms that fail and
+ * the arm that works, the difference is either elapsed time or host-RAM contents — the only two
+ * channels an MMIO trace cannot see. These knobs replay the ritual so the time half can be tested.
+ */
+static int arm_pre;
+module_param(arm_pre, int, 0644);
+MODULE_PARM_DESC(arm_pre,
+		 "Throwaway arm/teardown cycles to run before the real arm, mimicking the vendor's four "
+		 "(0 = off, the historical behaviour; 4 = vendor-faithful).");
+
+static int arm_hold_us = 2000;
+module_param(arm_hold_us, int, 0644);
+MODULE_PARM_DESC(arm_hold_us, "How long each arm_pre throwaway arm is held before teardown (vendor: ~1500-2000 us).");
+
+static int arm_gap_ms = 13;
+module_param(arm_gap_ms, int, 0644);
+MODULE_PARM_DESC(arm_gap_ms, "Gap between arm_pre throwaway arms (vendor: 12-25 ms).");
+
+static int arm_settle_ms;
+module_param(arm_settle_ms, int, 0644);
+MODULE_PARM_DESC(arm_settle_ms,
+		 "Quiet wait before the final arm, with the engine torn down and the BAR untouched, "
+		 "mimicking the vendor's 3.1 s (2Pre) / 5.9 s (8PreX) / 3.0 s (4Pre) pre-stream window.");
+
 static int meter_poll_ms = CLARETT_METER_POLL_MS;
 module_param(meter_poll_ms, int, 0444);
 MODULE_PARM_DESC(meter_poll_ms,
@@ -898,7 +927,7 @@ static int clarett_stream_service(void *data)
  * probe context, never from the atomic PCM trigger. Leaves the engine armed-and-committed but paused:
  * it prefills a few descriptors and waits for the servicer to ACK 0x300 (gated by stream_run).
  */
-void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
+static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 {
 	void __iomem *bar = c->bar0;
 
@@ -939,6 +968,57 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 	writel(0x7, bar + REG_STREAM_IRQ_ARM);				/* 0x110 arm (0x0 is stream-stop) */
 
 	c->stream_on = true;
+}
+
+/*
+ * Tear an armed engine back down the way the vendor does between its throwaway arms: stop the period
+ * IRQ, sweep the five cause blocks (read-to-clear), write the cause block back, then read the per-block
+ * status/PTR words. Deliberately NOT clarett_engine_stop() — that one also stops the servicer kthread
+ * and clears 0x20c/0x108, which the vendor does not do here. No mailbox command can be in flight (the
+ * handshake has finished), so writing 0x100 cannot eat a DONE bit.
+ */
+static void clarett_engine_quiesce(struct clarett *c)
+{
+	void __iomem *bar = c->bar0;
+
+	writel(0, bar + REG_STREAM_IRQ_ARM);		/* 0x110 = 0 */
+	readl(bar + REG_CAPS);
+	readl(bar + REG_IRQ0_CAUSE);
+	readl(bar + STREAM_BLK1);
+	readl(bar + STREAM_BLK0);
+	readl(bar + REG_NOTIFY_CAUSE);
+	readl(bar + 0x500);
+	writel(0xf, bar + REG_IRQ0_CAUSE);
+	c->stream_on = false;
+}
+
+/*
+ * Arm the engine, optionally preceded by the vendor's arm ritual (see arm_pre/arm_settle_ms). The
+ * throwaway arms program the identical 14 registers and are torn down without being serviced, exactly
+ * as the vendor's four are; the settle window then leaves the BAR untouched. Sleeps — process context
+ * only, which is where every caller already is.
+ */
+void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
+{
+	void __iomem *bar = c->bar0;
+	int i;
+
+	for (i = 0; i < arm_pre; i++) {
+		clarett_engine_program(c, r0, r1);
+		if (arm_hold_us > 0)
+			usleep_range(arm_hold_us, arm_hold_us + 500);
+		clarett_engine_quiesce(c);
+		if (arm_gap_ms > 0)
+			msleep(arm_gap_ms);
+	}
+	if (arm_pre)
+		dev_info(&c->pci->dev, "arm ritual: %d throwaway arms done (ptr0=0x%x ptr1=0x%x), settling %d ms\n",
+			 arm_pre, readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+			 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR), arm_settle_ms);
+	if (arm_settle_ms > 0)
+		msleep(arm_settle_ms);
+
+	clarett_engine_program(c, r0, r1);
 
 	/*
 	 * Post-arm state. The vendor's 0x300 counter counts DESCRIPTORS consumed (12 per 4 ms period

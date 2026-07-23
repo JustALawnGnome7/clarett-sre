@@ -41,6 +41,34 @@ MODULE_PARM_DESC(stream_batch,
 		 "queries, 0x004001 x6) before arming the stream engine (default off; no effect on a 4Pre).");
 
 /*
+ * TX-ring contents (data-plane spec §12, the other half of the arm-ritual question). The vendor's four
+ * failing arms and its one working arm program byte-identical registers, so what differs is elapsed time
+ * or host-RAM contents. Windows was playing audio in every capture, so its TX ring held real samples by
+ * the time the working arm went in; our dummy TX ring holds silence. This lever fills it with a 1 kHz
+ * sine instead, to test whether the engine needs a non-silent TX ring to clock.
+ *
+ * -18 dBFS deliberately: this plays out of the monitor outputs the instant the engine runs, so it has to
+ * be audible without being dangerous in headphones.
+ */
+static bool tx_tone;
+module_param(tx_tone, bool, 0444);
+MODULE_PARM_DESC(tx_tone,
+		 "Fill the dummy TX ring with a 1 kHz -18 dBFS sine instead of silence (audible on the "
+		 "outputs if the engine runs). Tests whether the engine gates on TX content.");
+
+/* One cycle of 1 kHz at 48 kHz, 24-bit signed; shifted left 8 for S32_LE MSB-justified. */
+static const s32 clarett_sine48[48] = {
+	        0,    136867,    271391,    401273,    524288,    638333,
+	   741455,    831891,    908093,    968758,   1012847,   1039605,
+	  1048576,   1039605,   1012847,    968758,    908093,    831891,
+	   741455,    638333,    524288,    401273,    271391,    136867,
+	        0,   -136867,   -271391,   -401273,   -524288,   -638333,
+	  -741455,   -831891,   -908093,   -968758,  -1012847,  -1039605,
+	 -1048576,  -1039605,  -1012847,   -968758,   -908093,   -831891,
+	  -741455,   -638333,   -524288,   -401273,   -271391,   -136867,
+};
+
+/*
  * Per-ring geometry is derived per-model at runtime (clarett.h: clarett_pcm_rx_samples() &c.). The ALSA
  * buffer is pinned to exactly the RX sample-area size so the RX ring and the ALSA ring share one geometry
  * (CLARETT_STREAM_NDESC descriptors, 1:1 byte offsets) — the per-period copy is then a straight offset copy
@@ -342,6 +370,29 @@ static const struct snd_pcm_ops clarett_pcm_ops = {
  * descriptor mode the engine reads the TABLE (valid, non-null entries -> it clocks) and writes audio INTO
  * the sample area, so a clean zeroed sample area is correct and fault-free.
  */
+/*
+ * Write the 1 kHz sine over the whole TX sample area, every playback channel. The area is a plain
+ * contiguous frame ring — clarett_frag_bytes() is always a whole number of frames and the descriptors
+ * tile it in order — so a linear frame-by-frame fill matches what the engine will read out.
+ */
+static void clarett_fill_tx_tone(struct clarett *c)
+{
+	u8 chans   = c->model->playback_channels;
+	__le32 *p  = (__le32 *)((u8 *)c->stream_buf + clarett_pcm_tbl_bytes());
+	size_t frames = clarett_pcm_tx_samples(c) / ((size_t)chans * 4);
+	size_t f;
+	u8 ch;
+
+	for (f = 0; f < frames; f++) {
+		__le32 v = cpu_to_le32((u32)(clarett_sine48[f % ARRAY_SIZE(clarett_sine48)] << 8));
+
+		for (ch = 0; ch < chans; ch++)
+			*p++ = v;
+	}
+	dev_info(&c->pci->dev, "TX ring filled with 1 kHz -18 dBFS sine (%zu frames x %uch)\n",
+		 frames, chans);
+}
+
 static void clarett_build_rings(struct clarett *c)
 {
 	size_t tbl     = clarett_pcm_tbl_bytes();
@@ -360,6 +411,9 @@ static void clarett_build_rings(struct clarett *c)
 	}
 	tx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(CLARETT_DESC_WRAP_TX);
 	rx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(CLARETT_DESC_WRAP_RX);
+
+	if (tx_tone)
+		clarett_fill_tx_tone(c);
 }
 
 int clarett_create_pcm(struct clarett *c)
