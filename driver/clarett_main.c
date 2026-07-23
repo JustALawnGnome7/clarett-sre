@@ -1395,17 +1395,36 @@ static void clarett_notify_work(struct work_struct *work)
 static void clarett_meter_work(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, meter_work.work);
-	static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
 	int delay = meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS;
+	int n = c->hwdep_n_meter_slots;
 
-	/* The poll IS the payload: the device needs the heartbeat, and the levels it returns are read
-	 * by whoever owns the meter control — which is now fcp-server, through its own GET_METER in the
-	 * hwdep meter path. Nothing in the driver consumes the response, so it is not snapshotted. */
-	if (meter_poll_ms > 0)
-		clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
+	if (meter_poll_ms > 0) {
+		if (n > 0 && c->hwdep_meter_levels) {
+			/*
+			 * The meter control exists (fcp-server set the map): make the heartbeat's poll ALSO
+			 * refresh the shared cache and stamp hwdep_meter_polled, so the GUI-facing .get serves
+			 * that cache instead of issuing its own GET_METER per read. This collapses the meter
+			 * traffic to ONE poll rate — the flood of per-read device commands was disrupting the
+			 * stream (skips) and timing out other mailbox commands during playback.
+			 */
+			u8 req[8];		/* {pad:u16=0, num_meters:u16, magic:u32=1} */
 
-	if (meter_poll_ms > 0)
+			clarett_put_le16(req, 0);
+			clarett_put_le16(req + 2, n);
+			clarett_put_le32(req + 4, 1);
+			mutex_lock(&c->hwdep_lock);
+			if (!clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
+					     (u8 *)c->hwdep_meter_levels, n * sizeof(__le32)))
+				c->hwdep_meter_polled = jiffies ? jiffies : 1;
+			mutex_unlock(&c->hwdep_lock);
+		} else {
+			/* No meter control yet — the generic heartbeat (the "device needs it" hypothesis). */
+			static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
+
+			clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
+		}
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
+	}
 }
 
 /* Allocate MSI vectors. The config-space side effect is the point of doing this early:

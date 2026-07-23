@@ -188,6 +188,15 @@ struct snd_pcm_substream;
  */
 #define FCP_GET_METER            0x001001
 #define CLARETT_METER_POLL_MS    40
+/*
+ * Minimum spacing between GET_METER device polls from the meter control's .get. The mixer GUI reads the
+ * control at its UI refresh rate (30-60 Hz); a device command per read floods the mailbox and disrupts
+ * streaming (skips + command timeouts, since control and stream contend on this Thunderbolt device). The
+ * .get serves the cached levels between polls, so the GUI still sees a live meter with far fewer device
+ * commands. Kept just above the heartbeat interval so the heartbeat's own refresh (below) keeps the cache
+ * fresh and the .get never has to poll on its own — one meter poll rate, not two.
+ */
+#define CLARETT_METER_CACHE_MS   50
 
 /* Debounced flash persist: after a control change, schedule a single DATA_CMD{PERSIST} this many ms
  * later (cancel+reschedule on each change) so a burst coalesces into one NVRAM write. Matches the
@@ -490,7 +499,8 @@ struct clarett {
 	bool hwdep_ready;			/* dwork INIT'd: gates cancel (probe-error paths never got here) */
 	struct snd_kcontrol *hwdep_meter_ctl;
 	s16 *hwdep_meter_map;
-	__le32 *hwdep_meter_levels;
+	__le32 *hwdep_meter_levels;	/* GET_METER scratch + cache (rate-limited; see clarett_hwdep_meter_get) */
+	unsigned long hwdep_meter_polled;	/* jiffies of the last GET_METER; 0 = never */
 	int hwdep_meter_channels;	/* map_size: channels the control exposes */
 	int hwdep_n_meter_slots;	/* device raw meter count */
 	unsigned int *hwdep_meter_labels_tlv;

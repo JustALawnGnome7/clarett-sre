@@ -174,16 +174,27 @@ static int clarett_hwdep_meter_get(struct snd_kcontrol *kctl,
 				   struct snd_ctl_elem_value *uc)
 {
 	struct clarett *c = kctl->private_data;
-	int i, err, n = c->hwdep_n_meter_slots;
-	u8 req[8];			/* {pad:u16=0, num_meters:u16, magic:u32=1} */
-
-	clarett_put_le16(req, 0);
-	clarett_put_le16(req + 2, n);
-	clarett_put_le32(req + 4, 1);
+	int i, err = 0, n = c->hwdep_n_meter_slots;
 
 	mutex_lock(&c->hwdep_lock);
-	err = clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
-			      (u8 *)c->hwdep_meter_levels, n * sizeof(__le32));
+	/*
+	 * Rate-limit the device poll: the mixer GUI reads this control at 30-60 Hz, and a GET_METER per read
+	 * floods the mailbox and disrupts streaming (audible skips + fcp-server command timeouts — control and
+	 * stream contend on this Thunderbolt device). Poll at most every CLARETT_METER_CACHE_MS and serve the
+	 * cached hwdep_meter_levels between polls; the meter stays live at ~30 Hz with a fraction of the traffic.
+	 */
+	if (!c->hwdep_meter_polled ||
+	    time_after(jiffies, c->hwdep_meter_polled + msecs_to_jiffies(CLARETT_METER_CACHE_MS))) {
+		u8 req[8];		/* {pad:u16=0, num_meters:u16, magic:u32=1} */
+
+		clarett_put_le16(req, 0);
+		clarett_put_le16(req + 2, n);
+		clarett_put_le32(req + 4, 1);
+		err = clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
+				      (u8 *)c->hwdep_meter_levels, n * sizeof(__le32));
+		if (!err)
+			c->hwdep_meter_polled = jiffies ? jiffies : 1;	/* 0 means "never" */
+	}
 	if (!err) {
 		for (i = 0; i < c->hwdep_meter_channels; i++) {
 			int idx = c->hwdep_meter_map[i];
