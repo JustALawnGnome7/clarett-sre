@@ -79,6 +79,26 @@ static int arm_gap_ms = 13;
 module_param(arm_gap_ms, int, 0644);
 MODULE_PARM_DESC(arm_gap_ms, "Gap between arm_pre throwaway arms (vendor: 12-25 ms).");
 
+/*
+ * The BASE_HI question (data-plane spec §13). EVERY vendor arm, on all three models, in all five
+ * captures, writes 0x214 = 2 AND 0x314 = 2. We write upper_32_bits() of our own bus address, which
+ * with the default 32-bit mask is always 0. Two readings, never separated:
+ *   (a) a genuine address high word — the VM's rings really did live above 8 GB; or
+ *   (b) a FIELD (mode/ownership/tag) that happens to read 2, in which case we have been writing 0
+ *       into a required register on every arm we have ever done.
+ * Reading (b) is not idle: the 8PreX RAM dump found the per-ENTRY high words differing by direction
+ * (TX 2, RX 1) within one session, which is odd for an address and natural for a tag.
+ * Set base_hi >= 0 to force the value. If it is an address, forcing 2 sends the table fetch to
+ * 0x2_xxxxxxxx and the IOMMU logs a fault / PTR never advances; if it is a field, the engine keeps
+ * fetching our table normally. Either outcome settles it.
+ */
+static int base_hi = -1;
+module_param(base_hi, int, 0644);
+MODULE_PARM_DESC(base_hi,
+		 "Override the value written to the ring BASE_HI registers 0x214/0x314 (-1 = the real "
+		 "upper 32 bits of the bus address, the historical behaviour; 2 = what every vendor "
+		 "capture writes). Discriminates address-high-word from flags-field.");
+
 static int arm_settle_ms;
 module_param(arm_settle_ms, int, 0644);
 MODULE_PARM_DESC(arm_settle_ms,
@@ -953,14 +973,16 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 		writel(c->model->playback_channels, bar + STREAM_BLK0 + STREAM_OFF_CHANS); /* 0x204 */
 		writel(clarett_period_bytes(c->model->playback_channels),
 		       bar + STREAM_BLK0 + STREAM_OFF_SIZE);				  /* 0x208 period */
-		writel(upper_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI); /* 0x214 */
+		writel(base_hi >= 0 ? base_hi : upper_32_bits(r0),
+		       bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);			  /* 0x214 */
 		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
 	}
 	if (r1) {
 		writel(c->model->capture_channels, bar + STREAM_BLK1 + STREAM_OFF_CHANS);  /* 0x304 */
 		writel(clarett_period_bytes(c->model->capture_channels),
 		       bar + STREAM_BLK1 + STREAM_OFF_SIZE);				  /* 0x308 period */
-		writel(upper_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI); /* 0x314 */
+		writel(base_hi >= 0 ? base_hi : upper_32_bits(r1),
+		       bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);			  /* 0x314 */
 		writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO); /* 0x310 */
 	}
 

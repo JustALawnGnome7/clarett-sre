@@ -197,15 +197,19 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     that made it clock; likely a write-visibility/`dma_wmb` effect, not the content).
   - Servicer ACKs `0x300` from `prepare()` (engine stalls in ms if unserviced from arm); `trigger` only
     gates `period_elapsed` via `pcm_running`.
-  - **THE WALL:** engine streams exactly one ring pass then cleanly stalls (device alive). No driver-side
-    revive works — rewrite `0x110`/bases, full cause-block sweep, re-`activate=5` all fail. Our
-    descriptor table already matches the VM's, and our post-arm state is byte-identical to the vendor's.
-    **The live lead is the ARM RITUAL (spec §12):** all three vendor captures do four throwaway arms, then
-    wait multiple seconds touching nothing on the BAR, then arm once more — byte-identically — and stream.
-    Since the register program is identical between the failing and working arms, the difference is
-    **elapsed time or TX-ring RAM contents**, the only two channels an MMIO trace can't see. Levers to
-    separate them: `arm_pre`/`arm_hold_us`/`arm_gap_ms`/`arm_settle_ms` and `tx_tone` (plus
-    `rekick`/`rekick_ms`).
+  - **THE WALL (July 23 2026 — sharpened, spec §13):** on an armed 2Pre the engine fetches our descriptor
+    table (`ptr` advances to `0xd`/`0x2`, no IOMMU fault) and fires the 4 ms period IRQ on schedule (bit31
+    asserts), but **consumes zero sample frames per period** — `0x300` ctr frozen at 0, vs the vendor's
+    first read already `0x8000000c` (+0xc/period). So the block is specifically in **sample consumption /
+    converter data movement**, NOT table address/fetch/format, period timing, or the arm program.
+    Eliminated on hardware this session: the arm ritual (four throwaway arms + multi-second settle —
+    `arm_pre`/`arm_settle_ms`), **elapsed time**, and **TX-ring contents** (`tx_tone`, a 1 kHz sine, no
+    effect → retires the old "content sensitivity" lead). Also **settled: `0x214`/`0x314` is a genuine
+    64-bit address high word and we handle it right** (`base_hi=2` faults at `0x2_ffe00000`; closes the
+    `dma_bits` ambiguity). **Surviving lead:** the 2Pre wants a **flat** sample ring, not a descriptor
+    table (its RAM dump is flat audio; the reverted flat path was the only config that got its counter
+    advancing, `ctr=0x1c10`). Re-open a per-model flat path + fresh pre-arm `pmemsave` of the sample area
+    (RAM-at-arm is the last unobserved channel). Levers: `rekick`/`rekick_ms`/`arm_pre`/`tx_tone`/`base_hi`.
   - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so

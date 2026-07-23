@@ -702,3 +702,59 @@ Signal to watch: `stream-svc: periods=… ctr=…` — the wall is `ctr` frozen 
 `ctr` advancing continuously (the vendor's own steady state is +0xc per 4 ms event). If B streams and
 A and C don't, the two are jointly required. `tx_tone` plays out of the monitor outputs the moment the
 engine runs, so a working engine should also be **audible**.
+
+---
+
+## 13. Arm-ritual and BASE_HI settled on hardware; the block is sample CONSUMPTION (July 23 2026) `[HW — Clarett 2Pre, armed session]`
+
+Four hardware runs on a fresh armed 2Pre (`enable_pcm=1`), testing §12's two surviving candidates and
+the long-standing `0x214`/`0x314` ambiguity. **All three candidate causes are eliminated; the real
+signature is now much sharper.**
+
+- **Time alone — NEGATIVE.** `arm_pre=4 arm_settle_ms=3500`: the ritual reproduces the vendor's failing
+  arm state *exactly* (`arm ritual: 4 throwaway arms done (ptr0=0xd ptr1=0x2)` — the 2Pre vendor's own
+  `0x21c/0x218=0xd`, `0x31c/0x318=0x2`), so it is a faithful replay, not a mis-arm. Still walls:
+  `periods=2 ctr=0x0`, `arecord` EIO. Elapsed time is not the trigger.
+- **Time + TX content — NEGATIVE.** `arm_pre=4 arm_settle_ms=3500 tx_tone=1` (TX ring filled with a
+  1 kHz sine, 4096 frames × 4ch, confirmed in the log): identical wall, `periods=2 ctr=0x0`, EIO, and
+  no audio. So TX-ring contents are not the trigger either — **this retires the §11/§12 "content
+  sensitivity" lead** (the historical `0xAA` "content" effect was the flat-mode pointer-deref artifact,
+  not a real content gate).
+- **`base_hi` — SETTLED: `0x214`/`0x314` is a genuine 64-bit address high word, and we handle it
+  correctly.** Forcing `base_hi=2` (what every vendor arm writes) with our low base `0xffe00000`
+  produced `AMD-Vi IO_PAGE_FAULT ... address=0x2ffe00000` and `0x2ffe10800` — i.e. the engine fetched
+  the table at `(2<<32)|low`, faulting, `ptr` frozen at 0. **This closes the multi-month `dma_bits`
+  ambiguity:** the vendor wrote 2 because its rings genuinely lived above 8 GB (`0x2_xxxxxxxx`); our
+  contiguous coherent buffer below 4 GB with high word 0 is *correct*, and the engine fetches our
+  descriptor table normally (`ptr0=0xd`, no fault) when it is not forced. `0x214` is NOT a flags/tag
+  field. (The per-direction entry high words in the 8PreX dump — TX 2, RX 1 — are therefore genuine
+  address bits: Windows placed the two sample buffers in different 4 GB regions, unremarkable.)
+
+**The sharpened signature (the actual finding).** Comparing the vendor's working arm to ours at the
+counter level:
+
+| | vendor working arm (`2pre_stream.log`) | ours (descriptor mode, armed) |
+|---|---|---|
+| first `0x300` read | `0x8000000c` (ctr already **12**) | `0x80000000` (ctr **0**) |
+| steady state | `+0xc`/period (16 frames/unit × 12 = 192 frames = 4 ms) | ctr **frozen at 0**, 2 events then stall |
+| `ptr` (`0x21c`/`0x31c`) | advances | prefetches to `0xd`/`0x2`, then frozen |
+
+So the engine **fetches our descriptor table** (ptr advances, no fault — table format/address correct)
+and **fires the 4 ms period IRQ on schedule** (bit31 asserts), but **consumes zero sample frames per
+period** (ctr never leaves 0). The block is therefore *specifically in sample consumption / converter
+data movement* — NOT in: table address (base_hi settled), table fetch (ptr advances), table format
+(no fault), period timing (IRQ fires), arm-register program (byte-identical), elapsed time, or TX
+content. Every host-visible and host-RAM channel we can drive is now eliminated.
+
+**This re-converges on the b53abb5 tension.** That commit unified both models to descriptor mode on
+the theory "descriptor is the hardware default, buffer mode is the FCP-handshake response." But the
+2Pre RAM dump (§9) showed **flat audio** at the live `0x310` target (no table), and the reverted flat
+path was the one config that ever got the 2Pre **counter advancing** (`ctr=0x1c10`, 28 passes) — vs
+descriptor mode's dead `ctr=0`. The `ctr=0` "consumes nothing" signature is consistent with a
+**mode mismatch**: we hand the 2Pre a descriptor table, its engine expects a flat sample ring, so it
+walks the "table" as flat data and advances nothing recognisable. **NEXT (the surviving lead, a real
+re-opening):** restore a per-model flat-buffer path for the 2Pre (0x210/0x310 → contiguous sample ring,
+no table) and read the counter; the open sub-problem from §9 is why flat previously needed a non-null
+prefill to clock yet then faulted dereferencing it — resolve by capturing what the VM writes into the
+2Pre sample area *before* its working arm (a fresh pre-arm `pmemsave`), since RAM contents at arm time
+is now the only remaining unobserved channel.
