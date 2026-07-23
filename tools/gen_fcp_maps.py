@@ -196,7 +196,18 @@ METER_SLOTS = {
 # for 48 - but they are outside what METER_INFO advertises, and ONE out-of-range entry makes
 # fcp-server discard the whole map (meter.c goto done), taking the measured analogue slots with it.
 # ADAT (10-17, inferred) is dropped for the same reason.
-METER_SLOTS_DST = {}
+METER_SLOTS_DST = {
+    # Measured on a 2Pre (July 23 2026): a -6 dBFS tone played through PCM 1-2 -> Line Output 1-2 lit
+    # slots 12/13 at exactly 2047 (= -6 dBFS of 4095), and NOTHING at 14+. That the PCM streams themselves
+    # were driven (4-ch tone) but no PCM slot lit means the device meters the physical OUTPUTS, not the
+    # PCM sources. So the outputs pack 12..15, immediately after the 12 input slots (0-11) — all inside the
+    # 24-slot METER_INFO bound (resp = 00 02 0c 00 -> 2*12), so fcp-server accepts them. 14/15 (Line Output
+    # 3-4) are predicted by the same sequential packing, unlit only because they carried no signal.
+    "clarett-2pre": {
+        1024: (12, "measured"),  1025: (13, "measured"),   # Line Output 1-2 (Monitor L/R)
+        1026: (14, "predicted"), 1027: (15, "predicted"),  # Line Output 3-4
+    },
+}
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
 MODELS = {

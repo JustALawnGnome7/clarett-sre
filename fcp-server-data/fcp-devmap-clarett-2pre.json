@@ -418,19 +418,27 @@
       },
       {
         "name": "Line Output 1",
-        "router-pin": "1024"
+        "router-pin": "1024",
+        "peak-index": 12,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Line Output 2",
-        "router-pin": "1025"
+        "router-pin": "1025",
+        "peak-index": 13,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Line Output 3",
-        "router-pin": "1026"
+        "router-pin": "1026",
+        "peak-index": 14,
+        "_peak-index-provenance": "predicted"
       },
       {
         "name": "Line Output 4",
-        "router-pin": "1027"
+        "router-pin": "1027",
+        "peak-index": 15,
+        "_peak-index-provenance": "predicted"
       },
       {
         "name": "PCM 01",
