@@ -838,3 +838,43 @@ the VM's `0x210`/`0x310` point at during a live 2Pre stream and classify with `d
   `0x700` gave `periods=0` — the true stride is between/other, and the RAM dump settles it).
 - If `flat-audio`: then the base we dumped in §9 was the table's first fragment pointer, and we must dump
   the ADDRESS STORED at the base (one indirection up) to see the table itself.
+
+---
+
+## 14. The real 2Pre descriptor format, read out of the live VM (July 23 2026) `[HW/pmemsave — Clarett 2Pre]`
+
+`pmemsave` of the 2Pre's live `0x210`/`0x310` targets during a running stream, classified with
+`tools/dma_classify.py` (which now reports table geometry directly). **Both directions are descriptor
+tables** (settling §13), and the format is fully recovered:
+
+| block | chans | entries | fragment stride | frag frames | high tag | periodic IRQ flag | last entry |
+|---|---|---|---|---|---|---|---|
+| TX (0x210) | 4  | **252** | **0x100** | 16 | 2 | none | `0x01` (wrap) |
+| RX (0x310) | 14 | **300** | **0x380** | 16 | 2 | **bit1 (`0x02`) ~every 14** | `0x03` (wrap\|IRQ) |
+
+Findings, and the three bugs they expose in our old table:
+
+1. **Fragment = channels·4·16 bytes, packed with NO alignment rounding.** TX 4ch→`0x100`, RX 14ch→`0x380`,
+   8PreX 28ch→`0x700`. Our `lcm(0x100, …)` rule rounded 14ch up to `0x700` — **2× too big**. The `0x100`
+   alignment was never a device rule; it was coincidence that 28ch·64 is `0x100`-aligned. The vendor RX
+   stride `0x380` is only `0x80`-aligned (entry low bytes alternate `00`/`80`). **FIXED.**
+2. **The RX ring carries a periodic IRQ flag (bit1) every ~14 descriptors, and THAT raises the counted
+   0x300 period.** Our table set only a single wrap flag on the last entry — so the engine consumed
+   descriptors but never hit an IRQ marker to advance the counter. **This is the `ctr=0` wall.** TX has
+   no periodic marker (only wrap on the last), consistent with capture-only servicing the RX (0x300)
+   counter. **FIXED** (`CLARETT_DESC_IRQ` every `CLARETT_IRQ_DESCS`).
+3. **Entry count is per-direction (252 TX / 300 RX), not a shared 256.** We own our buffer, so we keep
+   `NDESC=256` with the IRQ flag every 16 (a clean 256-frame / 5.33 ms period); the exact vendor count is
+   its buffer-size choice, not a device constraint. The three quantities are now distinct and all verified:
+   **SIZE reg** `0x208`/`0x308` = 4 frames (`channels·16`), **fragment** = 16 frames (`channels·64`),
+   **IRQ period** = `CLARETT_IRQ_DESCS·16` frames.
+
+The tables are physically scatter-gathered (TX in `0x1000`/16-fragment page runs, RX in 5–6-fragment
+runs) because Windows' buffer spans scattered pages; our coherent buffer is contiguous, a valid special
+case (the engine just follows the pointers).
+
+**In tree:** `clarett_frag_bytes` drops the `lcm` rounding; `clarett_build_rings` sets the periodic RX IRQ
+marker; the PCM period model advances `clarett_irq_period_frames()` per `0x300` event (was a wrong 4).
+Hardware test: `model=2pre enable_pcm=1`, `arecord -c14`; watch `stream-svc: periods=… ctr=…` — success is
+`ctr` advancing past the one-pass `0x1b3`/`0` wall. `dma_classify.py` gained `table_stats` (entries,
+stride, tags, scatter runs, flag positions) and a leading-run detector so an oversized dump still classifies.

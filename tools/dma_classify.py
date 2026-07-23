@@ -51,19 +51,20 @@ def classify(words):
     low8_zero = sum(1 for w in words if (w & 0xFF) == 0) / n
     low16_zero = sum(1 for w in words if (w & 0xFFFF) == 0) / n
 
-    # descriptor view: pair the words into u64 entries, score how many look like a
-    # 0x100-aligned address (low byte 0) with a small high32 (0,1,2,3). A real table
-    # ALSO has near-zero low16 on its odd (high) words being the small constant, so
-    # distinguish it from audio by the high word being a tiny CONSTANT, not varying.
+    # Descriptor view: pair the words into u64 entries; the robust table signal is that
+    # the HIGH 32 bits are a small constant (a bus-address high word / tag, {0,1,2,3}),
+    # not that the low word is 0x100-aligned — real fragments pack at channels*64, which
+    # is only 0x80-aligned for odd channel counts (2Pre RX 0x380). Audio high words vary
+    # continuously and are rarely <= 3, so this separates the two regardless of alignment.
     entries = n // 2
-    tbl_hits = 0
-    hi_vals = set()
+    hi_small = 0
+    hi_vals = {}
     for i in range(entries):
         lo, hi = words[2 * i], words[2 * i + 1]
-        if (lo & 0xFF) == 0 and hi <= 3 and (lo or hi):
-            tbl_hits += 1
-            hi_vals.add(hi)
-    tbl_frac = tbl_hits / entries if entries else 0.0
+        if hi <= 3 and (lo or hi):
+            hi_small += 1
+            hi_vals[hi] = hi_vals.get(hi, 0) + 1
+    tbl_frac = hi_small / entries if entries else 0.0
 
     scores = {
         "nonzero_frac": nonzero / n,
@@ -72,14 +73,71 @@ def classify(words):
         "table_entry_frac": tbl_frac,
     }
 
-    # Descriptor table: dominated by aligned entries whose high words are a tiny set
-    # of small constants ({0,1,2,3}) — audio high words vary continuously, so the
-    # constant-high-word test is what separates the two even when both look aligned.
-    if tbl_frac >= 0.75 and len(hi_vals) <= 3:
+    # A table need not fill the dump: an oversized pmemsave catches unrelated guest
+    # memory after the (short) table. Measure the LEADING run of small-high-word
+    # entries — a clear table prefix is a table even if tbl_frac over the whole dump
+    # is low.
+    lead = 0
+    while lead < entries:
+        hi = words[2 * lead + 1]
+        lo = words[2 * lead]
+        if hi <= 3 and (lo or hi):
+            lead += 1
+        else:
+            break
+    scores["lead_table_run"] = lead
+
+    # Descriptor table: most entries have a small constant high word (a handful of
+    # distinct values — one per memory region Windows scattered the buffer across),
+    # OR there is a clear leading table run before unrelated memory.
+    if (tbl_frac >= 0.75 and len(hi_vals) <= 4) or lead >= 64:
         return "descriptor-table", scores
     if low8_zero >= 0.90:
         return "flat-audio", scores
     return "ambiguous", scores
+
+
+def table_stats(words):
+    """For a descriptor table: entries as (hi<<32)|lo, report the fragment stride
+    (most common delta between consecutive low words within a contiguous run), the
+    high-word tags, contiguous-run lengths (scatter-gather boundaries), and any low-bit
+    wrap flags. Everything the driver needs to rebuild the table to match."""
+    from collections import Counter
+
+    # Only the leading table run (entries with a small high word); an oversized dump
+    # catches unrelated memory past the table end.
+    entries = []
+    for i in range(len(words) // 2):
+        hi, lo = words[2 * i + 1], words[2 * i]
+        if hi > 3 or not (lo or hi):
+            break
+        entries.append((hi << 32) | lo)
+    # low-bit flags: real fragment addresses are at least 4-aligned, so a set low
+    # bit (0/1/2/3) is a flag (the wrap/IRQ marker on the last entry of a ring).
+    flags = [(i, e & 0xF) for i, e in enumerate(entries) if e & 0x3]
+    deltas = Counter()
+    run, runs = 1, []
+    tags = Counter()
+    for i in range(1, len(entries)):
+        tags[entries[i] >> 32] += 1
+        d = (entries[i] & ~0xF) - (entries[i - 1] & ~0xF)
+        if 0 < d < 0x10000:          # same-page forward step = the fragment stride
+            deltas[d] += 1
+            run += 1
+        else:                        # jump to another region = scatter-gather boundary
+            runs.append(run)
+            run = 1
+    runs.append(run)
+    if entries:
+        tags[entries[0] >> 32] += 1
+    return {
+        "n_entries": len(entries),
+        "stride": deltas.most_common(1)[0][0] if deltas else 0,
+        "stride_hist": dict(deltas.most_common(4)),
+        "high_tags": dict(tags),
+        "contig_runs": runs[:8],
+        "flagged_entries": flags[:8],
+    }
 
 
 def audio_stats(words, channels):
@@ -116,6 +174,18 @@ def main():
     print(f"  VERDICT: {verdict}")
     for k, v in scores.items():
         print(f"    {k:18s} {v:.4f}")
+
+    if verdict == "descriptor-table":
+        t = table_stats(words)
+        print(f"    table entries      {t['n_entries']}")
+        print(f"    fragment stride    0x{t['stride']:x} "
+              f"({t['stride'] // 4} S32 words"
+              + (f", = {t['stride'] // (args.channels * 4)} frames @ {args.channels}ch"
+                 if args.channels else "") + ")")
+        print(f"    stride histogram   { {hex(k): v for k, v in t['stride_hist'].items()} }")
+        print(f"    high-word tags     { {hex(k): v for k, v in t['high_tags'].items()} }")
+        print(f"    contiguous runs    {t['contig_runs']} (scatter-gather boundaries)")
+        print(f"    flagged entries    {t['flagged_entries'] or 'none in dump (table longer than dump?)'}")
 
     if verdict == "flat-audio":
         peak, peak_db, rms_db = audio_stats(words, args.channels)

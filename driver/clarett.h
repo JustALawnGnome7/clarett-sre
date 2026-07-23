@@ -70,14 +70,11 @@ struct snd_pcm_substream;
 /* --- PCM (data plane) --------------------------------------------------- */
 #define CLARETT_PCM_RATE         48000          /* default rate, both models (see clocking enum) */
 /*
- * Frames the engine advances per 0x300 period tick. HYPOTHESIS: one tick == one descriptor — the
- * persistent-servicer test stalled at ~249 periods over a 256-descriptor ring (~1 tick/descriptor).
- * But the 0x300 counter's own step was 0xc per period in the VM capture, so the true frames/tick is
- * NOT yet pinned. This is the one value to CALIBRATE on hardware: feed a known 48 kHz stream, count
- * 0x300 ticks/second, and set frames/tick = 48000 / ticks_per_sec. Until then the stream plumbing is
- * correct but the reported sample rate (hence pitch) may be off by this factor.
+ * Frames the engine advances per 0x300 period event = clarett_irq_period_frames() (one IRQ-flagged
+ * descriptor consumed; spec §14). CALIBRATE on hardware: if the reported rate/pitch is off, the true
+ * frames-per-event differs from CLARETT_IRQ_DESCS*CLARETT_FRAG_FRAMES — count 0x300 events/second at a
+ * known 48 kHz and adjust. The plumbing is correct regardless of the exact value.
  */
-#define CLARETT_DESCS_PER_TICK   1
 
 /* FCP mailbox header layout, relative to REG_MBOX */
 #define MBOX_CMD                 0x00    /* bit31 = execute flag | opcode               */
@@ -608,37 +605,38 @@ static inline u32 clarett_period_bytes(u8 channels)
 }
 
 /*
- * PCM descriptor-table geometry (per-direction), built to match the live vendor table from the 8PreX RAM
- * dump: every entry is a bare 8-byte LE bus address, 0x100-aligned, and the LAST entry carries a wrap flag
- * in its low bits (the address low byte is 0, so the flag never collides) — there is NO zero terminator.
- *
- * clarett_frag_bytes(): the per-descriptor fragment = the smallest 0x100-aligned span that is also a whole
- * number of interleaved frames = lcm(0x100, channels*4). 28ch->0x700 (16 frames), 14ch->0x700 (32 frames),
- * 4ch->0x100 (16 frames). 0x100 alignment is the fix for the one-ring-pass wall: the old path used the period
- * (0x1c0, NOT 0x100-aligned) as the stride, so the wrap flag landed on a misaligned entry and never engaged.
+ * PCM descriptor-table geometry (per-direction), built to match the LIVE 2Pre vendor tables read out by
+ * pmemsave (spec §14; tools/dma_classify.py). Every entry is a bare 8-byte LE bus address; the fragment is
+ * exactly CLARETT_FRAG_FRAMES interleaved frames = channels*4*16 bytes, packed with NO 0x100 rounding
+ * (2Pre TX 4ch->0x100, RX 14ch->0x380, 8PreX 28ch->0x700 — the vendor RX stride 0x380 is only 0x80-aligned,
+ * disproving the earlier lcm(0x100,...) rule that doubled 14ch to 0x700). The RX ring carries a periodic
+ * IRQ flag (bit1) every CLARETT_IRQ_DESCS descriptors — THIS is what raises the counted 0x300 period; a
+ * ring flagged only at the end never advances the counter (the ctr=0 wall). The LAST entry adds the wrap
+ * flag (bit0): TX 0x01, RX 0x03 (wrap|IRQ). No zero terminator.
  */
-#define CLARETT_DESC_ALIGN	0x100
+#define CLARETT_DESC_ALIGN	0x100	/* pad the table so the sample area starts 0x100-aligned (harmless) */
 #define CLARETT_DESC_WRAP_TX	0x01	/* last-entry flag, block 0 (TX): bit0 = end-of-list/wrap */
-#define CLARETT_DESC_WRAP_RX	0x03	/* last-entry flag, block 1 (RX): bit0 wrap | bit1 (IRQ?), per dump */
+#define CLARETT_DESC_WRAP_RX	0x03	/* last-entry flag, block 1 (RX): bit0 wrap | bit1 IRQ (spec §14) */
+#define CLARETT_DESC_IRQ	0x02	/* periodic per-period IRQ marker on RX descriptors (bit1) */
 
 /*
- * A descriptor covers CLARETT_FRAG_FRAMES of audio TIME, then is rounded up to the 0x100 alignment
- * the engine requires. The old rule was lcm(0x100, frame_bytes) — the smallest aligned span — which
- * makes the frame count fall out of the channel width instead of being fixed: 28ch and 4ch both land
- * on 16 frames (which is why it looked right on the models it was derived from), but the 4Pre's 8ch
- * TX ring lands on 8. Its RX ring is 16, so the two rings advanced at different rates in time and a
- * free-running full-duplex engine desynced immediately — observed as ptr0/ptr1 diverging (14 vs 3)
- * and the engine stalling with the 0x300 counter never ticking.
- *
- * 16 frames is also what the vendor's counter unit resolves to: +0xc per 4 ms period event at 48k
- * = 192 frames / 12 = 16. Rounding up to alignment reproduces every previously documented value
- * (28ch->0x700, 4ch->0x100, 14ch->0x700) and changes only the 8ch case, 0x100 -> 0x200.
+ * A descriptor covers exactly CLARETT_FRAG_FRAMES frames (the vendor's fragment is channels*4*16 on both
+ * 2Pre directions and the 8PreX, verified by RAM dump — no alignment rounding). CLARETT_IRQ_DESCS is how
+ * many descriptors the RX engine consumes between period IRQs; the vendor's 2Pre RX flags roughly every 14
+ * (a fractional ~228-frame period). We pick a clean 16 (= 256 frames = 5.33 ms at 48k) since we own our
+ * buffer/period; the exact count is our choice as long as RX descriptors carry the flag at this cadence.
  */
 #define CLARETT_FRAG_FRAMES	16
+#define CLARETT_IRQ_DESCS	16
 
 static inline u32 clarett_frag_bytes(u8 channels)
 {
-	return lcm((u32)CLARETT_DESC_ALIGN, (u32)channels * 4 * CLARETT_FRAG_FRAMES);
+	return (u32)channels * 4 * CLARETT_FRAG_FRAMES;
+}
+/* Frames advanced per 0x300 period IRQ (one IRQ-flagged descriptor consumed = CLARETT_IRQ_DESCS frags). */
+static inline u32 clarett_irq_period_frames(void)
+{
+	return CLARETT_IRQ_DESCS * CLARETT_FRAG_FRAMES;
 }
 /* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
  * No +1 terminator slot — the wrap flag on the last entry is the terminator. */

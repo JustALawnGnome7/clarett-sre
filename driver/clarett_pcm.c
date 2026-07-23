@@ -14,9 +14,9 @@
  * blocks even record-only, §9) first, block 1 (capture) second. Captured samples are copied from the
  * block-1 RX area into the ALSA-managed buffer each period (clarett_pcm_tick).
  *
- * Calibration caveat (see CLARETT_DESCS_PER_TICK in clarett.h): frames-per-0x300-tick is a hypothesis
- * until measured on hardware, so pitch/rate may be off until calibrated. The clocking and period flow
- * are independent of that constant.
+ * Calibration caveat (clarett.h): frames-per-0x300-event = CLARETT_IRQ_DESCS*CLARETT_FRAG_FRAMES is our
+ * choice of period cadence; pitch/rate may need calibration on hardware. Clocking and period flow are
+ * independent of that constant.
  */
 #include <linux/dma-mapping.h>
 #include <linux/math64.h>
@@ -104,22 +104,22 @@ static size_t clarett_rx_ring_bytes(struct clarett *c)
 }
 
 /*
- * Called from the servicer kthread on every 0x300 period tick. Copies the freshly-captured period (4
- * interleaved frames) from the RX area into the ALSA buffer (same geometry, 1:1 offsets), advances the
- * modelled frame position, and reports a period boundary to ALSA. No-op while idle/paused. Position is
- * modelled, not read back: 0x318 is a static status word (spec §9), so the period count is the only signal.
+ * Called from the servicer kthread on every 0x300 period event. One event == the engine consuming one
+ * IRQ-flagged RX descriptor (spec §14), which is CLARETT_IRQ_DESCS fragments == clarett_irq_period_frames()
+ * frames of freshly-captured audio. Copies that period from the RX area into the ALSA buffer (same geometry,
+ * 1:1 offsets), advances the modelled frame position, and reports a period boundary. No-op while idle/paused.
+ * Position is modelled, not read back: 0x318 is a static status word (spec §9), so the event is the signal.
  *
- * One 0x300 tick == one IRQ period == clarett_period_bytes(capture) bytes == 4 frames, copied at the byte
- * offset of the current ring position. The descriptors map the RX sample ring contiguously (entry i ->
- * rx_samples + i*frag), so the engine fills it linearly and the copy is a straight offset copy. The
- * descriptor fragment (>= one period) is decoupled from the IRQ period; the tick tracks the period.
+ * The RX ring is a whole number of periods (NDESC*FRAG_FRAMES / period_frames = 16), so the copy lands on a
+ * period boundary and never crosses the ring end mid-copy.
  */
 void clarett_pcm_tick(struct clarett *c)
 {
 	struct snd_pcm_substream *ss = READ_ONCE(c->pcm_sub);
 	struct snd_pcm_runtime *runtime;
 	u32 frame  = (u32)c->model->capture_channels * 4;	/* bytes per interleaved S32_LE frame */
-	u32 pbytes = clarett_period_bytes(c->model->capture_channels);	/* one period = 4 frames */
+	u32 pframes = clarett_irq_period_frames();		/* frames captured per 0x300 event */
+	u32 pbytes = pframes * frame;
 	u32 ring_frames = clarett_rx_ring_bytes(c) / frame;
 	u64 period, q;
 	u32 pos, off;
@@ -134,7 +134,7 @@ void clarett_pcm_tick(struct clarett *c)
 	if (runtime->dma_area)
 		memcpy(runtime->dma_area + off, clarett_rx_area(c) + off, pbytes);
 
-	c->pcm_frames += pbytes / frame;	/* == 4 frames per period */
+	c->pcm_frames += pframes;
 
 	/* Deliver period boundaries to ALSA only between trigger START and STOP. ACKing (stream_run) runs
 	 * from prepare so the engine is serviced from the instant it is armed — it stalls within ms if not
@@ -153,7 +153,7 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	struct clarett *c = snd_pcm_substream_chip(ss);
 	struct snd_pcm_runtime *runtime = ss->runtime;
 	size_t buf = clarett_rx_ring_bytes(c);			/* RX ring == ALSA buffer (per mode) */
-	u32 period = clarett_period_bytes(c->model->capture_channels);	/* one IRQ period = 4 frames */
+	u32 period = clarett_irq_period_frames() * c->model->capture_channels * 4;	/* one 0x300 period */
 	int err;
 
 	runtime->hw = clarett_pcm_hw;
@@ -161,14 +161,14 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	runtime->hw.channels_max     = c->model->capture_channels;
 	runtime->hw.buffer_bytes_max = buf;
 	runtime->hw.period_bytes_min = period;
-	runtime->hw.period_bytes_max = buf / 2;
+	runtime->hw.period_bytes_max = period;
 	runtime->hw.periods_max      = buf / period;
 
 	/* Pin the buffer to the full RX-ring size so the RX ring and ALSA ring share one geometry. */
 	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
 	if (err < 0)
 		return err;
-	/* Period must be a whole number of hardware periods (4-frame fragments). */
+	/* Period is fixed at the hardware IRQ period (CLARETT_IRQ_DESCS descriptors). */
 	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, period);
 }
 
@@ -424,12 +424,21 @@ static void clarett_build_rings(struct clarett *c)
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
 		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_frag);
 		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_frag);
+		/* Periodic RX IRQ marker (spec §14): the engine raises a counted 0x300 period when it
+		 * consumes an IRQ-flagged descriptor. Every CLARETT_IRQ_DESCS-th one, matching the vendor's
+		 * ~14-descriptor cadence. TX carries no periodic marker (vendor TX flags only the last). */
+		if ((i + 1) % CLARETT_IRQ_DESCS == 0)
+			rx_tbl[i] |= cpu_to_le64(CLARETT_DESC_IRQ);
 	}
 	tx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(CLARETT_DESC_WRAP_TX);
 	rx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(CLARETT_DESC_WRAP_RX);
 
 	if (tx_tone)
 		clarett_fill_tx_tone(c);
+
+	dev_info(&c->pci->dev,
+		 "descriptor rings: %u entries, frag tx=0x%x rx=0x%x, RX IRQ every %u desc (%u frames/period)\n",
+		 CLARETT_STREAM_NDESC, tx_frag, rx_frag, CLARETT_IRQ_DESCS, clarett_irq_period_frames());
 }
 
 int clarett_create_pcm(struct clarett *c)
