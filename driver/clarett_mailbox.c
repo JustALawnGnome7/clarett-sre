@@ -78,6 +78,16 @@ MODULE_PARM_DESC(resp_trace,
 	"meter_poll_ms=0. Default 0.");
 
 /*
+ * True for a stream period-cause block (0x200 TX / 0x300 RX) while the PCM engine is streaming. The
+ * mailbox skips these in its DONE sweep so it does not read-to-clear a period event the stream servicer
+ * is waiting for (an audible gap). When idle they read 0 and are swept normally.
+ */
+static inline bool clarett_stream_cause(const struct clarett *c, u16 reg)
+{
+	return c->stream_on && (reg == STREAM_BLK0 || reg == STREAM_BLK1);
+}
+
+/*
  * Wait for THIS command's response to land in resp_buf. Returns the matched echo word
  * (CMD_EXEC_FLAG | opcode — never zero), or 0 if nothing landed before the deadline;
  * *land_us gets the submit->landing latency (-1 on timeout). Spins briefly (a landing,
@@ -221,10 +231,20 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 
 		if (cause & IRQ_DONE_BIT) {
 			done_us = ktime_us_delta(ktime_get(), t_submit);
+			/*
+			 * Skip the stream period-cause blocks (0x200 TX / 0x300 RX) while the PCM engine is
+			 * streaming: the stream servicer owns them (read-to-clear), and a mailbox read here
+			 * STEALS a pending period event — an audible gap in capture/playback. This is why control
+			 * traffic during playback (meter poll, fcp-server, the mixer GUI) caused skipping. The
+			 * mailbox ack only needs 0x100 + the response landing + the trailing doorbell ack; the
+			 * stream blocks are irrelevant to it. clarett_stream_cause() flags the two to skip.
+			 */
 			for (s = 1; s < ARRAY_SIZE(sweep); s++)
-				clarett_rl(c, sweep[s]);	/* rest of the DONE sweep */
+				if (!clarett_stream_cause(c, sweep[s]))
+					clarett_rl(c, sweep[s]);	/* rest of the DONE sweep */
 			for (s = 0; s < ARRAY_SIZE(sweep); s++)
-				clarett_rl(c, sweep[s]);	/* confirming full sweep */
+				if (!clarett_stream_cause(c, sweep[s]))
+					clarett_rl(c, sweep[s]);	/* confirming full sweep */
 			resp_echo = clarett_resp_wait(c, CMD_EXEC_FLAG | opcode,
 						      t_submit, &land_us);
 			if (resp_echo) {
