@@ -758,3 +758,44 @@ no table) and read the counter; the open sub-problem from §9 is why flat previo
 prefill to clock yet then faulted dereferencing it — resolve by capturing what the VM writes into the
 2Pre sample area *before* its working arm (a fresh pre-arm `pmemsave`), since RAM contents at arm time
 is now the only remaining unobserved channel.
+
+### Flat path rebuilt + the pre-arm capture (July 23 2026) `[DRIVER]`/`[PLAN]`
+
+Acting on §13's surviving lead: the per-model flat-buffer path is back in tree (it had only ever lived
+in an uncommitted working tree; the b53abb5 rewrite dropped it on the "descriptor is the default"
+theory, which the 2Pre's `ctr=0` refutes).
+
+**Driver.** `struct clarett_model.flat_buffer` (bool) selects the mode; set on the 2Pre only (the model
+with RAM-dump evidence — 8PreX/4Pre/8Pre stay descriptor). Mode-independent accessors in clarett.h
+(`clarett_stream_total_bytes`/`_rx_off`/`_rx_area_bytes`/`_r1_off`/`_tx_off`/`_tx_area_bytes`) keep the
+branch out of clarett_pcm.c. Flat geometry: `CLARETT_FLAT_FRAMES` (1024) per direction ⇒ 2Pre TX ring
+`1024·4·4 = 16 KB` (exactly the VM's `0x680f7000→0x680fb000` gap) + RX ring `1024·14·4 = 56 KB`;
+`0x210=stream_dma` and `0x310=stream_dma+16 KB` point straight at the sample rings (no table, no wrap
+flag, `r1 = r0 + flat_tx_bytes` so RX abuts TX just as the VM's two bases do). The RX sample ring IS the
+ALSA capture buffer. `clarett_build_rings()` builds nothing for a flat model (coherent alloc is already
+zeroed = silent TX + clean RX). **No `0xAA` prefill** — §9 exposed that as a descriptor-mode artifact
+(the engine dereferencing sample bytes as pointers); in a real flat ring the bytes are samples.
+
+**The pre-arm capture (resolves the last unobserved channel).** §13 pinned the block to sample
+consumption and left RAM-at-arm-time as the only channel an MMIO trace can't see. Procedure, against the
+live Windows VM streaming the 2Pre:
+
+1. `python3 tools/dma_bases.py <live-stream-trace>.log Windows10` → emits `pmemsave` for the TX/RX bases
+   (GPA = `(0x214<<32)|0x210` etc., read from the trace's most-recent base writes).
+2. Dump at two moments and classify each with the new `tools/dma_classify.py` (flat-audio vs
+   descriptor-table vs all-zero, automating the §9 hand analysis; for flat it reports peak/RMS dBFS so
+   "pre-seeded" vs "silent" is unambiguous):
+   - **DURING a running stream** — confirms the tree's assumption (2Pre TX/RX should classify `flat-audio`).
+   - **BEFORE the working arm** (the 5th arm, after the multi-second settle §12) — the open question:
+     does the VM's TX ring already hold playback audio at arm time (`flat-audio`, pre-seeded) or is it
+     `all-zero`? If pre-seeded, that is why the old flat attempt needed a non-null TX ring to clock, and
+     the driver must seed the TX ring before arming (not `0xAA` — real silence-or-signal samples).
+3. Cross-check the RX **base** dump against the TX base: if RX classifies `descriptor-table` while TX is
+   `flat-audio`, the two directions differ in mode (would explain a half-working engine) — not expected
+   for the 2Pre, but the classifier makes it a one-command check.
+
+**Hardware test of the flat path itself** (independent of the capture): `insmod snd-clarett.ko
+model=2pre enable_pcm=1`; `arecord -D hw:N -c14 -f S32_LE -r48000 /dev/null`; watch `stream-svc:
+periods=… ctr=…`. Success is `ctr` advancing continuously (the reverted flat path reached `ctr=0x1c10`,
+28 passes); the descriptor-mode baseline was `ctr=0` frozen. `tx_tone=1` now fills the flat TX ring
+(at offset 0, no table) if a non-silent TX ring turns out to be required.

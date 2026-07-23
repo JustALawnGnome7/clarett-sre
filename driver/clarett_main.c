@@ -1816,6 +1816,8 @@ static const struct clarett_model clarett_2pre = {
 	.playback_channels = 4,			/* playback pin count */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
+	.flat_buffer = true,			/* 2Pre RAM dump = flat audio, no table (spec §9/§13); its engine
+						 * consumes 0 frames/period in descriptor mode, advances in flat mode */
 	.stream_tx_ids = clarett_2pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
 	.stream_rx_ids = clarett_2pre_stream_rx,

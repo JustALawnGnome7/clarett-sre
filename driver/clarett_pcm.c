@@ -89,17 +89,18 @@ static const struct snd_pcm_hardware clarett_pcm_hw = {
 	.periods_min      = 2,
 };
 
-/* Pointer to the block-1 (capture) RX sample area inside the contiguous hardware buffer. Layout is
- * [TX table][TX samples][RX table][RX samples]; the RX samples follow the whole TX ring then the RX table. */
+/* Pointer to the block-1 (capture) RX sample area inside the contiguous hardware buffer. Descriptor mode:
+ * [TX table][TX samples][RX table][RX samples]. Flat mode: [TX samples][RX samples]. clarett_stream_rx_off()
+ * returns the right offset for the model's mode. */
 static u8 *clarett_rx_area(struct clarett *c)
 {
-	return (u8 *)c->stream_buf + clarett_pcm_tx_ring(c) + clarett_pcm_tbl_bytes();
+	return (u8 *)c->stream_buf + clarett_stream_rx_off(c);
 }
 
-/* RX capture sample-ring size in bytes (== the ALSA buffer). */
+/* RX capture sample-ring size in bytes (== the ALSA buffer), per mode. */
 static size_t clarett_rx_ring_bytes(struct clarett *c)
 {
-	return clarett_pcm_rx_samples(c);
+	return clarett_stream_rx_area_bytes(c);
 }
 
 /*
@@ -290,10 +291,11 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
-	/* block 0 (TX) base, block 1 (RX) base — each points at its descriptor table. The RX table follows the
-	 * whole TX ring (table + samples) in the one contiguous buffer, so r1 = r0 + TX ring bytes. */
+	/* block 0 (TX) base, block 1 (RX) base. In descriptor mode each points at its table (RX table follows
+	 * the whole TX ring); in flat mode each points straight at its sample ring (RX abuts TX). r1 offset is
+	 * clarett_stream_r1_off() for the model's mode. */
 	dma_addr_t r0 = c->stream_dma;
-	dma_addr_t r1 = c->stream_dma + clarett_pcm_tx_ring(c);
+	dma_addr_t r1 = c->stream_dma + clarett_stream_r1_off(c);
 
 	clarett_engine_stop(c);		/* idempotent: no-op unless a prior prepare armed it */
 
@@ -378,8 +380,8 @@ static const struct snd_pcm_ops clarett_pcm_ops = {
 static void clarett_fill_tx_tone(struct clarett *c)
 {
 	u8 chans   = c->model->playback_channels;
-	__le32 *p  = (__le32 *)((u8 *)c->stream_buf + clarett_pcm_tbl_bytes());
-	size_t frames = clarett_pcm_tx_samples(c) / ((size_t)chans * 4);
+	__le32 *p  = (__le32 *)((u8 *)c->stream_buf + clarett_stream_tx_off(c));
+	size_t frames = clarett_stream_tx_area_bytes(c) / ((size_t)chans * 4);
 	size_t f;
 	u8 ch;
 
@@ -396,6 +398,20 @@ static void clarett_fill_tx_tone(struct clarett *c)
 static void clarett_build_rings(struct clarett *c)
 {
 	size_t tbl     = clarett_pcm_tbl_bytes();
+
+	/*
+	 * Flat mode: no descriptor table at all — the engine reads/writes the contiguous sample ring directly
+	 * at 0x210/0x310. dma_alloc_coherent already zeroed the buffer (TX = silence, RX = clean write target),
+	 * so there is nothing to build. NO prefill: the §9 "0xAA prefill" was a descriptor-mode artifact (the
+	 * engine dereferencing sample bytes as pointers); in a true flat ring the bytes are samples, not pointers.
+	 */
+	if (c->model->flat_buffer) {
+		if (tx_tone)
+			clarett_fill_tx_tone(c);
+		dev_info(&c->pci->dev, "flat rings: TX %zu B + RX %zu B, no descriptor table\n",
+			 clarett_flat_tx_bytes(c), clarett_flat_rx_bytes(c));
+		return;
+	}
 	size_t tx_ring = clarett_pcm_tx_ring(c);
 	u32 tx_frag = clarett_frag_bytes(c->model->playback_channels);
 	u32 rx_frag = clarett_frag_bytes(c->model->capture_channels);
@@ -432,7 +448,7 @@ int clarett_create_pcm(struct clarett *c)
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV, &c->pci->dev, buf, buf);
 	c->pcm = pcm;
 
-	c->stream_size = clarett_pcm_tx_ring(c) + clarett_pcm_rx_ring(c);
+	c->stream_size = clarett_stream_total_bytes(c);
 	c->stream_buf = dmam_alloc_coherent(&c->pci->dev, c->stream_size,
 					    &c->stream_dma, GFP_KERNEL);
 	if (!c->stream_buf)
@@ -440,10 +456,9 @@ int clarett_create_pcm(struct clarett *c)
 	clarett_build_rings(c);
 
 	dev_info(&c->pci->dev,
-		 "capture PCM registered (%uch S32_LE @%u, descriptor ring %zu B, frag tx=0x%x rx=0x%x @%pad)\n",
-		 c->model->capture_channels, CLARETT_PCM_RATE, buf,
-		 clarett_frag_bytes(c->model->playback_channels),
-		 clarett_frag_bytes(c->model->capture_channels), &c->stream_dma);
+		 "capture PCM registered (%uch S32_LE @%u, %s ring, ALSA buf %zu B @%pad)\n",
+		 c->model->capture_channels, CLARETT_PCM_RATE,
+		 c->model->flat_buffer ? "flat" : "descriptor", buf, &c->stream_dma);
 
 	return 0;
 }

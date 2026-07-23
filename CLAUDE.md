@@ -158,6 +158,10 @@ tools/bar_profile.py                  vfio_region_* -> per-register activity pro
                                       outside the control-plane map (data-plane reg discovery).
 tools/notify_correlate.py             vfio_region_* -> correlates 0x400 notify-cause transitions with
                                       the mailbox command around each (proved 0x400 = command-phase reg).
+tools/dma_bases.py                    vfio_region_* -> the live DMA base GPAs + ready-to-run QMP pmemsave
+                                      commands to dump the guest ring buffers.
+tools/dma_classify.py                 pmemsave dump -> classifies it flat-audio / descriptor-table /
+                                      all-zero (automates the §9 buffer-mode analysis; flags pre-seeding).
 tools/fcp_*.c                         Bench tools driving the hwdep directly (stop fcp-server first —
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
                                       byte range, the only way to see what actually reached the device;
