@@ -907,3 +907,18 @@ This is the first sustained data-plane streaming in the project.
   Capture a known input (tone into Analogue 1) to a WAV and inspect that the right channel carries it at
   the right level/frequency.
 - **Playback (TX) and the 8PreX** still untested with the corrected table.
+
+### ★ CAPTURE VERIFIED — real audio, correct rate (July 23 2026) `[HW — Clarett 2Pre]` ★
+
+`arecord -c14 -f S32_LE -r48000 -d 10 /tmp/cap.wav` with a tone into Analogue 1, analysed:
+- **Channel 0 = a clean single tone** (~868 Hz by zero-crossing, consistent period, full-scale peak) — real
+  captured audio, temporally coherent (no drift/smear/sidebands → the ctr-delta period advance is correct).
+- **Channels 1–13 silent** (ch1 dither only), exactly right for one live input.
+- Layout confirmed: 24-bit MSB-justified S32_LE (low byte 0), interleaved, channel 0 = Analogue 1.
+- Minor artifact: rare isolated full-scale (`0x80000000`) spikes on the even channels (~0.01%, scattered,
+  NOT ring-wrap-aligned) — cosmetic, chase later.
+
+**The data plane does clean 14ch/48k capture on the 2Pre.** Remaining: confirm the absolute pitch against
+the known input frequency (868 measured; if the source was 880 the counter unit is ~15.8 not 16 frames —
+trim `CLARETT_CTR_FRAMES`); then TX playback and the 8PreX with the corrected table; then the even-channel
+spike cleanup.
