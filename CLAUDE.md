@@ -201,24 +201,24 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     that made it clock; likely a write-visibility/`dma_wmb` effect, not the content).
   - Servicer ACKs `0x300` from `prepare()` (engine stalls in ms if unserviced from arm); `trigger` only
     gates `period_elapsed` via `pcm_running`.
-  - **THE WALL (July 23 2026 — sharpened, spec §13):** on an armed 2Pre the engine fetches our descriptor
-    table (`ptr` advances to `0xd`/`0x2`, no IOMMU fault) and fires the 4 ms period IRQ on schedule (bit31
-    asserts), but **consumes zero sample frames per period** — `0x300` ctr frozen at 0, vs the vendor's
-    first read already `0x8000000c` (+0xc/period). So the block is specifically in **sample consumption /
-    converter data movement**, NOT table address/fetch/format, period timing, or the arm program.
-    Eliminated on hardware this session: the arm ritual (four throwaway arms + multi-second settle —
-    `arm_pre`/`arm_settle_ms`), **elapsed time**, and **TX-ring contents** (`tx_tone`, a 1 kHz sine, no
-    effect → retires the old "content sensitivity" lead). Also **settled: `0x214`/`0x314` is a genuine
-    64-bit address high word and we handle it right** (`base_hi=2` faults at `0x2_ffe00000`; closes the
-    `dma_bits` ambiguity). **Flat-buffer hypothesis FALSIFIED (spec §13):** a flat ring at `0x210`/`0x310`
-    IOMMU-faults immediately — the engine dereferences the ring contents as pointers (zeroed ring → writes
-    a 16-frame fragment to GPA 0: `0x0/0x80/…/0x300` = `0x380` = 14ch×4×16). So the 2Pre wants a
-    **descriptor table** too (its "flat audio" dump was the fragment buffers, not the table); descriptor
-    mode's `ctr=0` and flat mode's fault storm are the *same* engine reading a table, so **the real defect
-    is our table FORMAT**. `flat_buffer` false on all models; `force_flat` param re-tests it. **Priority:**
-    the pre-arm/in-stream `pmemsave` of what `0x210`/`0x310` point at (`tools/dma_bases.py` +
-    `dma_classify.py`) to read off the real entry stride/count/tag. Levers:
-    `rekick`/`arm_pre`/`tx_tone`/`base_hi`/`force_flat`.
+  - **THE WALL — root cause found and fixed in tree, hardware-confirmation pending (July 23 2026, spec
+    §14).** `ctr=0` (engine reads our table, fires periods, consumes nothing) was our descriptor **table
+    format**. `pmemsave` of the live 2Pre `0x210`/`0x310` (via `tools/dma_bases.py` + `dma_classify.py`)
+    recovered the real format and exposed three bugs: **(1)** fragment stride is `channels·4·16` with NO
+    alignment rounding (RX 14ch = `0x380`, not our `lcm`-doubled `0x700`; the `0x100`-alignment rule was
+    false — vendor RX is `0x80`-aligned); **(2)** the RX ring carries a **periodic IRQ flag (bit1) every
+    ~14 descriptors**, and consuming an IRQ-flagged descriptor is what raises the counted `0x300` period —
+    we set only a single wrap flag on the last entry, so the counter never advanced (**the `ctr=0`
+    cause**); **(3)** SIZE reg (4 frames) / fragment (16 frames) / IRQ period were conflated. All fixed:
+    `clarett_frag_bytes` drops `lcm`, `clarett_build_rings` sets the periodic RX marker, the PCM period
+    advances `clarett_irq_period_frames()` per event. **Test:** `model=2pre enable_pcm=1`, `arecord -c14`,
+    watch `stream-svc: ctr=` advance past the `0x1b3`/`0` one-pass wall.
+  - Eliminated earlier this session (spec §13): arm ritual/timing (`arm_pre`/`arm_settle_ms`), TX content
+    (`tx_tone`), and **`0x214`/`0x314` settled as a real 64-bit address high word** (`base_hi=2` faults at
+    `0x2_ffe00000`; closes the `dma_bits` ambiguity). **Flat-buffer hypothesis FALSIFIED** — a flat ring
+    faults dereferencing zeroed contents as pointers, proving the engine wants a table (the 2Pre "flat
+    audio" dump was the fragment buffers). `flat_buffer` false on all models; `force_flat` param re-tests.
+    Levers: `rekick`/`arm_pre`/`tx_tone`/`base_hi`/`force_flat`.
   - **No playback yet** (block-0 writeback-to-0 storm). Details: `spec/clarett-data-plane.md` §9 step 5.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so
