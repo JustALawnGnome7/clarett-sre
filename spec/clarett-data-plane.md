@@ -911,14 +911,15 @@ This is the first sustained data-plane streaming in the project.
 ### ★ CAPTURE VERIFIED — real audio, correct rate (July 23 2026) `[HW — Clarett 2Pre]` ★
 
 `arecord -c14 -f S32_LE -r48000 -d 10 /tmp/cap.wav` with a tone into Analogue 1, analysed:
-- **Channel 0 = a clean single tone** (~868 Hz by zero-crossing, consistent period, full-scale peak) — real
-  captured audio, temporally coherent (no drift/smear/sidebands → the ctr-delta period advance is correct).
+- **Channel 0 = a real, recognizable instrument signal** (a guitar plugged into Analogue 1 — NOT a
+  reference tone; the ~868 Hz zero-crossing figure is inflated by the guitar's harmonics and is NOT a
+  pitch anchor). Temporally coherent (no drift/smear → the ctr-delta period advance is correct).
 - **Channels 1–13 silent** (ch1 dither only), exactly right for one live input.
 - Layout confirmed: 24-bit MSB-justified S32_LE (low byte 0), interleaved, channel 0 = Analogue 1.
 - Minor artifact: rare isolated full-scale (`0x80000000`) spikes on the even channels (~0.01%, scattered,
   NOT ring-wrap-aligned) — cosmetic, chase later.
 
-**The data plane does clean 14ch/48k capture on the 2Pre.** Remaining: confirm the absolute pitch against
-the known input frequency (868 measured; if the source was 880 the counter unit is ~15.8 not 16 frames —
-trim `CLARETT_CTR_FRAMES`); then TX playback and the 8PreX with the corrected table; then the even-channel
-spike cleanup.
+**The data plane does clean 14ch/48k capture on the 2Pre.** Remaining: absolute pitch is still UNVERIFIED
+(the test signal was a guitar, not a known-frequency reference) — feed a known tone (e.g. 1 kHz) and
+measure the fundamental to confirm/trim `CLARETT_CTR_FRAMES`; then TX playback and the 8PreX with the
+corrected table; then the even-channel spike cleanup.
