@@ -107,6 +107,18 @@ MODULE_PARM_DESC(base_hi,
  * lever forces flat on regardless, only to re-test the flat hypothesis once the pre-arm pmemsave capture
  * (spec §13) has shown what the VM actually seeds the ring with.
  */
+/*
+ * Force the full vendor bring-up even if the device is already armed. Default off: probe detects an armed
+ * device (clarett_is_armed) and SKIPS the re-init, because re-arming an already-armed device wedges
+ * GET_DATA (garbage config reads). Set 1 only to force a re-init against a device you know is fresh but
+ * that the probe misread, or to A/B the old always-arm behaviour.
+ */
+static bool force_arm;
+module_param(force_arm, bool, 0444);
+MODULE_PARM_DESC(force_arm,
+		 "Replay the full vendor init even if the device is already armed (default off; re-arming "
+		 "an armed device wedges GET_DATA, so probe skips it).");
+
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
 MODULE_PARM_DESC(force_flat,
@@ -532,6 +544,30 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 	dev_info(&c->pci->dev,
 		 "re-applied %s routing/mixer tables after detect (armed as %s; %d sent, %d failed)\n",
 		 m->name, armed_with->name, sent, fails);
+}
+
+/*
+ * Is the device already armed? A freshly power-cycled device REFUSES GET_DATA (walled error / refusal
+ * stub) until the host replays the vendor init; an already-armed one — e.g. this driver reloaded without a
+ * device power-cycle — answers with real data. Re-running the full init on an armed device WEDGES it: the
+ * config reads come back garbage (control-plane §8; the "value 87 out of range" fcp-server symptoms). So
+ * probe uses this to skip the re-init and keep the live session intact. Cheap and non-destructive: one
+ * small GET_DATA, validated by the echoed opcode + response size exactly like the arm's own capture guard.
+ * A refused probe on a fresh device is harmless (the same read the old walled probe did) and does not
+ * disturb the arm that follows.
+ */
+static bool clarett_is_armed(struct clarett *c)
+{
+	const u8 *r = c->resp_buf;
+	u32 echo;
+	u16 size;
+
+	if (clarett_get_data(c, 0, 8))
+		return false;
+	dma_rmb();	/* order the DMAed response before reading resp_buf */
+	echo = clarett_get_le32(r + FCP_RESP_ECHO_OFF);
+	size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
+	return echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= 8;
 }
 
 static int clarett_arm_device(struct clarett *c)
@@ -1572,7 +1608,16 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		armed_with = (const struct clarett_model *)ent->driver_data;
 		c->model = armed_with;
 	}
-	clarett_arm_device(c);
+	/*
+	 * Skip the bring-up if the device is already armed (driver reloaded without a device power-cycle):
+	 * re-running the init on an armed device wedges GET_DATA. force_arm overrides. The detection GET_DATA
+	 * is harmless on a fresh device (refused) and on an armed one (real data) alike.
+	 */
+	if (!force_arm && clarett_is_armed(c))
+		dev_info(&pci->dev,
+			 "device already armed; skipping vendor re-init (a re-init would wedge GET_DATA)\n");
+	else
+		clarett_arm_device(c);
 	c->model = forced ? forced : armed_with;
 
 	/* The armed device can say who it is; everything model-dependent (PCM geometry, card
