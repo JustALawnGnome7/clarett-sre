@@ -1334,8 +1334,16 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 		 * DEVICE genuinely re-asserting 0x3 (us-scale bursts, inflight=0) because our GET is empty;
 		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps.
 		 * ctl_ready gates snd_ctl_notify: with the handlers now hooked BEFORE the controls
-		 * exist (early IRQ for MSI-paced completion), a pre-controls event must not notify. */
-		if (ev && READ_ONCE(c->ctl_ready)) {
+		 * exist (early IRQ for MSI-paced completion), a pre-controls event must not notify.
+		 *
+		 * stream_on gate (control-during-streaming skip fix): while the engine streams, vec0 ALSO fires
+		 * on every audio period, and 0x400 reads its idle 0x3 each time — so this path would schedule a
+		 * relay ~per period. The relay is a wildcard (the FCP notify word is not exposed), so fcp-server
+		 * responds by re-reading EVERY control (GET_DATA each), flooding the mailbox and nicking the
+		 * stream (audible skips + command timeouts). The 0x400 signal is a periodic heartbeat, not a real
+		 * change, so suppress the relay entirely while streaming; genuine front-panel changes (the monitor
+		 * knob) during playback are rare and picked up once streaming stops. */
+		if (ev && READ_ONCE(c->ctl_ready) && !READ_ONCE(c->stream_on)) {
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
 		}
