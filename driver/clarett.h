@@ -502,6 +502,9 @@ struct clarett {
 	 */
 	bool stream_on;
 	bool flat_buffer;		/* effective buffer mode (model default, overridable by force_flat) */
+	u32 rx_slot;			/* RX descriptor fragment SLOT stride in bytes (>= audio bytes/fragment).
+					 * = audio bytes when contiguous (rx_frag_pad=0); larger to break buffer
+					 * contiguity (scatter-gather experiment for the page-drift glitch). */
 	void *stream_buf;		/* coherent streaming ring buffer */
 	dma_addr_t stream_dma;
 	size_t stream_size;
@@ -663,9 +666,19 @@ static inline size_t clarett_pcm_tx_samples(const struct clarett *c)
 {
 	return (size_t)CLARETT_STREAM_NDESC * clarett_frag_bytes(c->model->playback_channels);
 }
+/*
+ * RX has TWO byte sizes once the scatter-gather experiment pads the fragments (c->rx_slot > audio bytes):
+ *   _samples = the LOGICAL audio (contiguous frames) — the ALSA buffer and the per-period frame math.
+ *   _dev     = the DEVICE sample area = NDESC slots of c->rx_slot each — what is allocated and what the
+ *              descriptors stride over (with gaps between fragments when padded). Equal when unpadded.
+ */
 static inline size_t clarett_pcm_rx_samples(const struct clarett *c)
 {
 	return (size_t)CLARETT_STREAM_NDESC * clarett_frag_bytes(c->model->capture_channels);
+}
+static inline size_t clarett_pcm_rx_dev_bytes(const struct clarett *c)
+{
+	return (size_t)CLARETT_STREAM_NDESC * c->rx_slot;
 }
 /* One ring per direction = table + samples. The contiguous buffer is [TX ring][RX ring]; r1 = r0 + tx ring. */
 static inline size_t clarett_pcm_tx_ring(const struct clarett *c)
@@ -674,7 +687,7 @@ static inline size_t clarett_pcm_tx_ring(const struct clarett *c)
 }
 static inline size_t clarett_pcm_rx_ring(const struct clarett *c)
 {
-	return clarett_pcm_tbl_bytes() + clarett_pcm_rx_samples(c);
+	return clarett_pcm_tbl_bytes() + clarett_pcm_rx_dev_bytes(c);	/* device area (slotted) for allocation */
 }
 
 /*

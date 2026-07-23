@@ -146,6 +146,35 @@ static void clarett_zero_tx(struct clarett *c)
 	memset(clarett_tx_area(c), 0, clarett_tx_ring_bytes(c));
 }
 
+/*
+ * Drain nframes of captured audio from the RX device area (starting at logical frame `pos`, wrapping at the
+ * ring) into the contiguous ALSA buffer at the same logical position. The RX area is a table of NDESC
+ * fragment SLOTS of c->rx_slot bytes; logical frame f lives in slot (f/FRAG_FRAMES) at byte
+ * (f%FRAG_FRAMES)*frame within that slot. When rx_slot == audio-bytes/fragment (the contiguous default)
+ * this is just a linear copy; when padded (scatter-gather experiment) it gathers per fragment across the
+ * gaps. FRAG_FRAMES divides the ring, so a chunk clipped to the fragment boundary also handles the wrap.
+ */
+static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 pos, u32 nframes)
+{
+	u8 *ring = clarett_rx_area(c);
+	u32 frame = (u32)c->model->capture_channels * 4;
+	u32 slot  = c->rx_slot;
+	u32 ring_frames = CLARETT_STREAM_NDESC * CLARETT_FRAG_FRAMES;
+
+	while (nframes) {
+		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
+		u32 chunk = min(nframes, CLARETT_FRAG_FRAMES - fio);	/* up to the fragment (and ring) boundary */
+
+		memcpy(alsa + (size_t)pos * frame,
+		       ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
+		       (size_t)chunk * frame);
+		pos += chunk;
+		if (pos == ring_frames)
+			pos = 0;
+		nframes -= chunk;
+	}
+}
+
 /* Guard: keep the playback fill this many frames clear of the engine's current TX read position, so a
  * concurrent DMA read is never torn by our write. Covers the max single-tick engine advance (the servicer
  * caps a ctr delta at CLARETT_CTR_STEP_MAX units) plus a period of margin. */
@@ -179,15 +208,14 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 	cs = c->pcm_sub;
 	ps = c->pcm_play_sub;
 
-	/* Capture drain: the add_frames the engine just wrote, at the current ring position. */
+	/* Capture drain: the add_frames the engine just wrote, at the current ring position (slot-aware). */
 	if (cs && cs->runtime->dma_area) {
 		u32 frame = (u32)c->model->capture_channels * 4;
 		u32 ring  = clarett_rx_ring_bytes(c) / frame;
 		u64 q = c->pcm_frames;
 		u32 pos = do_div(q, ring);
 
-		clarett_ring_copy(cs->runtime->dma_area, clarett_rx_area(c), pos,
-				  min(add_frames, ring), ring, frame);
+		clarett_rx_drain(c, cs->runtime->dma_area, pos, min(add_frames, ring));
 	}
 
 	/* Playback fill: refresh the whole runway ahead of the engine (from GUARD past the read position to
@@ -548,7 +576,7 @@ static void clarett_build_rings(struct clarett *c)
 	}
 	size_t tx_ring = clarett_pcm_tx_ring(c);
 	u32 tx_frag = clarett_frag_bytes(c->model->playback_channels);
-	u32 rx_frag = clarett_frag_bytes(c->model->capture_channels);
+	u32 rx_slot = c->rx_slot;		/* RX descriptor stride: audio bytes, or a padded slot (experiment) */
 	__le64 *tx_tbl = (__le64 *)c->stream_buf;
 	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + tx_ring);
 	dma_addr_t tx_smp = c->stream_dma + tbl;
@@ -557,7 +585,7 @@ static void clarett_build_rings(struct clarett *c)
 
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
 		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_frag);
-		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_frag);
+		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_slot);	/* slotted: fragments non-contiguous when padded */
 		/* Periodic RX IRQ marker (spec §14): the engine raises a counted 0x300 period when it
 		 * consumes an IRQ-flagged descriptor. Every CLARETT_IRQ_DESCS-th one, matching the vendor's
 		 * ~14-descriptor cadence. TX carries no periodic marker (vendor TX flags only the last). */
@@ -571,8 +599,9 @@ static void clarett_build_rings(struct clarett *c)
 		clarett_fill_tx_tone(c);
 
 	dev_info(&c->pci->dev,
-		 "descriptor rings: %u entries, frag tx=0x%x rx=0x%x, RX IRQ every %u desc (%u frames/period)\n",
-		 CLARETT_STREAM_NDESC, tx_frag, rx_frag, CLARETT_IRQ_DESCS, clarett_irq_period_frames());
+		 "descriptor rings: %u entries, frag tx=0x%x rx audio=0x%x slot=0x%x, RX IRQ every %u desc (%u frames/period)\n",
+		 CLARETT_STREAM_NDESC, tx_frag, clarett_frag_bytes(c->model->capture_channels), rx_slot,
+		 CLARETT_IRQ_DESCS, clarett_irq_period_frames());
 }
 
 int clarett_create_pcm(struct clarett *c)
