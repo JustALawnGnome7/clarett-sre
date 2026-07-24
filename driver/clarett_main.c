@@ -566,12 +566,21 @@ static bool clarett_cap_supported(struct clarett *c, u16 category)
  * (control-plane §8; the "value 87 out of range" fcp-server symptoms). So probe uses this to skip the
  * re-init and keep the live session intact.
  *
- * The test is CAP_READ on the two categories fcp-server requires, which is the same question fcp-server
- * asks before it will touch the device — so passing here means fcp-server starts. An earlier version
- * probed GET_DATA and accepted any well-formed reply (echoed opcode + size >= 8). That is too weak: a
- * COLLAPSED session (see below) answers with a well-formed, correctly-echoed, all-zero response while
- * every capability byte reads 0, and probe called it armed. Validate what the session can DO, not that a
- * reply came back.
+ * BROKEN — DO NOT TRUST THIS (July 23 2026). The test is CAP_READ on the two categories fcp-server
+ * requires, chosen because it is the same question fcp-server asks. It does NOT answer the question
+ * asked here: a device fresh out of a power cycle reports every category supported, exactly like an
+ * armed one, so probe skips the bring-up on precisely the device that needs it. Observed casualty:
+ * meter slots 0-11 (the physical inputs) read a flat 0 forever, because programming the input metering
+ * is part of the bring-up — while the router, mixer and output meters all work, which makes it look
+ * like anything but a missing bring-up. force_arm=1 restores them.
+ *
+ * Its predecessor was no better: it probed GET_DATA and accepted any well-formed reply (echoed opcode
+ * + size >= 8), which a COLLAPSED session (see below) also produces.
+ *
+ * No discriminator is known yet. Every host-visible surface tried so far — CAP_READ, a GET_DATA echo,
+ * the pre-mailbox register block — reads identically before and after the bring-up. The alternative is
+ * to always arm and fix whatever makes a re-arm wedge GET_DATA; that wedge has not been re-tested since
+ * the wall was crossed and may itself be stale.
  *
  * The collapsed-session state (observed July 23 2026, 2Pre, after a run of PCM arm/stop churn): the
  * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says

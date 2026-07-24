@@ -248,9 +248,16 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   reads → fcp-server "value 87 out of range"). **HANDLED (July 23 2026):** probe now calls
   `clarett_is_armed()` and **skips the re-init** when the device is already armed (driver reloaded without
   a device power-cycle), so a reload no longer wedges it. `force_arm=1` overrides. The test is
-  **`CAP_READ` (`0x000001`) on categories INIT (`0x000`) + DATA (`0x800`), both non-zero** — the same
-  question fcp-server asks before it will touch the device. An earlier `GET_DATA` echo+size test was too
-  weak; see the collapsed-session note below. `tools/fcp_cap_read.c` dumps the raw bytes. Transport §8.
+  **`CAP_READ` (`0x000001`) on categories INIT + DATA — and it is WRONG (July 23 2026).** A device fresh
+  out of a power cycle answers "supported" on every category, identically to an armed one, so probe skips
+  the bring-up on exactly the device that needs it. **Observed casualty: meter slots 0-11 (the physical
+  inputs) read a flat 0** — input metering is programmed by the bring-up — while the router, mixer and
+  output meters all work, which disguises it as anything but a missing bring-up. `force_arm=1` restores
+  them (confirmed: slot 0 moved immediately after a forced bring-up). The earlier `GET_DATA` echo+size
+  test was no better. **No discriminator is known**: CAP_READ, the GET_DATA echo and the pre-mailbox
+  register block all read identically before and after a bring-up. The open alternative is to always arm
+  and fix the re-arm wedge — which has NOT been re-tested since the wall was crossed and may be stale.
+  `tools/fcp_cap_read.c` dumps the raw bytes. Transport §8.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported
