@@ -230,6 +230,24 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     (alsa-scarlett-gui) — there is NO default route, so playback is silent until a PCM source is wired to a
     physical output (a mixer-config step, not a DMA problem). Not yet tested: 8PreX/4Pre/8Pre playback,
     simultaneous duplex stress.
+  - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
+    (commit `f086e22`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
+    `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`
+    solely on the arming path). ALSA zeroes `hw_ptr` at every prepare, so any other attach — the second
+    direction, or **the same one re-preparing after an xrun** — got a first `.pointer` return of wherever
+    the free-running engine happened to be, which the core reads as a huge `hw_ptr` jump and xruns within
+    a tick. Recovery re-prepares, lands somewhere else arbitrary, xruns again: **self-perpetuating**, with
+    the only escape being a close of every substream so `clarett_engine_stop()` ran. That is why "a module
+    reload clears it" kept being the recorded remedy. **Fix:** each direction records where it joined the
+    shared clock (`pcm_base`/`play_base`); `.pointer`, the trigger's period index and the tick's period
+    accounting are all relative to it. Consequence handled: ALSA buffer offset and hardware ring offset
+    now differ by a constant rotation, which the copies had assumed away — `clarett_ring_copy()` and
+    `clarett_rx_drain()` take separate source/destination positions that wrap independently.
+    **Diagnostic that found it:** `cat /proc/asound/card*/pcm*/sub*/status` — `state: XRUN` with `avail`
+    *exceeding* `buffer_size`, a fresh `trigger_time` on every look, and `hw_ptr` at a different multiple
+    of the 256-frame hardware period each time. Healthy steady state is `RUNNING` with
+    `appl_ptr - hw_ptr == delay` ≈ one period. Note the engine telemetry looks **perfect** throughout
+    (`late=0`, periods advancing) — this failure is entirely above the DMA layer.
 - Mixer **"get" returns a shadow**: write-through on put, and the **monitor bytes
   (24/28/112) are refreshed from the DMAed GET response on a notification**, so
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP
