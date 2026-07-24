@@ -311,6 +311,22 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   instead of waiting out the response timeout per command. Confirmed by powering the unit off during a
   14ch `arecord`: the host survives and `arecord` exits `-EBADFD` (the correct ALSA disconnect error).
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
+- **SW/HW output gain — verified, and the knob now follows into it (July 24 2026, 2Pre).** First
+  hardware confirmation of `hwGainEnable` (offset 52, bit per output; 56 for outputs 3/4), previously
+  XML-only: byte 52 read `0x03` (outputs 1-2 under HW control) while their stored SW gains at 32/33 sat
+  at `0x7f` (the −127 dB floor) and the output was plainly audible at the knob's level — so **HW mode
+  bypasses the stored SW gain entirely**. Confirmed not self-inflicted: the driver writes 72/73 at probe,
+  never 52. **The device never mirrors the knob back** — turning it moves byte 112 only, 32-39 never
+  budge. Consequences the USB siblings avoid (in-kernel `scarlett2` synthesises the link): the GUI fader
+  won't follow, and a HW→SW toggle JUMPS to the stale software value. **FIXED in the driver, not
+  fcp-server** (`clarett_hw_gain_follow`, lever `hw_gain_follow`): on every monitor-region change — and
+  on the first poll, so a fresh load is already in sync — write byte 112 into the SW gain of each output
+  whose HW-enable bit is set. Fixing the *device state* rather than the presentation makes both symptoms
+  fall out with **zero userspace change**: fcp-server re-reads the byte so the fader tracks, and the
+  toggle is silent because the stored value already matches. Writes are change-gated and use
+  `clarett_write_u8_nosave()` — a mirror is not user intent, and persisting would commit the NVRAM on
+  every movement of the knob. Note it DOES overwrite any stored SW gain on a HW output (inherent;
+  `scarlett2` behaves the same). Both behaviours user-confirmed on hardware.
 
 ## Clean-room discipline
 

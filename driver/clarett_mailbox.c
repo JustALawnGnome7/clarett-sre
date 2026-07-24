@@ -410,7 +410,7 @@ int clarett_data_cmd(struct clarett *c, u32 activate)
 /* Convenience: write a single config byte and commit it. The commit (DATA_CMD{activate})
  * applies the change live but RAM-only — it is NOT persisted across a power cycle. Persistence
  * is a separate DATA_CMD{FCP_ACTIVATE_PERSIST} (command 5), intentionally not issued here. */
-int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
+static int __clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate, bool save)
 {
 	int err;
 
@@ -431,10 +431,26 @@ int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
 	 * owns the state). Gated on ctl_ready: the arm replay and the probe-time monitor-enable RMW
 	 * run before the card is up and must NOT trigger a flash write on every load. mod_delayed_work
 	 * pushes the single save out to CLARETT_SAVE_DELAY_MS after the LAST change, coalescing bursts. */
-	if (READ_ONCE(c->ctl_ready))
+	if (save && READ_ONCE(c->ctl_ready))
 		mod_delayed_work(system_wq, &c->save_work,
 				 msecs_to_jiffies(CLARETT_SAVE_DELAY_MS));
 	return 0;
+}
+
+int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate)
+{
+	return __clarett_write_u8(c, offset, val, activate, true);
+}
+
+/*
+ * As clarett_write_u8, but does NOT schedule the NVRAM save. For bytes the driver maintains as a
+ * MIRROR of some other state rather than at the user's request — currently the SW gains of outputs
+ * under hardware control (clarett_hw_gain_follow), which retrack the front-panel knob and would
+ * otherwise commit the device's flash on every movement of it.
+ */
+int clarett_write_u8_nosave(struct clarett *c, u32 offset, u8 val, u32 activate)
+{
+	return __clarett_write_u8(c, offset, val, activate, false);
 }
 
 /* Read-modify-write the `mask` bits of a shared config byte to the value in `val`, then commit.

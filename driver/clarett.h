@@ -124,6 +124,7 @@ struct snd_pcm_substream;
 /* Monitoring config region re-read on a notification (control-plane §9). */
 #define MONITOR_CFG_OFFSET       24
 #define MONITOR_CFG_LEN          92
+#define MONITOR_VOLUME_OFFSET    112     /* the front-panel knob's level; read-only reflection */
 #define MONITOR_ACTIVATE         2       /* DATA_CMD code shared by the monitor controls.
                                           * Trace-confirmed: mute@24 / dim@28 are 1-bit fields that
                                           * toggle 0/1 and commit with activate=2 (control-plane §9). */
@@ -150,6 +151,7 @@ struct snd_pcm_substream;
  */
 #define HWEN_ACTIVATE            3
 #define HWEN_GAIN_OFFSET         52    /* enable-hardware-gain (SW/HW) base; byte 52+(out/2)*4, bit out%2 */
+#define OUT_GAIN_ACTIVATE        1     /* DATA_CMD code committing an output gain byte (out_gains[].offset) */
 #define HWEN_MUTE_OFFSET         72
 #define HWEN_DIM_OFFSET          73
 #define HWEN_MONITOR_MUTE_MASK   0x03    /* Monitor Out 1-2 mute enables */
@@ -808,6 +810,7 @@ int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate);
+int clarett_write_u8_nosave(struct clarett *c, u32 offset, u8 val, u32 activate);
 
 /* BAR0 access wrappers. */
 void clarett_wl(struct clarett *c, u32 off, u32 val);

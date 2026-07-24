@@ -1534,19 +1534,99 @@ static void clarett_notify_work(struct work_struct *work)
  * heartbeat already issues at that same rate during streaming; a steady state with nobody touching
  * the unit relays nothing at all. The region (24, len 92) covers the monitor mute/dim flags and the
  * master volume pair at 32/33 — the same bytes the notify refresh trusts to read back live.
+ *
+ * The poll runs whether or not audio is streaming: the relay it feeds is only needed while streaming
+ * (outside a stream the 0x400 relay is live and does that job), but clarett_hw_gain_follow() hangs
+ * off the same change detection and has to track the knob at all times.
  */
 static bool monitor_poll = true;
 module_param(monitor_poll, bool, 0644);
 MODULE_PARM_DESC(monitor_poll,
-		 "While streaming, poll the monitor config region and relay a notification when it "
-		 "changes, so the front-panel monitor knob keeps tracking (default on). 0 restores the "
-		 "old behaviour, where the knob is frozen for as long as any PCM is open.");
+		 "Poll the monitor config region and act when it changes: relay a notification while "
+		 "streaming, so the front-panel knob keeps tracking (the 0x400 relay is gated off for the "
+		 "duration of a stream), and drive hw_gain_follow. Default on; 0 restores the old "
+		 "behaviour, where the knob is frozen for as long as any PCM is open.");
+
+/*
+ * Keep the SW gain of every output under HARDWARE control equal to the front-panel knob.
+ *
+ * The device applies the knob in its own signal path and never writes it back: turning it moves byte
+ * 112 only, while the per-output gains (out_gains[].offset) stay wherever software last left them
+ * (hardware-confirmed on the 2Pre, July 24 2026). Two visible consequences, both of which the USB
+ * siblings avoid because the in-kernel scarlett2 driver synthesises the link: the GUI's per-output
+ * fader does not follow the knob, and toggling an output HW -> SW makes its volume JUMP to whatever
+ * stale software value was stored.
+ *
+ * Fix it at the source rather than in the presentation layer — write the knob's value into the SW
+ * gain of each HW-controlled output, so the device's own config says what is actually being heard.
+ * Both symptoms then fall out for free and no userspace change is needed: fcp-server re-reads the
+ * byte and the fader tracks, and a HW -> SW toggle is silent because the stored value already
+ * matches. Writing an output's SW gain while it is under HW control is inaudible by definition (the
+ * knob owns the level), so this only takes effect at the moment control returns to software.
+ *
+ * NOT persisted (clarett_write_u8_nosave): this is a mirror, not user intent, and committing the
+ * flash on every movement of the knob would wear the NVRAM. Writes are also change-gated, so a
+ * stationary knob costs nothing at all.
+ *
+ * `cfg` is the monitor region as fetched by clarett_monitor_poll — offset MONITOR_CFG_OFFSET, length
+ * MONITOR_CFG_LEN, which spans the gains, the HW-enable bits and the knob alike.
+ */
+static bool hw_gain_follow = true;
+module_param(hw_gain_follow, bool, 0644);
+MODULE_PARM_DESC(hw_gain_follow,
+		 "Track the front-panel volume knob into the SW gain of every output set to HW, so the "
+		 "GUI fader follows it and a HW->SW toggle does not jump (default on; matches the USB "
+		 "models' scarlett2 behaviour). 0 leaves the stored SW gains untouched.");
+
+/* Byte `off` as fetched into the monitor-region buffer, or -1 if it falls outside that window. */
+static int clarett_cfg_byte(const u8 *cfg, u32 off)
+{
+	if (off < MONITOR_CFG_OFFSET || off >= MONITOR_CFG_OFFSET + MONITOR_CFG_LEN)
+		return -1;
+	return cfg[off - MONITOR_CFG_OFFSET];
+}
+
+static void clarett_hw_gain_follow(struct clarett *c, const u8 *cfg)
+{
+	int mon = clarett_cfg_byte(cfg, MONITOR_VOLUME_OFFSET);
+	int i;
+
+	if (mon < 0)
+		return;
+
+	for (i = 0; i < c->model->n_out_gains; i++) {
+		u32 gain_off = c->model->out_gains[i].offset;
+		u32 hwen_off = HWEN_GAIN_OFFSET + (i / 2) * 4;
+		u8 hwen_bit = 1u << (i % 2);
+		int hwen = clarett_cfg_byte(cfg, hwen_off);
+		int gain = clarett_cfg_byte(cfg, gain_off);
+		int err;
+
+		if (hwen < 0 || gain < 0)	/* a model whose offsets escape the polled window */
+			continue;
+		/* Only outputs whose enable-hardware-gain bit is set; the rest are software's. */
+		if (!(hwen & hwen_bit))
+			continue;
+		if (gain == mon)
+			continue;
+
+		err = clarett_write_u8_nosave(c, gain_off, mon, OUT_GAIN_ACTIVATE);
+		if (err) {
+			dev_warn_ratelimited(&c->pci->dev,
+					     "hw-gain follow: writing output %d gain @%u failed: %d\n",
+					     i, gain_off, err);
+			return;
+		}
+		dev_dbg(&c->pci->dev, "hw-gain follow: output %d gain @%u -> 0x%02x\n",
+			i, gain_off, mon);
+	}
+}
 
 static void clarett_monitor_poll(struct clarett *c)
 {
 	u8 buf[MONITOR_CFG_LEN];
 	u8 req[8];		/* GET_DATA {u32 offset, u32 len} */
-	bool changed;
+	bool changed, first;
 	int err;
 
 	clarett_put_le32(req, MONITOR_CFG_OFFSET);
@@ -1560,14 +1640,26 @@ static void clarett_monitor_poll(struct clarett *c)
 		return;
 	}
 
-	changed = c->mon_snap_valid && memcmp(c->mon_snap, buf, sizeof(buf));
+	first = !c->mon_snap_valid;
+	changed = !first && memcmp(c->mon_snap, buf, sizeof(buf));
 	memcpy(c->mon_snap, buf, sizeof(buf));
 	c->mon_snap_valid = true;
 
+	if (!first && !changed)
+		return;
+
 	if (changed) {
-		dev_dbg(&c->pci->dev, "monitor poll: region changed, relaying notification\n");
-		clarett_hwdep_notify(c, NOTIFY_MON_PRIMARY);
+		dev_dbg(&c->pci->dev, "monitor poll: region changed\n");
+		/* Only while streaming: outside one the 0x400 relay is live and notifies for us. */
+		if (READ_ONCE(c->stream_on))
+			clarett_hwdep_notify(c, NOTIFY_MON_PRIMARY);
 	}
+
+	/* Also on the FIRST poll: the stored SW gains of HW-controlled outputs are whatever the last
+	 * session left behind, so without an initial sync they stay stale until the knob is next
+	 * touched — and a HW->SW toggle before that would jump, which is the case this exists to fix. */
+	if (hw_gain_follow)
+		clarett_hw_gain_follow(c, buf);
 }
 
 static void clarett_meter_work(struct work_struct *work)
@@ -1602,8 +1694,8 @@ static void clarett_meter_work(struct work_struct *work)
 			clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
 		}
 
-		/* Only while streaming: otherwise the 0x400 relay is live and does this for us. */
-		if (monitor_poll && READ_ONCE(c->stream_on) && READ_ONCE(c->ctl_ready))
+		/* Runs streaming or not — hw_gain_follow has to track the knob at all times. */
+		if (monitor_poll && READ_ONCE(c->ctl_ready))
 			clarett_monitor_poll(c);
 
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
