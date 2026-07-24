@@ -286,7 +286,7 @@ MODELS = {
                           synth_mux=lambda: synth_band0_8pre(),
                           synth_sources=lambda: synth_sources_8pre()),
     "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Level", init="8prex",
-                          n_analogue=8, outputs=10, pcm_out=28,
+                          n_analogue=8, outputs=10, pcm_out=28, mix_out=16,
                           modes={0: "mli3", 1: "mli3",
                                  2: "ml2", 3: "ml2", 4: "ml2",
                                  5: "ml2", 6: "ml2", 7: "ml2"}),
