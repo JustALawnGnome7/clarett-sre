@@ -201,11 +201,11 @@ METER_SLOTS_DST = {
     # slots 12/13 at exactly 2047 (= -6 dBFS of 4095), and NOTHING at 14+. That the PCM streams themselves
     # were driven (4-ch tone) but no PCM slot lit means the device meters the physical OUTPUTS, not the
     # PCM sources. So the outputs pack 12..15, immediately after the 12 input slots (0-11) — all inside the
-    # 24-slot METER_INFO bound (resp = 00 02 0c 00 -> 2*12), so fcp-server accepts them. 14/15 (Line Output
-    # 3-4) are predicted by the same sequential packing, unlit only because they carried no signal.
+    # 24-slot METER_INFO bound (resp = 00 02 0c 00 -> 2*12), so fcp-server accepts them. Re-routing the
+    # same tone to Line Output 3-4 then lit 14/15, confirming the packing: all four are measured.
     "clarett-2pre": {
-        1024: (12, "measured"),  1025: (13, "measured"),   # Line Output 1-2 (Monitor L/R)
-        1026: (14, "predicted"), 1027: (15, "predicted"),  # Line Output 3-4
+        1024: (12, "measured"), 1025: (13, "measured"),  # Line Output 1-2 (Monitor L/R)
+        1026: (14, "measured"), 1027: (15, "measured"),  # Line Output 3-4
     },
 }
 
