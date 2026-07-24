@@ -568,10 +568,17 @@ static bool clarett_cap_supported(struct clarett *c, u16 category)
  *
  * The test is CAP_READ on the two categories fcp-server requires, which is the same question fcp-server
  * asks before it will touch the device — so passing here means fcp-server starts. An earlier version
- * probed GET_DATA and accepted any well-formed reply (echoed opcode + size >= 8); that FALSE-POSITIVED on
- * a fresh 2Pre, which answers GET_DATA with a well-formed but all-zero response while every capability
- * byte reads 0. Probe then skipped the bring-up and fcp-server refused the device with "does not support
- * required INIT category". Validate what the session can DO, not that a reply came back.
+ * probed GET_DATA and accepted any well-formed reply (echoed opcode + size >= 8). That is too weak: a
+ * COLLAPSED session (see below) answers with a well-formed, correctly-echoed, all-zero response while
+ * every capability byte reads 0, and probe called it armed. Validate what the session can DO, not that a
+ * reply came back.
+ *
+ * The collapsed-session state (observed July 23 2026, 2Pre, after a run of PCM arm/stop churn): the
+ * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says
+ * no category is supported even for DATA, while a DATA-category GET_DATA is what just answered. A module
+ * reload clears it with NO bring-up (the device really is armed), so it is host/session state, not the
+ * device losing its arm; power-cycling is not needed. Trigger not yet isolated. tools/fcp_cap_read.c is
+ * the one-command check.
  *
  * Cheap and non-destructive: two small commands, refused harmlessly on a fresh device, and they do not
  * disturb the arm that follows.

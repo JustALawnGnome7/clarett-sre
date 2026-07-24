@@ -249,11 +249,16 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   `clarett_is_armed()` and **skips the re-init** when the device is already armed (driver reloaded without
   a device power-cycle), so a reload no longer wedges it. `force_arm=1` overrides. The test is
   **`CAP_READ` (`0x000001`) on categories INIT (`0x000`) + DATA (`0x800`), both non-zero** — the same
-  question fcp-server asks before it will touch the device. An earlier `GET_DATA` echo+size test
-  **false-positived**: a fresh 2Pre answers `GET_DATA` with a well-formed, all-zero response while every
-  capability byte reads 0, so probe skipped the bring-up and fcp-server refused the device with "Device
-  does not support required INIT category". Validate what the session can *do*, not that a reply came
-  back. `tools/fcp_cap_read.c` dumps the raw bytes. Transport spec §8.
+  question fcp-server asks before it will touch the device. An earlier `GET_DATA` echo+size test was too
+  weak; see the collapsed-session note below. `tools/fcp_cap_read.c` dumps the raw bytes. Transport §8.
+- **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
+  with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
+  the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported
+  *including DATA*, while a DATA-category `GET_DATA` is what just answered (the self-contradiction is the
+  tell). Seen after a run of PCM arm/stop churn (four `engine armed` → `stream-svc: stopped periods=0`
+  cycles). **A module reload clears it with no bring-up and no power cycle** (`clarett_is_armed` correctly
+  reports armed afterwards), so it is host/session state, not the device losing its arm. Trigger not
+  isolated. Check with `sudo ./fcp_cap_read /dev/snd/hwCxD0`; recover with `rmmod`/`insmod`.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
