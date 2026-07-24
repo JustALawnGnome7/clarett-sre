@@ -268,13 +268,14 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   hypothesis in `meter_poll_ms` desc). Re-arming an already-armed device **does still wedge** `GET_DATA`
   (confirmed July 23 — the reload-without-power-cycle symptom); probe now detects the armed device and
   skips the re-init (`clarett_is_armed`, `force_arm` to override).
-- **Surprise removal panicked the host (July 23 2026) — fixed in tree, confirmation pending.** Powering
+- **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed
   capture buffer. `clarett_remove()` now stops the servicer + meter poll before `snd_card_disconnect()`;
   the servicer also exits on an all-ones `0x300` from a disconnected device (bit31 is set in `~0`, so
   every read looked like a period event), and the mailbox fails fast on `pci_dev_is_disconnected()`
-  instead of waiting out the response timeout per command. **Retest: stream, then power the unit off.**
+  instead of waiting out the response timeout per command. Confirmed by powering the unit off during a
+  14ch `arecord`: the host survives and `arecord` exits `-EBADFD` (the correct ALSA disconnect error).
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
 
 ## Clean-room discipline
