@@ -267,7 +267,10 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
     discriminator (routing present) where no *liveness* one exists: a fresh device reads empty and gets
     the full default-routing arm; a configured one keeps its routes and still gets metering/subsystem
     setup. Log line: `arm: preserved live routing/mixer (N ... steps skipped)`. Survives reloads; a power
-    cycle still returns to the device's own retained state.
+    cycle still returns to the device's own retained state. **Both halves hardware-confirmed on the 2Pre
+    (July 24 2026):** routing survives a reload, *and* input metering still works on a preserved load
+    (Analogue 1 → PCM 1 drove the PCM 01 meter to 1359, all other channels 0) — so metering really does
+    come from a non-routing bring-up step and the skip costs nothing.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported
