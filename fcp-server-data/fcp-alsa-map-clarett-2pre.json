@@ -75,6 +75,14 @@
   },
   "sources": [
     {
+      "device_name": "Analogue 1",
+      "alsa_name": "Analogue 1"
+    },
+    {
+      "device_name": "Analogue 2",
+      "alsa_name": "Analogue 2"
+    },
+    {
       "device_name": "S/PDIF 1",
       "alsa_name": "S/PDIF 1"
     },
@@ -123,14 +131,6 @@
       "alsa_name": "Mix B"
     },
     {
-      "device_name": "Analogue 1",
-      "alsa_name": "Analogue 1"
-    },
-    {
-      "device_name": "Analogue 2",
-      "alsa_name": "Analogue 2"
-    },
-    {
       "device_name": "PCM 1",
       "alsa_name": "PCM 1"
     },
@@ -148,6 +148,22 @@
     }
   ],
   "sinks": [
+    {
+      "device_name": "Line Output 1",
+      "alsa_name": "Analogue Output 1"
+    },
+    {
+      "device_name": "Line Output 2",
+      "alsa_name": "Analogue Output 2"
+    },
+    {
+      "device_name": "Line Output 3",
+      "alsa_name": "Analogue Output 3"
+    },
+    {
+      "device_name": "Line Output 4",
+      "alsa_name": "Analogue Output 4"
+    },
     {
       "device_name": "Mixer Input 01",
       "alsa_name": "Mixer Input 01"
@@ -267,22 +283,6 @@
     {
       "device_name": "Mixer Input 30",
       "alsa_name": "Mixer Input 30"
-    },
-    {
-      "device_name": "Line Output 1",
-      "alsa_name": "Analogue Output 1"
-    },
-    {
-      "device_name": "Line Output 2",
-      "alsa_name": "Analogue Output 2"
-    },
-    {
-      "device_name": "Line Output 3",
-      "alsa_name": "Analogue Output 3"
-    },
-    {
-      "device_name": "Line Output 4",
-      "alsa_name": "Analogue Output 4"
     },
     {
       "device_name": "PCM 01",

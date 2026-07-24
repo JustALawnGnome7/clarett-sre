@@ -330,6 +330,46 @@
     ],
     "sources": [
       {
+        "name": "Analogue 1",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Analogue 2",
+        "router-pin": "1025"
+      },
+      {
+        "name": "Analogue 3",
+        "router-pin": "1026"
+      },
+      {
+        "name": "Analogue 4",
+        "router-pin": "1027"
+      },
+      {
+        "name": "Analogue 5",
+        "router-pin": "1028"
+      },
+      {
+        "name": "Analogue 6",
+        "router-pin": "1029"
+      },
+      {
+        "name": "Analogue 7",
+        "router-pin": "1030"
+      },
+      {
+        "name": "Analogue 8",
+        "router-pin": "1031"
+      },
+      {
+        "name": "S/PDIF 1",
+        "router-pin": "1032"
+      },
+      {
+        "name": "S/PDIF 2",
+        "router-pin": "1033"
+      },
+      {
         "name": "ADAT 1",
         "router-pin": "512"
       },
@@ -426,46 +466,6 @@
         "router-pin": "783"
       },
       {
-        "name": "Analogue 1",
-        "router-pin": "1024"
-      },
-      {
-        "name": "Analogue 2",
-        "router-pin": "1025"
-      },
-      {
-        "name": "Analogue 3",
-        "router-pin": "1026"
-      },
-      {
-        "name": "Analogue 4",
-        "router-pin": "1027"
-      },
-      {
-        "name": "Analogue 5",
-        "router-pin": "1028"
-      },
-      {
-        "name": "Analogue 6",
-        "router-pin": "1029"
-      },
-      {
-        "name": "Analogue 7",
-        "router-pin": "1030"
-      },
-      {
-        "name": "Analogue 8",
-        "router-pin": "1031"
-      },
-      {
-        "name": "S/PDIF 1",
-        "router-pin": "1032"
-      },
-      {
-        "name": "S/PDIF 2",
-        "router-pin": "1033"
-      },
-      {
         "name": "PCM 1",
         "router-pin": "1536"
       },
@@ -547,6 +547,46 @@
       }
     ],
     "destinations": [
+      {
+        "name": "Monitor Output 1",
+        "router-pin": "1032"
+      },
+      {
+        "name": "Monitor Output 2",
+        "router-pin": "1033"
+      },
+      {
+        "name": "Line Output 3",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Line Output 4",
+        "router-pin": "1025"
+      },
+      {
+        "name": "Line Output 5",
+        "router-pin": "1026"
+      },
+      {
+        "name": "Line Output 6",
+        "router-pin": "1027"
+      },
+      {
+        "name": "Line Output 7",
+        "router-pin": "1028"
+      },
+      {
+        "name": "Line Output 8",
+        "router-pin": "1029"
+      },
+      {
+        "name": "Line Output 9",
+        "router-pin": "1030"
+      },
+      {
+        "name": "Line Output 10",
+        "router-pin": "1031"
+      },
       {
         "name": "S/PDIF Output 1",
         "router-pin": "390"
@@ -736,46 +776,6 @@
         "name": "Mixer Input 30",
         "router-pin": "797",
         "mixer-input-index": 29
-      },
-      {
-        "name": "Line Output 3",
-        "router-pin": "1024"
-      },
-      {
-        "name": "Line Output 4",
-        "router-pin": "1025"
-      },
-      {
-        "name": "Line Output 5",
-        "router-pin": "1026"
-      },
-      {
-        "name": "Line Output 6",
-        "router-pin": "1027"
-      },
-      {
-        "name": "Line Output 7",
-        "router-pin": "1028"
-      },
-      {
-        "name": "Line Output 8",
-        "router-pin": "1029"
-      },
-      {
-        "name": "Line Output 9",
-        "router-pin": "1030"
-      },
-      {
-        "name": "Line Output 10",
-        "router-pin": "1031"
-      },
-      {
-        "name": "Monitor Output 1",
-        "router-pin": "1032"
-      },
-      {
-        "name": "Monitor Output 2",
-        "router-pin": "1033"
       },
       {
         "name": "PCM 01",

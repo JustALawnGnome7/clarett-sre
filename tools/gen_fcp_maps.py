@@ -60,7 +60,7 @@ def name_destinations(dsts):
     analogue = sorted(p for p in dsts if 0x400 <= p <= 0x409)
     # 8PreX-style: 0x408/0x409 are the monitor pair and the 0x400 block starts at Line Output 3.
     monitor_pair = 0x408 in dsts
-    for pin in sorted(dsts):
+    for pin in sorted(dsts, key=_dest_rank):
         if 0x186 <= pin <= 0x187:
             out[pin] = (f"S/PDIF Output {pin - 0x186 + 1}", None)
         elif 0x200 <= pin <= 0x20f:
@@ -93,11 +93,34 @@ def alsa_sink_name(name):
     return name
 
 
+# Presentation order for the routing window: the GUI lists each Hardware group in the order the pins
+# appear in the map, and pin order alone would show ADAT before Analogue (sources) and S/PDIF before
+# Analogue (outputs). Sort by category rank so the conventional Analogue -> S/PDIF -> ADAT order (matching
+# the USB Clarett) comes out; Mix and PCM are separate GUI groups so their rank only fixes internal order.
+def _source_rank(pin):
+    if 0x400 <= pin <= 0x407:                 return (0, pin)  # Analogue
+    if pin in (0x408, 0x409) or 0x186 <= pin <= 0x187: return (1, pin)  # S/PDIF
+    if 0x200 <= pin <= 0x20f:                 return (2, pin)  # ADAT
+    if 0x300 <= pin <= 0x30f:                 return (3, pin)  # Mix
+    if 0x600 <= pin <= 0x61f:                 return (4, pin)  # PCM
+    return (9, pin)
+
+
+def _dest_rank(pin):
+    if pin in (0x408, 0x409):                 return (0, 0, pin)  # Monitor outputs (8PreX) — before Line
+    if 0x400 <= pin <= 0x407:                 return (0, 1, pin)  # Line/Analogue outputs
+    if 0x186 <= pin <= 0x187:                 return (1, 0, pin)  # S/PDIF output
+    if 0x200 <= pin <= 0x20f:                 return (2, 0, pin)  # ADAT output
+    if 0x300 <= pin <= 0x31f:                 return (3, 0, pin)  # Mixer input
+    if 0x600 <= pin <= 0x61f:                 return (4, 0, pin)  # PCM
+    return (9, 0, pin)
+
+
 def name_sources(srcs):
     """src pin -> name. Pin 0 ("Off") is excluded: fcp-server rejects a router-pin <= 0."""
     out = OD()
     analogue = sorted(p for p in srcs if 0x400 <= p <= 0x407)
-    for pin in sorted(p for p in srcs if p):
+    for pin in sorted((p for p in srcs if p), key=_source_rank):
         if 0x186 <= pin <= 0x187:
             out[pin] = f"S/PDIF {pin - 0x186 + 1}"
         elif 0x200 <= pin <= 0x20f:

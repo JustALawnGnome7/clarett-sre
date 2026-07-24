@@ -75,6 +75,46 @@
   },
   "sources": [
     {
+      "device_name": "Analogue 1",
+      "alsa_name": "Analogue 1"
+    },
+    {
+      "device_name": "Analogue 2",
+      "alsa_name": "Analogue 2"
+    },
+    {
+      "device_name": "Analogue 3",
+      "alsa_name": "Analogue 3"
+    },
+    {
+      "device_name": "Analogue 4",
+      "alsa_name": "Analogue 4"
+    },
+    {
+      "device_name": "Analogue 5",
+      "alsa_name": "Analogue 5"
+    },
+    {
+      "device_name": "Analogue 6",
+      "alsa_name": "Analogue 6"
+    },
+    {
+      "device_name": "Analogue 7",
+      "alsa_name": "Analogue 7"
+    },
+    {
+      "device_name": "Analogue 8",
+      "alsa_name": "Analogue 8"
+    },
+    {
+      "device_name": "S/PDIF 1",
+      "alsa_name": "S/PDIF 1"
+    },
+    {
+      "device_name": "S/PDIF 2",
+      "alsa_name": "S/PDIF 2"
+    },
+    {
       "device_name": "ADAT 1",
       "alsa_name": "ADAT 1"
     },
@@ -171,46 +211,6 @@
       "alsa_name": "Mix P"
     },
     {
-      "device_name": "Analogue 1",
-      "alsa_name": "Analogue 1"
-    },
-    {
-      "device_name": "Analogue 2",
-      "alsa_name": "Analogue 2"
-    },
-    {
-      "device_name": "Analogue 3",
-      "alsa_name": "Analogue 3"
-    },
-    {
-      "device_name": "Analogue 4",
-      "alsa_name": "Analogue 4"
-    },
-    {
-      "device_name": "Analogue 5",
-      "alsa_name": "Analogue 5"
-    },
-    {
-      "device_name": "Analogue 6",
-      "alsa_name": "Analogue 6"
-    },
-    {
-      "device_name": "Analogue 7",
-      "alsa_name": "Analogue 7"
-    },
-    {
-      "device_name": "Analogue 8",
-      "alsa_name": "Analogue 8"
-    },
-    {
-      "device_name": "S/PDIF 1",
-      "alsa_name": "S/PDIF 1"
-    },
-    {
-      "device_name": "S/PDIF 2",
-      "alsa_name": "S/PDIF 2"
-    },
-    {
       "device_name": "PCM 1",
       "alsa_name": "PCM 1"
     },
@@ -292,6 +292,46 @@
     }
   ],
   "sinks": [
+    {
+      "device_name": "Monitor Output 1",
+      "alsa_name": "Analogue Output 1"
+    },
+    {
+      "device_name": "Monitor Output 2",
+      "alsa_name": "Analogue Output 2"
+    },
+    {
+      "device_name": "Line Output 3",
+      "alsa_name": "Analogue Output 3"
+    },
+    {
+      "device_name": "Line Output 4",
+      "alsa_name": "Analogue Output 4"
+    },
+    {
+      "device_name": "Line Output 5",
+      "alsa_name": "Analogue Output 5"
+    },
+    {
+      "device_name": "Line Output 6",
+      "alsa_name": "Analogue Output 6"
+    },
+    {
+      "device_name": "Line Output 7",
+      "alsa_name": "Analogue Output 7"
+    },
+    {
+      "device_name": "Line Output 8",
+      "alsa_name": "Analogue Output 8"
+    },
+    {
+      "device_name": "Line Output 9",
+      "alsa_name": "Analogue Output 9"
+    },
+    {
+      "device_name": "Line Output 10",
+      "alsa_name": "Analogue Output 10"
+    },
     {
       "device_name": "S/PDIF Output 1",
       "alsa_name": "S/PDIF Output 1"
@@ -451,46 +491,6 @@
     {
       "device_name": "Mixer Input 30",
       "alsa_name": "Mixer Input 30"
-    },
-    {
-      "device_name": "Line Output 3",
-      "alsa_name": "Analogue Output 3"
-    },
-    {
-      "device_name": "Line Output 4",
-      "alsa_name": "Analogue Output 4"
-    },
-    {
-      "device_name": "Line Output 5",
-      "alsa_name": "Analogue Output 5"
-    },
-    {
-      "device_name": "Line Output 6",
-      "alsa_name": "Analogue Output 6"
-    },
-    {
-      "device_name": "Line Output 7",
-      "alsa_name": "Analogue Output 7"
-    },
-    {
-      "device_name": "Line Output 8",
-      "alsa_name": "Analogue Output 8"
-    },
-    {
-      "device_name": "Line Output 9",
-      "alsa_name": "Analogue Output 9"
-    },
-    {
-      "device_name": "Line Output 10",
-      "alsa_name": "Analogue Output 10"
-    },
-    {
-      "device_name": "Monitor Output 1",
-      "alsa_name": "Analogue Output 1"
-    },
-    {
-      "device_name": "Monitor Output 2",
-      "alsa_name": "Analogue Output 2"
     },
     {
       "device_name": "PCM 01",

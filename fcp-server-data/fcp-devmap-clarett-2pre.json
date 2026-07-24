@@ -177,6 +177,14 @@
     ],
     "sources": [
       {
+        "name": "Analogue 1",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Analogue 2",
+        "router-pin": "1026"
+      },
+      {
         "name": "S/PDIF 1",
         "router-pin": "390"
       },
@@ -225,14 +233,6 @@
         "router-pin": "769"
       },
       {
-        "name": "Analogue 1",
-        "router-pin": "1024"
-      },
-      {
-        "name": "Analogue 2",
-        "router-pin": "1026"
-      },
-      {
         "name": "PCM 1",
         "router-pin": "1536"
       },
@@ -250,6 +250,30 @@
       }
     ],
     "destinations": [
+      {
+        "name": "Line Output 1",
+        "router-pin": "1024",
+        "peak-index": 12,
+        "_peak-index-provenance": "measured"
+      },
+      {
+        "name": "Line Output 2",
+        "router-pin": "1025",
+        "peak-index": 13,
+        "_peak-index-provenance": "measured"
+      },
+      {
+        "name": "Line Output 3",
+        "router-pin": "1026",
+        "peak-index": 14,
+        "_peak-index-provenance": "measured"
+      },
+      {
+        "name": "Line Output 4",
+        "router-pin": "1027",
+        "peak-index": 15,
+        "_peak-index-provenance": "measured"
+      },
       {
         "name": "Mixer Input 01",
         "router-pin": "768",
@@ -459,30 +483,6 @@
         "peak-index": 47,
         "_peak-index-provenance": "measured",
         "mixer-input-index": 29
-      },
-      {
-        "name": "Line Output 1",
-        "router-pin": "1024",
-        "peak-index": 12,
-        "_peak-index-provenance": "measured"
-      },
-      {
-        "name": "Line Output 2",
-        "router-pin": "1025",
-        "peak-index": 13,
-        "_peak-index-provenance": "measured"
-      },
-      {
-        "name": "Line Output 3",
-        "router-pin": "1026",
-        "peak-index": 14,
-        "_peak-index-provenance": "measured"
-      },
-      {
-        "name": "Line Output 4",
-        "router-pin": "1027",
-        "peak-index": 15,
-        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 01",

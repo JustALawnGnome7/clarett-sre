@@ -228,6 +228,46 @@
     ],
     "sources": [
       {
+        "name": "Analogue 1",
+        "router-pin": "1024"
+      },
+      {
+        "name": "Analogue 2",
+        "router-pin": "1025"
+      },
+      {
+        "name": "Analogue 3",
+        "router-pin": "1026"
+      },
+      {
+        "name": "Analogue 4",
+        "router-pin": "1027"
+      },
+      {
+        "name": "Analogue 5",
+        "router-pin": "1028"
+      },
+      {
+        "name": "Analogue 6",
+        "router-pin": "1029"
+      },
+      {
+        "name": "Analogue 7",
+        "router-pin": "1030"
+      },
+      {
+        "name": "Analogue 8",
+        "router-pin": "1031"
+      },
+      {
+        "name": "S/PDIF 1",
+        "router-pin": "1032"
+      },
+      {
+        "name": "S/PDIF 2",
+        "router-pin": "1033"
+      },
+      {
         "name": "ADAT 1",
         "router-pin": "512"
       },
@@ -284,46 +324,6 @@
         "router-pin": "773"
       },
       {
-        "name": "Analogue 1",
-        "router-pin": "1024"
-      },
-      {
-        "name": "Analogue 2",
-        "router-pin": "1025"
-      },
-      {
-        "name": "Analogue 3",
-        "router-pin": "1026"
-      },
-      {
-        "name": "Analogue 4",
-        "router-pin": "1027"
-      },
-      {
-        "name": "Analogue 5",
-        "router-pin": "1028"
-      },
-      {
-        "name": "Analogue 6",
-        "router-pin": "1029"
-      },
-      {
-        "name": "Analogue 7",
-        "router-pin": "1030"
-      },
-      {
-        "name": "Analogue 8",
-        "router-pin": "1031"
-      },
-      {
-        "name": "S/PDIF 1",
-        "router-pin": "1032"
-      },
-      {
-        "name": "S/PDIF 2",
-        "router-pin": "1033"
-      },
-      {
         "name": "PCM 1",
         "router-pin": "1536"
       },
@@ -357,6 +357,42 @@
       }
     ],
     "destinations": [
+      {
+        "name": "Line Output 1",
+        "router-pin": "1024",
+        "peak-index": 18,
+        "_peak-index-provenance": "measured"
+      },
+      {
+        "name": "Line Output 2",
+        "router-pin": "1025",
+        "peak-index": 19,
+        "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "Line Output 3",
+        "router-pin": "1026",
+        "peak-index": 20,
+        "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "Line Output 4",
+        "router-pin": "1027",
+        "peak-index": 21,
+        "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "Line Output 5",
+        "router-pin": "1028",
+        "peak-index": 22,
+        "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "Line Output 6",
+        "router-pin": "1029",
+        "peak-index": 23,
+        "_peak-index-provenance": "measured"
+      },
       {
         "name": "S/PDIF Output 1",
         "router-pin": "390",
@@ -578,42 +614,6 @@
         "peak-index": 57,
         "_peak-index-provenance": "measured",
         "mixer-input-index": 29
-      },
-      {
-        "name": "Line Output 1",
-        "router-pin": "1024",
-        "peak-index": 18,
-        "_peak-index-provenance": "measured"
-      },
-      {
-        "name": "Line Output 2",
-        "router-pin": "1025",
-        "peak-index": 19,
-        "_peak-index-provenance": "stride"
-      },
-      {
-        "name": "Line Output 3",
-        "router-pin": "1026",
-        "peak-index": 20,
-        "_peak-index-provenance": "stride"
-      },
-      {
-        "name": "Line Output 4",
-        "router-pin": "1027",
-        "peak-index": 21,
-        "_peak-index-provenance": "stride"
-      },
-      {
-        "name": "Line Output 5",
-        "router-pin": "1028",
-        "peak-index": 22,
-        "_peak-index-provenance": "stride"
-      },
-      {
-        "name": "Line Output 6",
-        "router-pin": "1029",
-        "peak-index": 23,
-        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 01",
