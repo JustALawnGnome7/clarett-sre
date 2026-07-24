@@ -137,35 +137,21 @@ def name_sources(srcs):
 # The record-channel count is what sets the base for everything after it: 12 on the 2Pre, 18 on the
 # 4Pre/8Pre (capture_channels minus the 2 loopback pins).
 #
-# OPEN, 4Pre: its historical readings fit this rule for the record block (analogue 1-4 -> slots 0-3) and
-# for the line outputs (18-23, immediately after its 18 record channels), but Analogue 1/2 lit slots
-# 28/29 where 6 line + 2 S/PDIF outputs would put Mixer Input 01/02 at 26/27. Two slots unaccounted for.
-# Its mixer/output entries are therefore NOT mapped here pending a re-measure on that hardware.
-#
-# Narrowed July 24 2026 (analysis only, no 4Pre attached):
-#   - The reading really does pin the MIXER BASE AT 28. It could have been an artefact of assuming the
-#     default patch sends Analogue 1/2 to Mixer Input 01/02 — but the 4Pre's own band-0 table says it
-#     does (Analogue 1 -> Mixer Input 01, Analogue 2 -> Mixer Input 02; Mixer Input 03/04 take PCM 1/2).
-#     So Mixer Input 01 == slot 28 and the residual really is exactly 2 slots.
-#   - The 4Pre's router HAS S/PDIF output destinations (0x186/0x187) where the 2Pre's has none, so its
-#     physical-output block is a full 6 line + 2 S/PDIF = 8 slots. 18 record + 8 = 26, still 2 short.
-#   - TWO HYPOTHESES FIT, and they differ in where the line outputs sit:
-#     (a) THE LOOPBACK PAIR IS METERED on this model: record block = 20 (all PCM destinations, not just
-#         the 18 record channels), outputs 20-27, mixer 28-57. Arithmetically exact, and it makes the
-#         output block equal the router's own destination count. It requires the historical "line
-#         outputs at 18-23" to be wrong by 2 — plausible, since every 4Pre reading predates the
-#         destination model and was re-attributed, and a single systematic +2 explains all of them.
-#     (b) The output block is 10 slots (6 line + 2 S/PDIF + 2 dark/unknown), record block stays 18,
-#         line outputs at 18-23 as recorded. Needs an unexplained pair of reserved slots.
-#     The 2Pre is evidence AGAINST (a) — its loopback (PCM 13/14) is provably NOT metered, since line
-#     outputs were measured at 12-15 directly after its 12 record channels. But "one firmware family"
-#     is an assumption, not an observation, and it is exactly what the 2-slot residual is questioning.
-#   - DECISIVE TEST (one route change on 4Pre hardware, tools/fcp_meter_watch): put signal on Analogue 1
-#     and route it to LINE OUTPUT 1 alone. Slot 18 => hypothesis (b); slot 20 => hypothesis (a), and the
-#     whole map then follows from base 20 with mixer at 28. Confirm with a second route to Line Output 6
-#     (23 vs 25) and one mixer input (Mixer Input 30 => 57 either way).
-#   Do NOT fill these in from the rule until that test is run: a wrong meter map is silent — every meter
-#   in the GUI just labels the wrong channel.
+# 4Pre: RESOLVED July 24 2026 on hardware (tools/fcp_meter_watch, graded-level attribution — each test
+# destination fed a distinct PCM playback source at a distinct level, with all default routing zeroed so
+# every lit slot maps to exactly one destination by its level). It is HYPOTHESIS (b):
+#   [PCM 01-18 record: 0-17][Line Output 1-6: 18-23][S/PDIF Output 1-2: 24-25][2 unidentified: 26-27]
+#   [Mixer Input 01-30: 28-57]
+# Directly measured, each alone: Analogue Output 1 -> 18, Analogue Output 6 -> 23, S/PDIF Output 1 -> 24,
+# Mixer Input 01 -> 28, Mixer Input 30 -> 57 (the last from a run-2/run-3 differential; the rest from the
+# clean zeroed run). Outputs starting at 18 (not 20) is what killed hypothesis (a): the loopback pair
+# (PCM 19-20) is NOT metered, exactly as on the 2Pre, so the record block is 18 wide and the 2-slot
+# residual is a genuine pair of reserved/unidentified slots at 26-27 (analogous to the 2Pre's dark S/PDIF
+# 16-17 — present in the array, unlit on this unit, mapped to no destination). Loopback-via-PCM-playback
+# was separately confirmed unmetered here: PCM 01 <- PCM 1 added no slot. The physical-input record slots
+# 0-17 keep their historical "reinterpreted" provenance (this session drove destinations from PCM
+# playback, which does not exercise the input meters). The old "26+ (28/29 seen)" note was contaminated
+# by live default routing; the zeroed run supersedes it.
 METER_SLOTS = {}
 
 # Destination (and mixer-input) peak-indexes. These sit past what METER_INFO advertises: fcp-server
@@ -191,8 +177,9 @@ METER_SLOTS_DST = {
     # Mix A gain pulled to -inf, which is what distinguishes it from a mix-bus meter.
     # 16/17 are never lit on this unit because its router has NO S/PDIF output destination (confirmed by
     # dumping the live mux table with tools/fcp_mux_probe: 0x600-0x60d, 0x400-0x403, 0x300-0x31d only).
-    # The 4Pre's earlier measurements fit the same rule: 18 inputs, line outputs at 18-23, mixer inputs at
-    # 26+ (28/29 seen). So the mixer-input base is 12 + n_physical_outputs, per model.
+    # The 4Pre follows the same rule with a twist: 18 record, line outputs 18-23, S/PDIF 24-25, then a
+    # 2-slot reserved gap (26-27) before mixer inputs at 28-57 — so its mixer base is 12 + n_out + 2, not
+    # 12 + n_out. See the RESOLVED July 24 note above.
     "clarett-2pre": {
         # PCM 01-12, the record channels, at slots 0-11. PCM 1 -> slot 0 and PCM 3 -> slot 2 were
         # measured directly by re-routing one input between them; the rest follow the stride and were
@@ -205,12 +192,21 @@ METER_SLOTS_DST = {
         **{0x300 + i: (18 + i, "measured" if i in (0, 1, 4, 12, 29) else "stride")
            for i in range(30)},
     },
-    # 4Pre/8Pre: the record block only. Same mechanism as the 2Pre (it is one firmware family) applied to
-    # their 18 record channels, so the twelve/eighteen readings taken under default routing are carried
-    # over rather than discarded — but re-attributed to the PCM channel that was actually being metered,
-    # which is what the 2Pre re-routing test showed. Their outputs and mixer inputs stay unmapped until
-    # measured: the 4Pre's Analogue 1/2 lit slots 28/29 where this layout predicts 26/27 (see above).
-    "clarett-4pre": {0x600 + i: (i, "reinterpreted") for i in range(18)},
+    # 4Pre: full layout measured July 24 2026 (see the RESOLVED note above). Directly lit, each alone:
+    # Line Output 1 -> 18, Line Output 6 -> 23, S/PDIF Output 1 -> 24, Mixer Input 01 -> 28,
+    # Mixer Input 30 -> 57. The record block (0-17) keeps its historical "reinterpreted" provenance —
+    # this session drove destinations from PCM playback, which does not exercise the input meters.
+    "clarett-4pre": {
+        # PCM 01-18 record channels at 0-17 (loopback PCM 19-20 not metered; outputs start at 18)
+        **{0x600 + i: (i, "reinterpreted") for i in range(18)},
+        # Line Output 1-6 at 18-23 (1 and 6 measured, rest by stride)
+        **{0x400 + i: (18 + i, "measured" if i in (0, 5) else "stride") for i in range(6)},
+        # S/PDIF Output 1-2 at 24-25 (Output 1 measured; slots 26-27 are an unidentified reserved pair)
+        0x186: (24, "measured"), 0x187: (25, "stride"),
+        # Mixer Input 01-30 at 28-57 (01 and 30 measured, rest by stride)
+        **{0x300 + i: (28 + i, "measured" if i in (0, 29) else "stride") for i in range(30)},
+    },
+    # 8Pre: record block only, PREDICTED from the packing rule (no 8Pre hardware). Outputs/mixer unmapped.
     "clarett-8pre": {0x600 + i: (i, "predicted") for i in range(18)},
 }
 
