@@ -115,19 +115,31 @@ static size_t clarett_tx_ring_bytes(struct clarett *c)
 }
 
 /*
- * Copy nframes of interleaved audio between a hardware sample ring and the ALSA buffer, both of which map
- * frame k at byte (k mod ring_frames)*frame_bytes, starting at start_frame and wrapping once at the ring
- * end. Used both ways: RX ring -> capture ALSA (drain) and playback ALSA -> TX ring (fill).
+ * Copy nframes of interleaved audio between a hardware sample ring and the ALSA buffer. Both are
+ * ring_frames long and wrap independently: the ALSA buffer is indexed from the stream's own frame 0
+ * while the hardware ring is indexed from the engine's, and the two are offset by the direction's
+ * attach base. Hence separate start positions, each wrapping at its own end.
+ * Used both ways: RX ring -> capture ALSA (drain) and playback ALSA -> TX ring (fill).
  */
-static void clarett_ring_copy(u8 *dst, const u8 *src, u32 start_frame, u32 nframes,
-			      u32 ring_frames, u32 frame_bytes)
+static void clarett_ring_copy(u8 *dst, u32 dst_start, const u8 *src, u32 src_start,
+			      u32 nframes, u32 ring_frames, u32 frame_bytes)
 {
-	u32 first = min(nframes, ring_frames - start_frame);	/* up to the ring end */
-	size_t off = (size_t)start_frame * frame_bytes;
+	while (nframes) {
+		/* Up to whichever side wraps first. */
+		u32 chunk = min3(nframes, ring_frames - dst_start, ring_frames - src_start);
 
-	memcpy(dst + off, src + off, (size_t)first * frame_bytes);
-	if (nframes > first)					/* remainder wraps to the ring start */
-		memcpy(dst, src, (size_t)(nframes - first) * frame_bytes);
+		memcpy(dst + (size_t)dst_start * frame_bytes,
+		       src + (size_t)src_start * frame_bytes,
+		       (size_t)chunk * frame_bytes);
+
+		dst_start += chunk;
+		if (dst_start == ring_frames)
+			dst_start = 0;
+		src_start += chunk;
+		if (src_start == ring_frames)
+			src_start = 0;
+		nframes -= chunk;
+	}
 }
 
 /* Silence the TX ring (playback-idle: capture-only must not loop stale playback audio out the DACs). */
@@ -137,14 +149,15 @@ static void clarett_zero_tx(struct clarett *c)
 }
 
 /*
- * Drain nframes of captured audio from the RX device area (starting at logical frame `pos`, wrapping at the
- * ring) into the contiguous ALSA buffer at the same logical position. The RX area is a table of NDESC
- * fragment SLOTS of c->rx_slot bytes; logical frame f lives in slot (f/FRAG_FRAMES) at byte
- * (f%FRAG_FRAMES)*frame within that slot. When rx_slot == audio-bytes/fragment (the contiguous default)
- * this is just a linear copy; when padded (scatter-gather experiment) it gathers per fragment across the
- * gaps. FRAG_FRAMES divides the ring, so a chunk clipped to the fragment boundary also handles the wrap.
+ * Drain nframes of captured audio from the RX device area (starting at hardware ring frame `pos`) into the
+ * contiguous ALSA buffer (starting at that stream's own frame `apos` — the two differ by the capture
+ * direction's attach base and wrap independently). The RX area is a table of NDESC fragment SLOTS of
+ * c->rx_slot bytes; ring frame f lives in slot (f/FRAG_FRAMES) at byte (f%FRAG_FRAMES)*frame within that
+ * slot. When rx_slot == audio-bytes/fragment (the contiguous default) this is just a linear copy; when
+ * padded (scatter-gather experiment) it gathers per fragment across the gaps. FRAG_FRAMES divides the ring,
+ * so a chunk clipped to the fragment boundary also handles the ring wrap.
  */
-static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 pos, u32 nframes)
+static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32 nframes)
 {
 	u8 *ring = clarett_rx_area(c);
 	u32 frame = (u32)c->model->capture_channels * 4;
@@ -155,12 +168,17 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 pos, u32 nframes)
 		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
 		u32 chunk = min(nframes, CLARETT_FRAG_FRAMES - fio);	/* up to the fragment (and ring) boundary */
 
-		memcpy(alsa + (size_t)pos * frame,
+		chunk = min(chunk, ring_frames - apos);			/* and up to the ALSA buffer wrap */
+
+		memcpy(alsa + (size_t)apos * frame,
 		       ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
 		       (size_t)chunk * frame);
 		pos += chunk;
 		if (pos == ring_frames)
 			pos = 0;
+		apos += chunk;
+		if (apos == ring_frames)
+			apos = 0;
 		nframes -= chunk;
 	}
 }
@@ -202,14 +220,17 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 	cs = c->pcm_sub;
 	ps = c->pcm_play_sub;
 
-	/* Capture drain: the add_frames the engine just wrote, at the current ring position (slot-aware). */
+	/* Capture drain: the add_frames the engine just wrote, from the current ring position (slot-aware) to
+	 * the matching position in the stream's own ALSA buffer (offset by where it attached). */
 	if (cs && cs->runtime->dma_area) {
 		u32 frame = (u32)c->model->capture_channels * 4;
 		u32 ring  = clarett_rx_ring_bytes(c) / frame;
 		u64 q = c->pcm_frames;
+		u64 aq = c->pcm_frames - c->pcm_base;
 		u32 pos = do_div(q, ring);
+		u32 apos = do_div(aq, ring);
 
-		clarett_rx_drain(c, cs->runtime->dma_area, pos, min(add_frames, ring));
+		clarett_rx_drain(c, cs->runtime->dma_area, apos, pos, min(add_frames, ring));
 	}
 
 	/* Playback fill: refresh the whole runway ahead of the engine (from GUARD past the read position to
@@ -220,18 +241,21 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 
 		if (ring > CLARETT_TX_GUARD_FRAMES) {
 			u64 q = c->pcm_frames + CLARETT_TX_GUARD_FRAMES;
-			u32 start = do_div(q, ring);
+			u64 aq = c->pcm_frames + CLARETT_TX_GUARD_FRAMES - c->play_base;
+			u32 start = do_div(q, ring);		/* hardware ring position */
+			u32 astart = do_div(aq, ring);		/* same frame in the ALSA buffer */
 
-			clarett_ring_copy(clarett_tx_area(c), ps->runtime->dma_area, start,
+			clarett_ring_copy(clarett_tx_area(c), start, ps->runtime->dma_area, astart,
 					  ring - CLARETT_TX_GUARD_FRAMES, ring, frame);
 		}
 	}
 
 	c->pcm_frames += add_frames;
 
-	/* Deliver period boundaries only between trigger START and STOP (the *_running gates). */
+	/* Deliver period boundaries only between trigger START and STOP (the *_running gates). Period indices
+	 * are counted on each direction's own clock (pcm_frames - base), matching what .pointer reports. */
 	if (cs && READ_ONCE(c->pcm_running)) {
-		u64 period = div_u64(c->pcm_frames, cs->runtime->period_size);
+		u64 period = div_u64(c->pcm_frames - c->pcm_base, cs->runtime->period_size);
 
 		if (period != c->pcm_last_period) {
 			c->pcm_last_period = period;
@@ -239,7 +263,7 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 		}
 	}
 	if (ps && READ_ONCE(c->play_running)) {
-		u64 period = div_u64(c->pcm_frames, ps->runtime->period_size);
+		u64 period = div_u64(c->pcm_frames - c->play_base, ps->runtime->period_size);
 
 		if (period != c->play_last_period) {
 			c->play_last_period = period;
@@ -420,33 +444,45 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
  * with a single frame clock; whichever direction prepares first arms it and the other just attaches at
  * the current clock position. Re-preparing an already-armed direction (xrun recovery) does not re-arm —
  * the free-running engine is undisturbed. Process context, so the mailbox handshake is safe here.
+ *
+ * Either way the direction records its attach point in the shared clock. ALSA resets hw_ptr to 0 on every
+ * prepare, so .pointer must report from there; without the base, a stream attaching to an already-running
+ * engine (a second direction, or the SAME one recovering from an xrun) saw its first .pointer return the
+ * engine's absolute position mod buffer_size. That reads as an enormous hw_ptr jump and the core xruns it
+ * within a tick — which then re-prepares, and xruns again. Audio stayed dead until every substream closed
+ * and the engine was torn down (a module reload, in practice).
  */
 static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
 	bool play = ss->stream == SNDRV_PCM_STREAM_PLAYBACK;
+	bool arm;
 	dma_addr_t r0, r1;
 
 	mutex_lock(&c->pcm_lock);
+	arm = !c->stream_on;
+	if (arm)			/* first direction in: the shared clock starts here */
+		c->pcm_frames = 0;
 	if (play) {
 		c->pcm_play_sub = ss;
+		c->play_base = c->pcm_frames;
 		c->play_last_period = 0;
 		WRITE_ONCE(c->play_running, false);
 	} else {
 		c->pcm_sub = ss;
+		c->pcm_base = c->pcm_frames;
 		c->pcm_last_period = 0;
 		WRITE_ONCE(c->pcm_running, false);
 	}
 	mutex_unlock(&c->pcm_lock);
 
-	if (c->stream_on)		/* engine already armed by the other direction: just attached */
+	if (!arm)			/* engine already armed: just attached at the current clock */
 		return 0;
 
 	/* First direction in: arm the full-duplex engine. block 0 (TX) base, block 1 (RX) base — in
 	 * descriptor mode each points at its table; r1 offset is clarett_stream_r1_off() for the mode. */
 	r0 = c->stream_dma;
 	r1 = c->stream_dma + clarett_stream_r1_off(c);
-	c->pcm_frames = 0;
 
 	/* In-session stream-config handshake immediately before arming, matching the VM (handshake ->
 	 * program regs -> arm). Establishes the device's stream routing/mode for this session. */
@@ -472,7 +508,8 @@ static int clarett_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
 	bool play = ss->stream == SNDRV_PCM_STREAM_PLAYBACK;
-	u64 period = div_u64(c->pcm_frames, ss->runtime->period_size);
+	u64 base = play ? c->play_base : c->pcm_base;
+	u64 period = div_u64(c->pcm_frames - base, ss->runtime->period_size);
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -498,9 +535,12 @@ static int clarett_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 static snd_pcm_uframes_t clarett_pcm_pointer(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
-	u64 frames = READ_ONCE(c->pcm_frames);
+	bool play = ss->stream == SNDRV_PCM_STREAM_PLAYBACK;
+	u64 base = play ? READ_ONCE(c->play_base) : READ_ONCE(c->pcm_base);
+	u64 frames = READ_ONCE(c->pcm_frames) - base;
 
-	/* frames % buffer_size, 64-bit-safe (do_div takes a u32 divisor; buffer_size fits easily). */
+	/* Position on THIS stream's clock (frames since it attached), % buffer_size — 64-bit-safe
+	 * (do_div takes a u32 divisor; buffer_size fits easily). */
 	return do_div(frames, ss->runtime->buffer_size);
 }
 

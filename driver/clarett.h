@@ -573,6 +573,15 @@ struct clarett {
 	bool pcm_running;			/* capture trigger START..STOP: gate period delivery */
 	bool play_running;			/* playback trigger START..STOP: gate period delivery */
 	u64 pcm_frames;				/* engine frame clock since arm (shared by both directions) */
+	/*
+	 * Where each direction joined that shared clock (its frame 0). The engine free-runs from the arm,
+	 * but ALSA zeroes hw_ptr at every prepare() — so a direction that attaches to an already-armed
+	 * engine, or re-prepares after an xrun, must report its position RELATIVE to this base or the
+	 * first .pointer call hands the core a huge hw_ptr jump and it xruns instantly. base % ring is
+	 * also the rotation between ALSA buffer offsets and hardware ring offsets in the tick's copies.
+	 */
+	u64 pcm_base;				/* capture: value of pcm_frames when it attached */
+	u64 play_base;				/* playback: value of pcm_frames when it attached */
 	u64 pcm_last_period;			/* last capture period index reported via period_elapsed */
 	u64 play_last_period;			/* last playback period index reported via period_elapsed */
 
