@@ -166,7 +166,9 @@ tools/fcp_*.c                         Bench tools driving the hwdep directly (st
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
                                       byte range, the only way to see what actually reached the device;
                                       fcp_meter_watch: which meter slot a channel moves; fcp_mux_probe:
-                                      MUX_READ windowing.
+                                      MUX_READ windowing; fcp_cap_read: the per-category CAP_READ bytes
+                                      + a GET_DATA probe (diagnoses fcp-server's "does not support
+                                      required INIT category" — unarmed device vs zero capabilities).
 vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).

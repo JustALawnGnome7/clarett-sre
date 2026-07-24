@@ -24,6 +24,7 @@ driver/*.log
 vendor-reference/
 
 # Compiled bench tools (sources are tools/fcp_*.c; build them where you need them)
+tools/fcp_cap_read
 tools/fcp_cfg_read
 tools/fcp_meter_watch
 tools/fcp_mux_probe
