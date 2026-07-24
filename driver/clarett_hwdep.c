@@ -260,11 +260,20 @@ static int clarett_hwdep_set_meter_map(struct clarett *c, struct fcp_meter_map _
 	if (copy_from_user(&map, arg, sizeof(map)))
 		return -EFAULT;
 
-	/* Geometry is frozen once the control exists (fcp.c does the same). */
+	/* Geometry is frozen once the control exists (fcp.c does the same: an ALSA control's channel
+	 * count cannot change live). A map that changed size — e.g. after editing fcp-server-data — is
+	 * rejected until the control is recreated, which means a driver reload. Say so: the bare EINVAL
+	 * surfaces in fcp-server only as "Cannot set meter map: Invalid argument". */
 	if (c->hwdep_meter_ctl &&
 	    (map.map_size != c->hwdep_meter_channels ||
-	     map.meter_slots != c->hwdep_n_meter_slots))
+	     map.meter_slots != c->hwdep_n_meter_slots)) {
+		dev_warn(&c->pci->dev,
+			 "meter map geometry changed (%u->%u channels, %u->%u slots) but the Level Meter "
+			 "control already exists; reload the module to apply the new map\n",
+			 c->hwdep_meter_channels, map.map_size,
+			 c->hwdep_n_meter_slots, map.meter_slots);
 		return -EINVAL;
+	}
 	if (map.map_size < 1 || map.map_size > 255 ||
 	    map.meter_slots < 1 || map.meter_slots > 255 ||
 	    map.meter_slots * sizeof(__le32) > resp_cap)	/* GET_METER response must fit resp_buf */
