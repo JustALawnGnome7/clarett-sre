@@ -258,6 +258,16 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 
   So arming is unconditional (cost: one ~232-command replay per probe). `skip_arm=1` restores the old
   skip for A/B testing. `tools/fcp_cap_read.c` dumps the capability bytes. Transport §8.
+  - **But re-arming is NOT side-effect-free — it resets ROUTING/MIXER (July 23 2026).** The bring-up's
+    `SET_MUX`×3 + `SET_MIX`×16 carry the vendor **default** routing, so replaying them on a reload wiped
+    the user's GUI routing back to default ("re-arming is safe" meant only "doesn't wedge `GET_DATA`",
+    not "no side effects"). **HANDLED:** probe reads live band-0 routing first (`clarett_band0_routed`,
+    `MUX_READ` opcode `0x003001`); if any destination is already patched, `clarett_arm_device(preserve=1)`
+    skips **only** the `SET_MUX`/`SET_MIX` steps and keeps everything else. This is a **content**
+    discriminator (routing present) where no *liveness* one exists: a fresh device reads empty and gets
+    the full default-routing arm; a configured one keeps its routes and still gets metering/subsystem
+    setup. Log line: `arm: preserved live routing/mixer (N ... steps skipped)`. Survives reloads; a power
+    cycle still returns to the device's own retained state.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported

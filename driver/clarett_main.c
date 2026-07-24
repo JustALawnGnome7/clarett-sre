@@ -571,9 +571,43 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
  * input meters. Probe arms unconditionally instead.
  */
 
-static int clarett_arm_device(struct clarett *c)
+/*
+ * How many band-0 destinations are actively routed (source != 0)? A configured device — whether it holds
+ * the vendor default or a user's edits — answers with a populated table; a device that has never had
+ * routing pushed answers empty (or refuses, returning <0). This is the discriminator the arm uses to
+ * decide whether to replay its default SET_MUX/SET_MIX (which would overwrite a user's routing) or leave
+ * the live routing alone. It reads CONTENT, not session liveness — the thing that actually distinguishes
+ * a fresh device from an armed one, which nothing host-visible does (see the always-arm note).
+ */
+static int clarett_band0_routed(struct clarett *c)
 {
-	int i, err, fails = 0, echoed = 0, verbatim = 0;
+	u8 req[4] = { 0, 0, CLARETT_MUX_READ_MAX, 0 };	/* offset, pad, count, band 0 */
+	const u8 *r = c->resp_buf;
+	int i, routed = 0;
+
+	if (clarett_fcp(c, FCP_MUX_READ, req, sizeof(req)))
+		return -EIO;
+	dma_rmb();	/* order the DMAed response before reading resp_buf */
+	if (clarett_get_le32(r + FCP_RESP_ECHO_OFF) != (CMD_EXEC_FLAG | FCP_MUX_READ))
+		return -EIO;
+	for (i = 0; i < CLARETT_MUX_READ_MAX; i++) {
+		u32 e = clarett_get_le32(r + FCP_RESP_DATA_OFF + i * 4);
+
+		if ((e >> 12) & 0xfff)	/* a real source patched to this destination */
+			routed++;
+	}
+	return routed;
+}
+
+/*
+ * preserve_routing: skip the SET_MUX/SET_MIX steps of the bring-up, keeping whatever routing/mixer the
+ * device already holds. Every other step still runs (subsystem enables, config read/writeback, metering),
+ * so a reload no longer resets the user's routing to the vendor default while still doing the arm a
+ * fresh device needs. See clarett_band0_routed() for how the caller decides.
+ */
+static int clarett_arm_device(struct clarett *c, bool preserve_routing)
+{
+	int i, err, fails = 0, echoed = 0, verbatim = 0, skipped = 0;
 	bool clk_sent = false;
 	unsigned long *have = NULL;
 	u8 *cfg, *wb = NULL;
@@ -591,6 +625,14 @@ static int clarett_arm_device(struct clarett *c)
 	for (i = 0; i < c->model->n_init_steps; i++) {
 		const struct clarett_init_step *s = &c->model->init_seq[i];
 		const u8 *payload = c->model->init_blob + s->off;
+
+		/* Leave the device's live routing/mixer in place when asked: these two opcodes are the
+		 * only ones that overwrite it, and they carry the vendor default in the init blob. */
+		if (preserve_routing &&
+		    (s->opcode == FCP_SET_MUX || s->opcode == FCP_SET_MIX)) {
+			skipped++;
+			continue;
+		}
 
 		/*
 		 * SET_CLOCK before CONFIG_PUSH. FC issues 0x6003 at device-open, ahead of the config/routing
@@ -666,6 +708,10 @@ static int clarett_arm_device(struct clarett *c)
 		dev_info(&c->pci->dev,
 			 "arm: writeback echoed live device state (%d echoed, %d verbatim)\n",
 			 echoed, verbatim);
+	if (skipped)
+		dev_info(&c->pci->dev,
+			 "arm: preserved live routing/mixer (%d SET_MUX/SET_MIX steps skipped)\n",
+			 skipped);
 
 	kfree(wb);
 	bitmap_free(have);
@@ -1657,13 +1703,20 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		c->model = armed_with;
 	}
 	/*
-	 * Always arm. Nothing host-visible tells a fresh device from an armed one, and re-arming an armed
-	 * one is harmless (see skip_arm) — whereas missing the bring-up costs the input meters silently.
+	 * Always arm — nothing host-visible tells a fresh device from an armed one, and missing the
+	 * bring-up costs the input meters silently. But re-arming is NOT side-effect-free: the bring-up's
+	 * SET_MUX/SET_MIX steps carry the vendor DEFAULT routing, so replaying them on a device that
+	 * already holds a user's routing resets it. Read the live band-0 routing first; if it is already
+	 * populated, arm while preserving it (skip only those two step kinds). A fresh/unconfigured device
+	 * reads empty (or refuses the read) and gets the full arm, default routing included.
 	 */
-	if (skip_arm)
+	if (skip_arm) {
 		dev_info(&pci->dev, "skip_arm=1: not replaying the vendor bring-up\n");
-	else
-		clarett_arm_device(c);
+	} else {
+		int routed = clarett_band0_routed(c);
+
+		clarett_arm_device(c, routed > 0);
+	}
 	c->model = forced ? forced : armed_with;
 
 	/* The armed device can say who it is; everything model-dependent (PCM geometry, card

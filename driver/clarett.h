@@ -188,6 +188,14 @@ struct snd_pcm_substream;
  */
 #define FCP_GET_METER            0x001001
 #define CLARETT_METER_POLL_MS    40
+
+/*
+ * MUX_READ: read back the routing table. Request {u8 offset, u8 pad, u8 count, u8 band}; reply is an
+ * array of u32 entries (src << 12 | dst), capped at 28 per reply (transport §8). Used at probe to tell
+ * an already-configured device (routing present — do not clobber) from an unconfigured one.
+ */
+#define FCP_MUX_READ             0x003001
+#define CLARETT_MUX_READ_MAX     28
 /*
  * Minimum spacing between GET_METER device polls from the meter control's .get. The mixer GUI reads the
  * control at its UI refresh rate (30-60 Hz); a device command per read floods the mailbox and disrupts
