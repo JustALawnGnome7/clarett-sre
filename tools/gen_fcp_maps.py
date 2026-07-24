@@ -141,6 +141,31 @@ def name_sources(srcs):
 # for the line outputs (18-23, immediately after its 18 record channels), but Analogue 1/2 lit slots
 # 28/29 where 6 line + 2 S/PDIF outputs would put Mixer Input 01/02 at 26/27. Two slots unaccounted for.
 # Its mixer/output entries are therefore NOT mapped here pending a re-measure on that hardware.
+#
+# Narrowed July 24 2026 (analysis only, no 4Pre attached):
+#   - The reading really does pin the MIXER BASE AT 28. It could have been an artefact of assuming the
+#     default patch sends Analogue 1/2 to Mixer Input 01/02 — but the 4Pre's own band-0 table says it
+#     does (Analogue 1 -> Mixer Input 01, Analogue 2 -> Mixer Input 02; Mixer Input 03/04 take PCM 1/2).
+#     So Mixer Input 01 == slot 28 and the residual really is exactly 2 slots.
+#   - The 4Pre's router HAS S/PDIF output destinations (0x186/0x187) where the 2Pre's has none, so its
+#     physical-output block is a full 6 line + 2 S/PDIF = 8 slots. 18 record + 8 = 26, still 2 short.
+#   - TWO HYPOTHESES FIT, and they differ in where the line outputs sit:
+#     (a) THE LOOPBACK PAIR IS METERED on this model: record block = 20 (all PCM destinations, not just
+#         the 18 record channels), outputs 20-27, mixer 28-57. Arithmetically exact, and it makes the
+#         output block equal the router's own destination count. It requires the historical "line
+#         outputs at 18-23" to be wrong by 2 — plausible, since every 4Pre reading predates the
+#         destination model and was re-attributed, and a single systematic +2 explains all of them.
+#     (b) The output block is 10 slots (6 line + 2 S/PDIF + 2 dark/unknown), record block stays 18,
+#         line outputs at 18-23 as recorded. Needs an unexplained pair of reserved slots.
+#     The 2Pre is evidence AGAINST (a) — its loopback (PCM 13/14) is provably NOT metered, since line
+#     outputs were measured at 12-15 directly after its 12 record channels. But "one firmware family"
+#     is an assumption, not an observation, and it is exactly what the 2-slot residual is questioning.
+#   - DECISIVE TEST (one route change on 4Pre hardware, tools/fcp_meter_watch): put signal on Analogue 1
+#     and route it to LINE OUTPUT 1 alone. Slot 18 => hypothesis (b); slot 20 => hypothesis (a), and the
+#     whole map then follows from base 20 with mixer at 28. Confirm with a second route to Line Output 6
+#     (23 vs 25) and one mixer input (Mixer Input 30 => 57 either way).
+#   Do NOT fill these in from the rule until that test is run: a wrong meter map is silent — every meter
+#   in the GUI just labels the wrong channel.
 METER_SLOTS = {}
 
 # Destination (and mixer-input) peak-indexes. These sit past what METER_INFO advertises: fcp-server

@@ -2198,10 +2198,11 @@ static const struct clarett_model clarett_8prex = {
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
  * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
- * trace). The bring-up replay is the captured 2Pre attach (clarett_init_2pre.h). Selected via the model=
- * param: the whole Clarett TB line shares PCI id 1cb5:0002 and an identical PCIe interface, so the model
- * is NOT auto-detectable (verified: every MMIO reg / FCP response / config read / PCI config byte is
- * identical to the 8PreX, and these TB2 units expose no DROM device_name to disambiguate by either).
+ * trace). The bring-up replay is the captured 2Pre attach (clarett_init_2pre.h). Auto-detected after the
+ * arm by its (4,14) geometry (clarett_detect_model); model=2pre forces it. The PRE-mailbox surface really
+ * is undifferentiated — every MMIO reg / config read / PCI config byte is identical to the 8PreX, and
+ * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
+ * armed enough to answer GET_7.1.
  * PCM uses the per-direction descriptor path (shared with the 8PreX): on hardware the engine dereferences
  * the ring base as a descriptor table (the 0xAA flat-buffer attempt faulted at 0xaaaa.. — descriptor mode
  * is the engine's default and is not flipped by the stream-config FCP handshake we can replay). Asymmetric
@@ -2265,9 +2266,9 @@ static const struct clarett_model clarett_2pre = {
 
 /*
  * Clarett 4Pre (Thunderbolt). Control plane from vendor-reference/Devices/Clarett 4Pre.xml [XML],
- * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Selected via model=4pre;
- * the whole TB line shares PCI id 1cb5:0002 and is not auto-detectable. See
- * spec/clarett-control-plane.md §4 and -data-plane.md §3b.
+ * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Auto-detected after the
+ * arm by its (8,20) geometry, live-confirmed July 17 2026 (clarett_detect_model); model=4pre forces it.
+ * See spec/clarett-control-plane.md §4 and -data-plane.md §3b.
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
