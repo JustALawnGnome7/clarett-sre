@@ -40,11 +40,12 @@ MODULE_PARM_DESC(blk1_only,
 		 "Engine-probe isolation: configure ONLY ring block 1 (0x300, capture) and enable it via "
 		 "0x30c, leaving block 0 (0x200) untouched. Isolates whether the capture writes are block 1's.");
 
-static bool enable_pcm;
+static bool enable_pcm = true;
 module_param(enable_pcm, bool, 0444);
 MODULE_PARM_DESC(enable_pcm,
-		 "Register a capture PCM device (28ch S32_LE @48k, ring block 1) driven by the 0x300 "
-		 "servicer. Experimental data-plane bring-up; mutually exclusive with stream_probe.");
+		 "Register the PCM devices (playback + capture, S32_LE @48k, descriptor-ring engine driven "
+		 "by the 0x300 servicer). Default on — hardware-confirmed capture and full-duplex playback on "
+		 "the 2Pre. Set 0 for a mixer-only card, or when using stream_probe (mutually exclusive).");
 
 static int rekick;
 module_param(rekick, int, 0444);

@@ -194,8 +194,8 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 
 ## Driver limitations / TODO
 
-- **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (opt-in
-  `enable_pcm=1`) registers a 28ch S32_LE @48k capture device, driven by the persistent `0x300` servicer
+- **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (on by
+  default, `enable_pcm`) registers a 28ch S32_LE @48k capture device, driven by the persistent `0x300` servicer
   (`clarett_pcm_tick` → `snd_pcm_period_elapsed`). Hardware-confirmed this session:
   - The engine clocks via the PCM path (248-period burst, `ctr=0x1b3`) — requires (a) one **contiguous**
     buffer for both rings, (b) **full-duplex** arming (silent dummy TX on block 0; block-1-only won't

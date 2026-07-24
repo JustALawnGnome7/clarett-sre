@@ -203,7 +203,7 @@ Never load this while the VM is using the device.
   control plane; that attribution died with the wall and the stall is **unexplained**.
   Our post-arm state is byte-identical to the vendor's, whose own arms stall the same way
   several times before streaming, so the engine setup is exonerated and the next lead is
-  the TX ring's contents. Experimental capture PCM is opt-in (`enable_pcm=1`).
+  the TX ring's contents. The PCM devices are on by default (`enable_pcm`, set 0 for mixer-only).
 - **The config shadow is write-through.** `clarett_set_data()` keeps a shadow of the config space so
   the probe-time monitor-enable write can do a correct read-modify-write. It is seeded from the
   device at probe (`GET_DATA(24,92)`); bytes the device never reports back stay at their written
