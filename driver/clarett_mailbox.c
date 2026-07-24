@@ -138,6 +138,15 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 	if (len > CLARETT_MBOX_DATA_MAX)
 		return -EINVAL;
 
+	/*
+	 * A removed device answers every MMIO read with ~0 and swallows writes, so the gated cycle
+	 * would wait out its full timeout for a response that can never land — once per command, for
+	 * every command still queued when the Thunderbolt cable is pulled or the unit is switched
+	 * off. Fail fast instead; the PCI core sets this the moment the link goes.
+	 */
+	if (pci_dev_is_disconnected(c->pci))
+		return -ENODEV;
+
 	mutex_lock(&c->mbox_lock);
 
 	/* Old cycle only: the leading ACK. The vendor NEVER acks before a submit — its ack

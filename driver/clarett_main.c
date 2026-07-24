@@ -979,6 +979,12 @@ static int clarett_stream_service(void *data)
 			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 command-phase/notify — mailbox's during a command */
 			readl(bar + 0x500);		/* 0x500 IRQ summary */
 		}
+		/* ~0 everywhere means the device left the bus (cable pulled, unit switched off). Stop
+		 * rather than feed ALSA periods synthesised from a dead register: bit31 is set in ~0, so
+		 * every read would otherwise look like a period event with a glitched counter. */
+		if (c2 == 0xffffffff && pci_dev_is_disconnected(c->pci))
+			break;
+
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
 			u32 step;
@@ -1829,6 +1835,23 @@ static void clarett_remove(struct pci_dev *pci)
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct clarett *c = card->private_data;
 	void __iomem *bar0 = c->bar0;
+
+	/*
+	 * Stop the stream servicer FIRST, before any of the card teardown.
+	 *
+	 * snd_card_free() frees the PCM devices — and with them each substream's runtime and
+	 * runtime->dma_area — before it calls card->private_free (clarett_card_free), which is where
+	 * the servicer used to be stopped. A servicer still ticking across that window dereferences a
+	 * freed capture buffer in clarett_pcm_tick(). Unloading the module normally hides this because
+	 * userspace has already closed the PCM, but a SURPRISE REMOVAL — the unit powered off mid-
+	 * stream — leaves the engine armed and the servicer running straight into the free.
+	 *
+	 * c->pcm_lock does not help: it serialises the tick against our own hw_free, not against ALSA
+	 * tearing the substream down underneath us.
+	 */
+	WRITE_ONCE(c->ctl_ready, false);	/* no new notify work from the ISR */
+	cancel_delayed_work_sync(&c->meter_work);
+	clarett_engine_stop(c);
 
 	/* Blocks: disconnect → wait for the last userspace handle to close (the final
 	 * mailbox transactions run the normal MSI-paced cycle) → clarett_card_free()
