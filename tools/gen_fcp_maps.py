@@ -117,78 +117,32 @@ def name_sources(srcs):
 # slot that channel's level lands in. USB FCP devices read these from the device's own devmap; the
 # Clarett TB line serves none (DEVMAP_INFO returns size 0), so they have to be MEASURED — put signal
 # on one channel at a time and see which slot moves (tools/fcp_meter_watch.c).
+# ---------------------------------------------------------------------------------------------------
+# SOURCE peak-indexes: NONE. The Clarett meters DESTINATIONS ONLY.
 #
-# Measured on a Clarett 4Pre, July 20 2026. Signal on analogue inputs 1-4 moved slots 0,1,2,3
-# respectively — four independent readings, so the "analogue input N -> slot N-1" rule is solid.
-# Inputs 1 and 2 additionally lit slots 18-23 (all six line outputs, via the mix they feed) and
-# slots 28/29; inputs 3 and 4 lit nothing else, which is exactly right — the routing table patches
-# only Analogue 1/2 into the mixer (400->300, 401->301), so 3/4 reach neither the buses nor the
-# outputs. That also refutes reading 28-47 as PCM captures: 0x402 -> 0x602 would have lit a PCM
-# slot for input 3, and none moved.
+# This table used to carry twelve "physical input" slots per model. That reading was wrong, and wrong in
+# a way that could not be caught by the measurements that produced it: the device's default routing sends
+# Analogue 1 -> PCM 1, S/PDIF -> PCM 3/4 and ADAT -> PCM 5-12, so "signal on Analogue 1 lights slot 0" is
+# predicted identically by "slot 0 meters the input" and "slot 0 meters PCM 1". Every historical
+# measurement was taken under default routing and so could not distinguish them.
 #
-# ONLY the 4Pre is listed. The slot order is not transferable: the models differ in ADAT width
-# (8 vs 16) and in their analogue pin blocks (the 2Pre's inputs are 0x400/0x402, skipping 0x401,
-# and it reaches S/PDIF at 0x186/0x187), so any other model must be measured on its own hardware.
-METER_SLOTS = {
-    # Measured on a 2Pre: analogue in 1/2 -> slots 0/1, S/PDIF in 1/2 -> slots 2/3. Its router pins
-    # are 0x400/0x402 (0x401 skipped) and S/PDIF is at 0x186/0x187, yet the slots are 0..3 — meter
-    # slots are a COMPACT CHANNEL INDEX, unrelated to pin numbering.
-    #
-    # THE RULE, measured: slots are packed PER MODEL in category order — analogue inputs fill
-    # 0..n-1, then S/PDIF, then ADAT. The 2Pre is now mapped end to end and confirms it exactly:
-    # analogue 0-1, S/PDIF 2-3, ADAT 4-11. The 4Pre's S/PDIF at 8/9 (after its 8 analogue) is the
-    # same rule, and its ADAT was then measured at exactly the predicted 10-17.
-    #
-    # METER_INFO answers 00 02 0c 00 on BOTH models. The 12 is exactly the 2Pre's input count
-    # (2+2+8) but not the 4Pre's (8+2+8 = 18), so a single per-model count it is not. Reading the
-    # bytes as {?, 2, 12} suggests 2 x 12 = 24 total slots, which would cover both — untested, and
-    # it matters: fcp-server bounds peak-index by this value, so if the real bound is 24 rather
-    # than 12 the 4Pre's ADAT becomes reachable too.
-    "clarett-2pre": {
-        0x400: (0, "measured"), 0x402: (1, "measured"),
-        0x186: (2, "measured"), 0x187: (3, "measured"),   # S/PDIF in (optical)
-        0x200: (4,  "measured"), 0x201: (5,  "measured"),  # ADAT 1-8, fed from an optical source
-        0x202: (6,  "measured"), 0x203: (7,  "measured"),
-        0x204: (8,  "measured"), 0x205: (9,  "measured"),
-        0x206: (10, "measured"), 0x207: (11, "measured"),
-    },
-    "clarett-4pre": {
-        # pin: (slot, provenance)
-        0x400: (0,  "measured"), 0x401: (1,  "measured"),
-        0x402: (2,  "measured"), 0x403: (3,  "measured"),
-        # Inputs 5 and 8 were excited directly (finger-tap on a line input, so only ~30 counts —
-        # under the tool's flag threshold, but they were the ONLY non-zero slots in the array).
-        # 6 and 7 are bracketed between them and cannot be anywhere else.
-        0x404: (4,  "measured-weak"), 0x405: (5,  "bracketed"),
-        0x406: (6,  "bracketed"),     0x407: (7,  "measured-weak"),
-        # Optical S/PDIF into the 4Pre (source byte @132 = Optical) lit 8 and 9 together.
-        0x408: (8,  "measured"), 0x409: (9,  "measured"),
-        # ADAT via the optical port (S/PDIF source back to RCA) lit 10-17 — exactly what the
-        # packing rule predicted from the analogue and S/PDIF placements.
-        0x200: (10, "measured"), 0x201: (11, "measured"),
-        0x202: (12, "measured"), 0x203: (13, "measured"),
-        0x204: (14, "measured"), 0x205: (15, "measured"),
-        0x206: (16, "measured"), 0x207: (17, "measured"),
-    },
-    # PREDICTED, not measured — the one model here with no measurement on it. The packing rule is a
-    # function of the input geometry alone, and the 8Pre's is identical to the 4Pre's (8 analogue at
-    # 0x400-0x407, 2 S/PDIF at 0x408/0x409, 8 ADAT at 0x200-0x207), so the whole table is the 4Pre's.
-    # Included rather than left out because every slot is inside the bound fcp-server enforces, so
-    # the cost of being wrong is meters against the wrong channel names, not a discarded map — and
-    # it makes the prediction falsifiable on first contact with the hardware (tools/fcp_meter_watch.c
-    # against one input at a time; if it disagrees, the rule itself is wrong and wants revisiting).
-    "clarett-8pre": {
-        0x400: (0,  "predicted"), 0x401: (1,  "predicted"),
-        0x402: (2,  "predicted"), 0x403: (3,  "predicted"),
-        0x404: (4,  "predicted"), 0x405: (5,  "predicted"),
-        0x406: (6,  "predicted"), 0x407: (7,  "predicted"),
-        0x408: (8,  "predicted"), 0x409: (9,  "predicted"),
-        0x200: (10, "predicted"), 0x201: (11, "predicted"),
-        0x202: (12, "predicted"), 0x203: (13, "predicted"),
-        0x204: (14, "predicted"), 0x205: (15, "predicted"),
-        0x206: (16, "predicted"), 0x207: (17, "predicted"),
-    },
-}
+# Re-routing tells them apart, and it was measured on a 2Pre July 23 2026: with signal on Analogue 1,
+# moving that input from PCM 1 to PCM 3 moved the meter from slot 0 to slot 2. The slot follows the PCM
+# CHANNEL, not the input. So slots 0..n-1 are the record/capture destinations.
+#
+# The whole 48-slot array is destinations, which is why it is exactly 48 on a 2Pre:
+#   PCM 01-12 (12 record channels; the 2 loopback channels are NOT metered)
+#   Line Output 1-4 (12-15), S/PDIF Output 1-2 (16-17, dark - no router destination on this unit)
+#   Mixer Input 01-30 (18-47)
+# The record-channel count is what sets the base for everything after it: 12 on the 2Pre, 18 on the
+# 4Pre/8Pre (capture_channels minus the 2 loopback pins).
+#
+# OPEN, 4Pre: its historical readings fit this rule for the record block (analogue 1-4 -> slots 0-3) and
+# for the line outputs (18-23, immediately after its 18 record channels), but Analogue 1/2 lit slots
+# 28/29 where 6 line + 2 S/PDIF outputs would put Mixer Input 01/02 at 26/27. Two slots unaccounted for.
+# Its mixer/output entries are therefore NOT mapped here pending a re-measure on that hardware.
+METER_SLOTS = {}
+
 # Destination (and mixer-input) peak-indexes. These sit past what METER_INFO advertises: fcp-server
 # used to reject any index >= that count, and ONE out-of-range entry discards the whole meter map
 # (meter.c goto done), so this table was empty. That bound is now treated as a floor - fcp-server
@@ -215,12 +169,24 @@ METER_SLOTS_DST = {
     # The 4Pre's earlier measurements fit the same rule: 18 inputs, line outputs at 18-23, mixer inputs at
     # 26+ (28/29 seen). So the mixer-input base is 12 + n_physical_outputs, per model.
     "clarett-2pre": {
+        # PCM 01-12, the record channels, at slots 0-11. PCM 1 -> slot 0 and PCM 3 -> slot 2 were
+        # measured directly by re-routing one input between them; the rest follow the stride and were
+        # each seen lit under default routing (analogue 1/2, S/PDIF, ADAT 1-8, in that order).
+        # PCM 13/14 are the loopback pair and are NOT metered — slots 12/13 are the line outputs.
+        **{0x600 + i: (i, "measured" if i in (0, 2) else "stride") for i in range(12)},
         1024: (12, "measured"), 1025: (13, "measured"),  # Line Output 1-2 (Monitor L/R)
         1026: (14, "measured"), 1027: (15, "measured"),  # Line Output 3-4
         # Mixer Input 01-30 at pins 0x300.. -> slots 18.. (01/02/05/13/30 measured, rest by the stride)
         **{0x300 + i: (18 + i, "measured" if i in (0, 1, 4, 12, 29) else "stride")
            for i in range(30)},
     },
+    # 4Pre/8Pre: the record block only. Same mechanism as the 2Pre (it is one firmware family) applied to
+    # their 18 record channels, so the twelve/eighteen readings taken under default routing are carried
+    # over rather than discarded — but re-attributed to the PCM channel that was actually being metered,
+    # which is what the 2Pre re-routing test showed. Their outputs and mixer inputs stay unmapped until
+    # measured: the 4Pre's Analogue 1/2 lit slots 28/29 where this layout predicts 26/27 (see above).
+    "clarett-4pre": {0x600 + i: (i, "reinterpreted") for i in range(18)},
+    "clarett-8pre": {0x600 + i: (i, "predicted") for i in range(18)},
 }
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)

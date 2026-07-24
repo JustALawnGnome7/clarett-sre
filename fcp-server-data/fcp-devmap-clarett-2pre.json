@@ -178,63 +178,43 @@
     "sources": [
       {
         "name": "S/PDIF 1",
-        "router-pin": "390",
-        "peak-index": 2,
-        "_peak-index-provenance": "measured"
+        "router-pin": "390"
       },
       {
         "name": "S/PDIF 2",
-        "router-pin": "391",
-        "peak-index": 3,
-        "_peak-index-provenance": "measured"
+        "router-pin": "391"
       },
       {
         "name": "ADAT 1",
-        "router-pin": "512",
-        "peak-index": 4,
-        "_peak-index-provenance": "measured"
+        "router-pin": "512"
       },
       {
         "name": "ADAT 2",
-        "router-pin": "513",
-        "peak-index": 5,
-        "_peak-index-provenance": "measured"
+        "router-pin": "513"
       },
       {
         "name": "ADAT 3",
-        "router-pin": "514",
-        "peak-index": 6,
-        "_peak-index-provenance": "measured"
+        "router-pin": "514"
       },
       {
         "name": "ADAT 4",
-        "router-pin": "515",
-        "peak-index": 7,
-        "_peak-index-provenance": "measured"
+        "router-pin": "515"
       },
       {
         "name": "ADAT 5",
-        "router-pin": "516",
-        "peak-index": 8,
-        "_peak-index-provenance": "measured"
+        "router-pin": "516"
       },
       {
         "name": "ADAT 6",
-        "router-pin": "517",
-        "peak-index": 9,
-        "_peak-index-provenance": "measured"
+        "router-pin": "517"
       },
       {
         "name": "ADAT 7",
-        "router-pin": "518",
-        "peak-index": 10,
-        "_peak-index-provenance": "measured"
+        "router-pin": "518"
       },
       {
         "name": "ADAT 8",
-        "router-pin": "519",
-        "peak-index": 11,
-        "_peak-index-provenance": "measured"
+        "router-pin": "519"
       },
       {
         "name": "Mix A",
@@ -246,15 +226,11 @@
       },
       {
         "name": "Analogue 1",
-        "router-pin": "1024",
-        "peak-index": 0,
-        "_peak-index-provenance": "measured"
+        "router-pin": "1024"
       },
       {
         "name": "Analogue 2",
-        "router-pin": "1026",
-        "peak-index": 1,
-        "_peak-index-provenance": "measured"
+        "router-pin": "1026"
       },
       {
         "name": "PCM 1",
@@ -502,51 +478,75 @@
       },
       {
         "name": "PCM 01",
-        "router-pin": "1536"
+        "router-pin": "1536",
+        "peak-index": 0,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 02",
-        "router-pin": "1537"
+        "router-pin": "1537",
+        "peak-index": 1,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 03",
-        "router-pin": "1538"
+        "router-pin": "1538",
+        "peak-index": 2,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "PCM 04",
-        "router-pin": "1539"
+        "router-pin": "1539",
+        "peak-index": 3,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 05",
-        "router-pin": "1540"
+        "router-pin": "1540",
+        "peak-index": 4,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 06",
-        "router-pin": "1541"
+        "router-pin": "1541",
+        "peak-index": 5,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 07",
-        "router-pin": "1542"
+        "router-pin": "1542",
+        "peak-index": 6,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 08",
-        "router-pin": "1543"
+        "router-pin": "1543",
+        "peak-index": 7,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 09",
-        "router-pin": "1544"
+        "router-pin": "1544",
+        "peak-index": 8,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 10",
-        "router-pin": "1545"
+        "router-pin": "1545",
+        "peak-index": 9,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 11",
-        "router-pin": "1546"
+        "router-pin": "1546",
+        "peak-index": 10,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 12",
-        "router-pin": "1547"
+        "router-pin": "1547",
+        "peak-index": 11,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 13",
