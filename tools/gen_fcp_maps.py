@@ -273,13 +273,13 @@ MODELS = {
     # PCM source pin per playback channel (0x600 + i), but a captured band-0 table only routes a handful
     # by default, so the full range is added explicitly rather than harvested (see the src_pins union).
     "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
-                          n_analogue=2, outputs=4, pcm_out=4,
+                          n_analogue=2, outputs=4, pcm_out=4, mix_out=16,
                           modes={0: "li2", 1: "li2"}),
     "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="4pre",
-                          n_analogue=4, outputs=6, pcm_out=8,
+                          n_analogue=4, outputs=6, pcm_out=8, mix_out=16,
                           modes={0: "li2", 1: "li2"}),
     "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level", init=None,
-                          n_analogue=8, outputs=10, pcm_out=20,
+                          n_analogue=8, outputs=10, pcm_out=20, mix_out=16,
                           modes={0: "li2", 1: "li2"},
                           # No capture for this model: routing is constructed instead, and the
                           # driver pushes the same table (see synth_band0_8pre).
@@ -455,6 +455,12 @@ for slug, spec in MODELS.items():
         # by default (the 4Pre default routes only PCM 1/2/7/8), but every playback channel is a valid
         # router source. Add 0x600 .. 0x600+pcm_out-1 so all of PCM 1..pcm_out are selectable.
         src_pins |= {0x600 + i for i in range(spec.get("pcm_out", 0))}
+        # Same story for the mix-bus outputs (Mix A..): a captured band-0 table only routes the buses
+        # the default patch uses (the 2Pre routes only A/B, the 4Pre A-F), but every Clarett Plus model
+        # has the full set of mix buses — [XML] <mixes num="16"> on the 2Pre/4Pre/8Pre alike — and each
+        # is a valid router source. Add 0x300 .. 0x300+mix_out-1 so all of Mix A..P are selectable.
+        # (Focusrite Control's own GUI surfaces only A-J, a subset, as it does 18 of the 30 mix inputs.)
+        src_pins |= {0x300 + i for i in range(spec.get("mix_out", 0))}
         src_names = name_sources(src_pins)
         dst_names = name_destinations({d for _, d in pairs}, slug)
         assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"

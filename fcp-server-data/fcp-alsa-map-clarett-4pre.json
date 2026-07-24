@@ -171,6 +171,46 @@
       "alsa_name": "Mix F"
     },
     {
+      "device_name": "Mix G",
+      "alsa_name": "Mix G"
+    },
+    {
+      "device_name": "Mix H",
+      "alsa_name": "Mix H"
+    },
+    {
+      "device_name": "Mix I",
+      "alsa_name": "Mix I"
+    },
+    {
+      "device_name": "Mix J",
+      "alsa_name": "Mix J"
+    },
+    {
+      "device_name": "Mix K",
+      "alsa_name": "Mix K"
+    },
+    {
+      "device_name": "Mix L",
+      "alsa_name": "Mix L"
+    },
+    {
+      "device_name": "Mix M",
+      "alsa_name": "Mix M"
+    },
+    {
+      "device_name": "Mix N",
+      "alsa_name": "Mix N"
+    },
+    {
+      "device_name": "Mix O",
+      "alsa_name": "Mix O"
+    },
+    {
+      "device_name": "Mix P",
+      "alsa_name": "Mix P"
+    },
+    {
       "device_name": "PCM 1",
       "alsa_name": "PCM 1"
     },

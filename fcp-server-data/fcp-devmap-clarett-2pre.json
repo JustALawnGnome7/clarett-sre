@@ -233,6 +233,62 @@
         "router-pin": "769"
       },
       {
+        "name": "Mix C",
+        "router-pin": "770"
+      },
+      {
+        "name": "Mix D",
+        "router-pin": "771"
+      },
+      {
+        "name": "Mix E",
+        "router-pin": "772"
+      },
+      {
+        "name": "Mix F",
+        "router-pin": "773"
+      },
+      {
+        "name": "Mix G",
+        "router-pin": "774"
+      },
+      {
+        "name": "Mix H",
+        "router-pin": "775"
+      },
+      {
+        "name": "Mix I",
+        "router-pin": "776"
+      },
+      {
+        "name": "Mix J",
+        "router-pin": "777"
+      },
+      {
+        "name": "Mix K",
+        "router-pin": "778"
+      },
+      {
+        "name": "Mix L",
+        "router-pin": "779"
+      },
+      {
+        "name": "Mix M",
+        "router-pin": "780"
+      },
+      {
+        "name": "Mix N",
+        "router-pin": "781"
+      },
+      {
+        "name": "Mix O",
+        "router-pin": "782"
+      },
+      {
+        "name": "Mix P",
+        "router-pin": "783"
+      },
+      {
         "name": "PCM 1",
         "router-pin": "1536"
       },
