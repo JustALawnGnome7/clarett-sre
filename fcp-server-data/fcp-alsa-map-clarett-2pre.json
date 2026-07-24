@@ -137,6 +137,14 @@
     {
       "device_name": "PCM 2",
       "alsa_name": "PCM 2"
+    },
+    {
+      "device_name": "PCM 3",
+      "alsa_name": "PCM 3"
+    },
+    {
+      "device_name": "PCM 4",
+      "alsa_name": "PCM 4"
     }
   ],
   "sinks": [

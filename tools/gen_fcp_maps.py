@@ -212,21 +212,24 @@ METER_SLOTS_DST = {
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
 MODELS = {
+    # pcm_out = PCM playback channel count (GET_7.2 / driver playback_channels). The router exposes one
+    # PCM source pin per playback channel (0x600 + i), but a captured band-0 table only routes a handful
+    # by default, so the full range is added explicitly rather than harvested (see the src_pins union).
     "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
-                          n_analogue=2, outputs=4,
+                          n_analogue=2, outputs=4, pcm_out=4,
                           modes={0: "li2", 1: "li2"}),
     "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="4pre",
-                          n_analogue=4, outputs=6,
+                          n_analogue=4, outputs=6, pcm_out=8,
                           modes={0: "li2", 1: "li2"}),
     "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level", init=None,
-                          n_analogue=8, outputs=10,
+                          n_analogue=8, outputs=10, pcm_out=20,
                           modes={0: "li2", 1: "li2"},
                           # No capture for this model: routing is constructed instead, and the
                           # driver pushes the same table (see synth_band0_8pre).
                           synth_mux=lambda: synth_band0_8pre(),
                           synth_sources=lambda: synth_sources_8pre()),
     "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Level", init="8prex",
-                          n_analogue=8, outputs=10,
+                          n_analogue=8, outputs=10, pcm_out=28,
                           modes={0: "mli3", 1: "mli3",
                                  2: "ml2", 3: "ml2", 4: "ml2",
                                  5: "ml2", 6: "ml2", 7: "ml2"}),
@@ -390,8 +393,12 @@ for slug, spec in MODELS.items():
     if pairs:
         # Sources: from the table for a captured model (all it can tell us), from the hardware's own
         # full list where we have one (see synth_sources_8pre).
-        src_pins = spec.get("synth_sources", lambda: None)() or {s for s, _ in pairs}
-        src_names = name_sources(set(src_pins))
+        src_pins = set(spec.get("synth_sources", lambda: None)() or {s for s, _ in pairs})
+        # Always expose the full PCM playback range: a captured band-0 table only routes a few PCM pins
+        # by default (the 4Pre default routes only PCM 1/2/7/8), but every playback channel is a valid
+        # router source. Add 0x600 .. 0x600+pcm_out-1 so all of PCM 1..pcm_out are selectable.
+        src_pins |= {0x600 + i for i in range(spec.get("pcm_out", 0))}
+        src_names = name_sources(src_pins)
         dst_names = name_destinations({d for _, d in pairs})
         assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"
         assert len(set(n for n, _ in dst_names.values())) == len(dst_names), f"{slug}: dup sink name"

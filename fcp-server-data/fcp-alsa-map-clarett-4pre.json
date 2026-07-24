@@ -179,6 +179,22 @@
       "alsa_name": "PCM 2"
     },
     {
+      "device_name": "PCM 3",
+      "alsa_name": "PCM 3"
+    },
+    {
+      "device_name": "PCM 4",
+      "alsa_name": "PCM 4"
+    },
+    {
+      "device_name": "PCM 5",
+      "alsa_name": "PCM 5"
+    },
+    {
+      "device_name": "PCM 6",
+      "alsa_name": "PCM 6"
+    },
+    {
       "device_name": "PCM 7",
       "alsa_name": "PCM 7"
     },

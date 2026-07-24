@@ -206,6 +206,14 @@
       "alsa_name": "PCM 2"
     },
     {
+      "device_name": "PCM 3",
+      "alsa_name": "PCM 3"
+    },
+    {
+      "device_name": "PCM 4",
+      "alsa_name": "PCM 4"
+    },
+    {
       "device_name": "PCM 5",
       "alsa_name": "PCM 5"
     },
@@ -214,12 +222,60 @@
       "alsa_name": "PCM 6"
     },
     {
+      "device_name": "PCM 7",
+      "alsa_name": "PCM 7"
+    },
+    {
+      "device_name": "PCM 8",
+      "alsa_name": "PCM 8"
+    },
+    {
+      "device_name": "PCM 9",
+      "alsa_name": "PCM 9"
+    },
+    {
+      "device_name": "PCM 10",
+      "alsa_name": "PCM 10"
+    },
+    {
       "device_name": "PCM 11",
       "alsa_name": "PCM 11"
     },
     {
       "device_name": "PCM 12",
       "alsa_name": "PCM 12"
+    },
+    {
+      "device_name": "PCM 13",
+      "alsa_name": "PCM 13"
+    },
+    {
+      "device_name": "PCM 14",
+      "alsa_name": "PCM 14"
+    },
+    {
+      "device_name": "PCM 15",
+      "alsa_name": "PCM 15"
+    },
+    {
+      "device_name": "PCM 16",
+      "alsa_name": "PCM 16"
+    },
+    {
+      "device_name": "PCM 17",
+      "alsa_name": "PCM 17"
+    },
+    {
+      "device_name": "PCM 18",
+      "alsa_name": "PCM 18"
+    },
+    {
+      "device_name": "PCM 19",
+      "alsa_name": "PCM 19"
+    },
+    {
+      "device_name": "PCM 20",
+      "alsa_name": "PCM 20"
     },
     {
       "device_name": "PCM 21",

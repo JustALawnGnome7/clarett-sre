@@ -482,6 +482,14 @@
         "router-pin": "1537"
       },
       {
+        "name": "PCM 3",
+        "router-pin": "1538"
+      },
+      {
+        "name": "PCM 4",
+        "router-pin": "1539"
+      },
+      {
         "name": "PCM 5",
         "router-pin": "1540"
       },
@@ -490,12 +498,60 @@
         "router-pin": "1541"
       },
       {
+        "name": "PCM 7",
+        "router-pin": "1542"
+      },
+      {
+        "name": "PCM 8",
+        "router-pin": "1543"
+      },
+      {
+        "name": "PCM 9",
+        "router-pin": "1544"
+      },
+      {
+        "name": "PCM 10",
+        "router-pin": "1545"
+      },
+      {
         "name": "PCM 11",
         "router-pin": "1546"
       },
       {
         "name": "PCM 12",
         "router-pin": "1547"
+      },
+      {
+        "name": "PCM 13",
+        "router-pin": "1548"
+      },
+      {
+        "name": "PCM 14",
+        "router-pin": "1549"
+      },
+      {
+        "name": "PCM 15",
+        "router-pin": "1550"
+      },
+      {
+        "name": "PCM 16",
+        "router-pin": "1551"
+      },
+      {
+        "name": "PCM 17",
+        "router-pin": "1552"
+      },
+      {
+        "name": "PCM 18",
+        "router-pin": "1553"
+      },
+      {
+        "name": "PCM 19",
+        "router-pin": "1554"
+      },
+      {
+        "name": "PCM 20",
+        "router-pin": "1555"
       },
       {
         "name": "PCM 21",

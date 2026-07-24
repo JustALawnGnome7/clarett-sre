@@ -332,6 +332,22 @@
         "router-pin": "1537"
       },
       {
+        "name": "PCM 3",
+        "router-pin": "1538"
+      },
+      {
+        "name": "PCM 4",
+        "router-pin": "1539"
+      },
+      {
+        "name": "PCM 5",
+        "router-pin": "1540"
+      },
+      {
+        "name": "PCM 6",
+        "router-pin": "1541"
+      },
+      {
         "name": "PCM 7",
         "router-pin": "1542"
       },
