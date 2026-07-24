@@ -480,6 +480,13 @@ struct clarett {
 	struct work_struct notify_work;
 	struct delayed_work save_work;		/* debounced DATA_CMD{PERSIST}; see CLARETT_SAVE_DELAY_MS */
 	atomic_t notify_bits;
+	/*
+	 * Last-seen monitor config region, for the change-detecting poll that keeps the front-panel
+	 * knob live while streaming (clarett_monitor_poll; the 0x400 relay is gated off by stream_on).
+	 * Touched only from the meter worker, so no lock of its own.
+	 */
+	u8 mon_snap[MONITOR_CFG_LEN];
+	bool mon_snap_valid;
 	struct completion mbox_done;		/* completed by the vec0 ISR on mailbox DONE */
 	u32 mbox_cause;				/* 0x100 value the ISR consumed with DONE set */
 	/*

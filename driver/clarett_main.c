@@ -1452,6 +1452,57 @@ static void clarett_notify_work(struct work_struct *work)
  * discarded: fcp-server owns the meter control and issues its own GET_METER through the hwdep.
  * Self-requeuing delayed_work; cancelled at remove.
  */
+/*
+ * Monitor-region change poll — the "knob is frozen while streaming" fix.
+ *
+ * The 0x400 notification relay is suppressed for the duration of a stream (the stream_on gate in
+ * clarett_irq): vec0 also fires on every audio period, 0x400 reads its idle 0x3 each time, and the
+ * relay is a wildcard, so fcp-server would answer each period by re-reading EVERY control — which
+ * floods the mailbox and nicks the stream. The gate's premise was that front-panel moves during
+ * playback are rare; with enable_pcm on by default that is false, because PipeWire adopts the card
+ * and holds a PCM open more or less permanently, so the knob stops tracking essentially always.
+ *
+ * So do what the wildcard relay cannot: read the monitor region ourselves at the meter rate and
+ * relay only when the bytes actually CHANGE. Cost is one GET_DATA per tick beside the GET_METER the
+ * heartbeat already issues at that same rate during streaming; a steady state with nobody touching
+ * the unit relays nothing at all. The region (24, len 92) covers the monitor mute/dim flags and the
+ * master volume pair at 32/33 — the same bytes the notify refresh trusts to read back live.
+ */
+static bool monitor_poll = true;
+module_param(monitor_poll, bool, 0644);
+MODULE_PARM_DESC(monitor_poll,
+		 "While streaming, poll the monitor config region and relay a notification when it "
+		 "changes, so the front-panel monitor knob keeps tracking (default on). 0 restores the "
+		 "old behaviour, where the knob is frozen for as long as any PCM is open.");
+
+static void clarett_monitor_poll(struct clarett *c)
+{
+	u8 buf[MONITOR_CFG_LEN];
+	u8 req[8];		/* GET_DATA {u32 offset, u32 len} */
+	bool changed;
+	int err;
+
+	clarett_put_le32(req, MONITOR_CFG_OFFSET);
+	clarett_put_le32(req + 4, MONITOR_CFG_LEN);
+
+	/* clarett_fcp_cmd (not clarett_get_data) so the payload is copied out under mbox_lock —
+	 * reading c->resp_buf here would race the next command. */
+	err = clarett_fcp_cmd(c, FCP_GET_DATA, req, sizeof(req), buf, sizeof(buf));
+	if (err) {
+		dev_dbg(&c->pci->dev, "monitor poll: GET_DATA failed: %d\n", err);
+		return;
+	}
+
+	changed = c->mon_snap_valid && memcmp(c->mon_snap, buf, sizeof(buf));
+	memcpy(c->mon_snap, buf, sizeof(buf));
+	c->mon_snap_valid = true;
+
+	if (changed) {
+		dev_dbg(&c->pci->dev, "monitor poll: region changed, relaying notification\n");
+		clarett_hwdep_notify(c, NOTIFY_MON_PRIMARY);
+	}
+}
+
 static void clarett_meter_work(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, meter_work.work);
@@ -1483,6 +1534,11 @@ static void clarett_meter_work(struct work_struct *work)
 
 			clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
 		}
+
+		/* Only while streaming: otherwise the 0x400 relay is live and does this for us. */
+		if (monitor_poll && READ_ONCE(c->stream_on) && READ_ONCE(c->ctl_ready))
+			clarett_monitor_poll(c);
+
 		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
 	}
 }
