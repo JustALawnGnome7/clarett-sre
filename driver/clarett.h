@@ -691,7 +691,21 @@ static inline u32 clarett_irq_period_frames(void)
  * over-advance the ring: a real delta is ~12-13, never dozens.
  */
 #define CLARETT_CTR_FRAMES	16
-#define CLARETT_CTR_STEP_MAX	64
+/*
+ * Modulus of the 0x300 period counter. MEASURED on the 2Pre (July 24 2026) from the servicer's own
+ * 2-second telemetry: the counter steps 0x10 per period and the sampled value advances by exactly
+ * (events * 0x10) mod 0x100 across every window, wrapping every 16 events. Knowing it is what lets a
+ * wrap and a LATE POLL be the same arithmetic — a modular difference — so the frames a delayed tick
+ * has to make up are recovered instead of discarded (see clarett_stream_service). Recovery is exact
+ * for gaps up to a full modulus (16 periods, ~85 ms); beyond that the advance genuinely aliases.
+ */
+#define CLARETT_CTR_MOD		0x100
+/*
+ * A period-event gap over this counts as a LATE tick in the servicer's telemetry. Nominal is ~5.3 ms
+ * (0xd * 16 frames at 48k); 16 ms is three periods, well clear of ordinary jitter but far below the
+ * ~59 ms of app lead a late refill needs to consume before it can read stale ring content.
+ */
+#define CLARETT_TICK_LATE_US	16000
 /* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
  * No +1 terminator slot — the wrap flag on the last entry is the terminator. */
 static inline size_t clarett_pcm_tbl_bytes(void)

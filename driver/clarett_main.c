@@ -968,8 +968,20 @@ static int clarett_stream_service(void *data)
 	void __iomem *bar = c->bar0;
 	unsigned long next_log = jiffies + msecs_to_jiffies(2000);
 	unsigned long last_tick = jiffies;
-	u32 wraps = 0, rekicks = 0;
+	u32 wraps = 0, rekicks = 0, bad_reads = 0;
 	bool seen = false;
+	/*
+	 * Tick-lateness telemetry (audible-skip diagnosis, July 24 2026). The period counters cannot show
+	 * this: they accumulate the HARDWARE ctr delta, so a late servicer catches up on the next tick and
+	 * the totals stay perfectly smooth while the audio glitches. What matters is the wall-clock gap
+	 * between period events — nominal is CLARETT_CTR_FRAMES*step/48000 (~5.3 ms on the 2Pre). A gap far
+	 * over that means the TX refill landed late and the engine read ring content the app had not been
+	 * copied into yet. step_max is the same signal without a clock: the counter delta per event is
+	 * normally ~0xd, so a doubled step IS a missed poll. Reset each log window.
+	 */
+	ktime_t last_ev = ktime_get();
+	u64 gap_max_us = 0;
+	u32 gap_late = 0, step_max = 0;
 
 	while (!kthread_should_stop()) {
 		u32 c2;
@@ -1007,11 +1019,27 @@ static int clarett_stream_service(void *data)
 			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 command-phase/notify — mailbox's during a command */
 			readl(bar + 0x500);		/* 0x500 IRQ summary */
 		}
-		/* ~0 everywhere means the device left the bus (cable pulled, unit switched off). Stop
-		 * rather than feed ALSA periods synthesised from a dead register: bit31 is set in ~0, so
-		 * every read would otherwise look like a period event with a glitched counter. */
-		if (c2 == 0xffffffff && pci_dev_is_disconnected(c->pci))
-			break;
+		/*
+		 * An all-ones read is a FAILED PCIe transaction, never data. bit31 is set in ~0, so it would
+		 * otherwise present as a period event carrying a garbage counter, and the frame advance
+		 * derived from it would wreck pcm_frames.
+		 *
+		 * Two cases. The device really left the bus (cable pulled, unit switched off) — stop. Or the
+		 * link is TRANSIENTLY unreachable while the device is still attached: measured on the 2Pre
+		 * (July 24 2026), ~46 ms windows in which every MMIO read returns ~0, the servicer's "late
+		 * tick" and its 0x7fffffff counter being the same event. Drop the sample and let the next
+		 * good read's modular difference recover the whole advance.
+		 */
+		if (c2 == 0xffffffff) {
+			if (pci_dev_is_disconnected(c->pci))
+				break;
+			if (!bad_reads++)
+				dev_warn(&c->pci->dev,
+					 "0x300 read returned ~0 with the device still attached: the link is "
+					 "transiently unreachable (PCIe power management?). Dropping the sample.\n");
+			usleep_range(100, 200);
+			continue;
+		}
 
 		if (c2 & 0x80000000) {
 			u32 ctr = c2 & 0x7fffffff;
@@ -1030,10 +1058,31 @@ static int clarett_stream_service(void *data)
 			 * jump reuse the last good step (the hardware period is stable, ~0xd). This self-calibrates
 			 * the sample rate without needing the modulus.
 			 */
-			if (ctr > c->stream_ctr && ctr - c->stream_ctr <= CLARETT_CTR_STEP_MAX)
-				step = ctr - c->stream_ctr;
-			else {
-				step = c->stream_ctr_step;	/* wrap / glitch: reuse last */
+			/*
+			 * True advance = the MODULAR difference (CLARETT_CTR_MOD). A counter wrap and a late
+			 * poll are the same arithmetic, so this recovers the frames a delayed tick has to make
+			 * up instead of throwing them away.
+			 *
+			 * The old test — forward difference, capped at 4 periods, else "reuse the last step" —
+			 * could not tell a wrap from a genuinely large delta and substituted ONE period for
+			 * both. Measured cost (2Pre, July 24 2026): a 47 ms servicer stall clocked 7 periods in
+			 * hardware and advanced pcm_frames by 1, discarding 1536 frames. That error is permanent
+			 * and cumulative — it puts pcm_frames behind the engine's real read position, so the TX
+			 * guard window no longer covers where the engine is reading and we overwrite it, and
+			 * pointer() under-reports to ALSA. Audible as skipping that OUTLIVES whatever caused the
+			 * stall, which is what made it look correlated with unrelated userspace activity.
+			 */
+			/* Out of modulus == a corrupt read (a partially-failed transaction), not a wider
+			 * counter. Drop it; the next good sample's modular difference recovers the advance. */
+			if (ctr >= CLARETT_CTR_MOD) {
+				bad_reads++;
+				usleep_range(100, 200);
+				continue;
+			}
+			step = (ctr - c->stream_ctr) & (CLARETT_CTR_MOD - 1);
+			if (!step) {
+				/* An exact multiple of the modulus: the advance is genuinely unknowable. */
+				step = c->stream_ctr_step;
 				if (seen)
 					wraps++;
 			}
@@ -1042,6 +1091,20 @@ static int clarett_stream_service(void *data)
 			c->stream_ctr = ctr;
 			seen = true;
 			last_tick = jiffies;
+
+			{
+				ktime_t now = ktime_get();
+				u64 gap = ktime_to_us(ktime_sub(now, last_ev));
+
+				last_ev = now;
+				if (gap > gap_max_us)
+					gap_max_us = gap;
+				if (gap > CLARETT_TICK_LATE_US)
+					gap_late++;
+			}
+			if (step > step_max)
+				step_max = step;
+
 			atomic_inc(&c->stream_periods);
 			clarett_pcm_tick(c, step * CLARETT_CTR_FRAMES);	/* advance by real captured frames (no-op if idle) */
 		} else if (rekick && seen &&
@@ -1061,8 +1124,12 @@ static int clarett_stream_service(void *data)
 		}
 		if (time_after(jiffies, next_log)) {
 			dev_info(&c->pci->dev,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u\n",
-				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks);
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus late=%u stepmax=0x%x badreads=%u\n",
+				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
+				 gap_max_us, gap_late, step_max, bad_reads);
+			gap_max_us = 0;
+			gap_late = 0;
+			step_max = 0;
 			next_log = jiffies + msecs_to_jiffies(2000);
 		}
 		usleep_range(100, 200);
