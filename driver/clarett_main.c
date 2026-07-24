@@ -109,16 +109,27 @@ MODULE_PARM_DESC(base_hi,
  * (spec §13) has shown what the VM actually seeds the ring with.
  */
 /*
- * Force the full vendor bring-up even if the device is already armed. Default off: probe detects an armed
- * device (clarett_is_armed) and SKIPS the re-init, because re-arming an already-armed device wedges
- * GET_DATA (garbage config reads). Set 1 only to force a re-init against a device you know is fresh but
- * that the probe misread, or to A/B the old always-arm behaviour.
+ * Skip the vendor bring-up at probe. Default off — probe ALWAYS arms (July 23 2026).
+ *
+ * Probe used to detect an already-armed device and skip the re-init, because re-arming one was held to
+ * wedge GET_DATA. Both halves of that fell over on hardware the same evening:
+ *
+ *   - the detection could not work. Every host-visible surface tried (CAP_READ, a GET_DATA echo, the
+ *     pre-mailbox register block) reads identically on a fresh device and an armed one, so probe skipped
+ *     the bring-up on exactly the devices that needed it. The quiet casualty was meter slots 0-11, the
+ *     physical inputs, reading a flat 0 forever — input metering is programmed by the bring-up.
+ *
+ *   - the wedge is stale. Re-arming an armed 2Pre twice over, with no power cycle, left GET_DATA reading
+ *     correctly. Like several other "rules" from the walled era it did not survive the crossing.
+ *
+ * So: arm unconditionally, which is right for the device and costs one ~232-command replay per probe.
+ * This lever restores the old skip for anyone who hits a wedge and wants to A/B it.
  */
-static bool force_arm;
-module_param(force_arm, bool, 0444);
-MODULE_PARM_DESC(force_arm,
-		 "Replay the full vendor init even if the device is already armed (default off; re-arming "
-		 "an armed device wedges GET_DATA, so probe skips it).");
+static bool skip_arm;
+module_param(skip_arm, bool, 0444);
+MODULE_PARM_DESC(skip_arm,
+		 "Skip the vendor bring-up at probe (default off; probe always arms). Only for A/B testing "
+		 "— a device that misses the bring-up loses its input meters.");
 
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
@@ -547,56 +558,17 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 		 m->name, armed_with->name, sent, fails);
 }
 
-/* One CAP_READ: is this opcode category live on the current session? */
-static bool clarett_cap_supported(struct clarett *c, u16 category)
-{
-	__le16 req = cpu_to_le16(category);
-	u8 supported = 0;
-
-	if (clarett_fcp_cmd(c, FCP_CAP_READ, (const u8 *)&req, sizeof(req),
-			    &supported, sizeof(supported)))
-		return false;
-	return supported != 0;
-}
-
 /*
- * Is the device already armed? An already-armed device — e.g. this driver reloaded without a device
- * power-cycle — has a live session; a freshly power-cycled one does not until the host replays the vendor
- * init. Re-running the init on an armed device WEDGES it: the config reads come back garbage
- * (control-plane §8; the "value 87 out of range" fcp-server symptoms). So probe uses this to skip the
- * re-init and keep the live session intact.
- *
- * BROKEN — DO NOT TRUST THIS (July 23 2026). The test is CAP_READ on the two categories fcp-server
- * requires, chosen because it is the same question fcp-server asks. It does NOT answer the question
- * asked here: a device fresh out of a power cycle reports every category supported, exactly like an
- * armed one, so probe skips the bring-up on precisely the device that needs it. Observed casualty:
- * meter slots 0-11 (the physical inputs) read a flat 0 forever, because programming the input metering
- * is part of the bring-up — while the router, mixer and output meters all work, which makes it look
- * like anything but a missing bring-up. force_arm=1 restores them.
- *
- * Its predecessor was no better: it probed GET_DATA and accepted any well-formed reply (echoed opcode
- * + size >= 8), which a COLLAPSED session (see below) also produces.
- *
- * No discriminator is known yet. Every host-visible surface tried so far — CAP_READ, a GET_DATA echo,
- * the pre-mailbox register block — reads identically before and after the bring-up. The alternative is
- * to always arm and fix whatever makes a re-arm wedge GET_DATA; that wedge has not been re-tested since
- * the wall was crossed and may itself be stale.
- *
  * The collapsed-session state (observed July 23 2026, 2Pre, after a run of PCM arm/stop churn): the
  * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says
  * no category is supported even for DATA, while a DATA-category GET_DATA is what just answered. A module
- * reload clears it with NO bring-up (the device really is armed), so it is host/session state, not the
- * device losing its arm; power-cycling is not needed. Trigger not yet isolated. tools/fcp_cap_read.c is
- * the one-command check.
+ * reload clears it, so it is host/session state, not the device losing its arm; power-cycling is not
+ * needed. Trigger not yet isolated. tools/fcp_cap_read.c is the one-command check.
  *
- * Cheap and non-destructive: two small commands, refused harmlessly on a fresh device, and they do not
- * disturb the arm that follows.
+ * There is deliberately no "is it already armed?" probe here any more: nothing host-visible distinguishes
+ * a fresh device from an armed one (see the skip_arm comment), and guessing wrong silently costs the
+ * input meters. Probe arms unconditionally instead.
  */
-static bool clarett_is_armed(struct clarett *c)
-{
-	return clarett_cap_supported(c, FCP_CAT_INIT) &&
-	       clarett_cap_supported(c, FCP_CAT_DATA);
-}
 
 static int clarett_arm_device(struct clarett *c)
 {
@@ -1684,22 +1656,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		c->model = armed_with;
 	}
 	/*
-	 * Skip the bring-up if the device is already armed (driver reloaded without a device power-cycle):
-	 * re-running the init on an armed device wedges GET_DATA. force_arm overrides. The detection GET_DATA
-	 * is harmless on a fresh device (refused) and on an armed one (real data) alike.
+	 * Always arm. Nothing host-visible tells a fresh device from an armed one, and re-arming an armed
+	 * one is harmless (see skip_arm) — whereas missing the bring-up costs the input meters silently.
 	 */
-	if (!force_arm && clarett_is_armed(c)) {
-		dev_info(&pci->dev,
-			 "device already armed; skipping vendor re-init (a re-init would wedge GET_DATA)\n");
-	} else {
+	if (skip_arm)
+		dev_info(&pci->dev, "skip_arm=1: not replaying the vendor bring-up\n");
+	else
 		clarett_arm_device(c);
-		/* Say plainly whether the session came up: a device that still reports no capabilities
-		 * will be refused by fcp-server, and that is far easier to read here than there. */
-		if (!clarett_is_armed(c))
-			dev_warn(&pci->dev,
-				 "bring-up did not take: the device reports no INIT/DATA capability, so "
-				 "fcp-server will refuse it. Power-cycle the unit and reload.\n");
-	}
 	c->model = forced ? forced : armed_with;
 
 	/* The armed device can say who it is; everything model-dependent (PCM geometry, card

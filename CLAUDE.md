@@ -245,19 +245,19 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   from `8prex_full_init_mute.log`): `CONFIG_PUSH`×122, subsystem enables `0x000001`, count queries,
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA` (garbage config
-  reads → fcp-server "value 87 out of range"). **HANDLED (July 23 2026):** probe now calls
-  `clarett_is_armed()` and **skips the re-init** when the device is already armed (driver reloaded without
-  a device power-cycle), so a reload no longer wedges it. `force_arm=1` overrides. The test is
-  **`CAP_READ` (`0x000001`) on categories INIT + DATA — and it is WRONG (July 23 2026).** A device fresh
-  out of a power cycle answers "supported" on every category, identically to an armed one, so probe skips
-  the bring-up on exactly the device that needs it. **Observed casualty: meter slots 0-11 (the physical
-  inputs) read a flat 0** — input metering is programmed by the bring-up — while the router, mixer and
-  output meters all work, which disguises it as anything but a missing bring-up. `force_arm=1` restores
-  them (confirmed: slot 0 moved immediately after a forced bring-up). The earlier `GET_DATA` echo+size
-  test was no better. **No discriminator is known**: CAP_READ, the GET_DATA echo and the pre-mailbox
-  register block all read identically before and after a bring-up. The open alternative is to always arm
-  and fix the re-arm wedge — which has NOT been re-tested since the wall was crossed and may be stale.
-  `tools/fcp_cap_read.c` dumps the raw bytes. Transport §8.
+  reads → fcp-server "value 87 out of range"). **RESOLVED (July 23 2026): probe now ALWAYS arms, and the
+  armed-detection is deleted.** Both halves of the old design failed on hardware the same evening:
+  - **The detection could not work.** Every host-visible surface tried — `CAP_READ`, a `GET_DATA` echo,
+    the pre-mailbox register block — reads *identically* on a fresh device and an armed one, so probe
+    skipped the bring-up on exactly the devices that needed it. **Quiet casualty: meter slots 0-11 (the
+    physical inputs) read a flat 0**, because input metering is programmed by the bring-up — while the
+    router, mixer and output meters all worked, disguising it as a metering bug. A forced bring-up
+    brought slot 0 straight back.
+  - **The wedge is stale.** Re-arming an already-armed 2Pre twice over, no power cycle, left `GET_DATA`
+    reading correctly — another walled-era rule that did not survive the crossing.
+
+  So arming is unconditional (cost: one ~232-command replay per probe). `skip_arm=1` restores the old
+  skip for A/B testing. `tools/fcp_cap_read.c` dumps the capability bytes. Transport §8.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported
@@ -272,9 +272,9 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   retired, `resp_trace` telemetry kept). The full bring-up answers `err=0` with real data and
   alsamixer toggles physically move the 2Pre (LEDs + relays). TODO: re-audit everything written for
   a walled device (shadow-refresh paths, the `err=3`/notification-storm handling, meter-poll
-  hypothesis in `meter_poll_ms` desc). Re-arming an already-armed device **does still wedge** `GET_DATA`
-  (confirmed July 23 — the reload-without-power-cycle symptom); probe now detects the armed device and
-  skips the re-init (`clarett_is_armed`, `force_arm` to override).
+  hypothesis in `meter_poll_ms` desc). The "re-arming an armed device wedges `GET_DATA`" rule was
+  **DISPROVEN July 23** — re-armed twice with no power cycle, `GET_DATA` stayed correct; probe now always
+  arms (see the bring-up entry below).
 - **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed
