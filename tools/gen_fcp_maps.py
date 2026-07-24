@@ -189,13 +189,13 @@ METER_SLOTS = {
         0x206: (16, "predicted"), 0x207: (17, "predicted"),
     },
 }
-# NO destination peak-index. fcp-server rejects any index >= the count the device reports from
-# METER_INFO (0x001000, resp[0]), and a 4Pre rejected index 10 - so it exposes at most 10 meter
-# slots, exactly the size of the analogue block (8 analogue + S/PDIF 1-2). The slots we measured
-# downstream (18-23 line outputs, 28/29 mixer inputs) are real - GET_METER serves them when asked
-# for 48 - but they are outside what METER_INFO advertises, and ONE out-of-range entry makes
-# fcp-server discard the whole map (meter.c goto done), taking the measured analogue slots with it.
-# ADAT (10-17, inferred) is dropped for the same reason.
+# Destination (and mixer-input) peak-indexes. These sit past what METER_INFO advertises: fcp-server
+# used to reject any index >= that count, and ONE out-of-range entry discards the whole meter map
+# (meter.c goto done), so this table was empty. That bound is now treated as a floor - fcp-server
+# raises it to cover the map when the device reports no slot count (see fcp-support server/meter.c,
+# max_peak_index) - which is justified because the count is provably not the array size: the 2Pre
+# answers 00 02 0c 00 (2 x 12 = 24) and yet reads a real, identifiable signal at slot 47.
+# REQUIRES that fcp-support change; without it these entries take the whole map down.
 METER_SLOTS_DST = {
     # Measured on a 2Pre (July 23 2026): a -6 dBFS tone played through PCM 1-2 -> Line Output 1-2 lit
     # slots 12/13 at exactly 2047 (= -6 dBFS of 4095), and NOTHING at 14+. That the PCM streams themselves
@@ -203,9 +203,23 @@ METER_SLOTS_DST = {
     # PCM sources. So the outputs pack 12..15, immediately after the 12 input slots (0-11) — all inside the
     # 24-slot METER_INFO bound (resp = 00 02 0c 00 -> 2*12), so fcp-server accepts them. Re-routing the
     # same tone to Line Output 3-4 then lit 14/15, confirming the packing: all four are measured.
+    #
+    # THE FULL LAYOUT, measured on the 2Pre July 23 2026 (tools/fcp_meter_watch.c, one route at a time):
+    #   [all physical inputs][all physical outputs: line, then S/PDIF][Mixer Input 01-30]
+    # 2Pre: inputs 0-11, Line Output 1-4 at 12-15, S/PDIF Output at 16-17, mixer inputs 18-47 = 48 slots,
+    # exactly the array GET_METER serves. Confirmed by routing one input to Mixer Input 01/02/05/13/30 and
+    # watching slots 18/19/22/30/47 rise, each alone. The meter sits PRE-MIX: slot 18 stayed lit with the
+    # Mix A gain pulled to -inf, which is what distinguishes it from a mix-bus meter.
+    # 16/17 are never lit on this unit because its router has NO S/PDIF output destination (confirmed by
+    # dumping the live mux table with tools/fcp_mux_probe: 0x600-0x60d, 0x400-0x403, 0x300-0x31d only).
+    # The 4Pre's earlier measurements fit the same rule: 18 inputs, line outputs at 18-23, mixer inputs at
+    # 26+ (28/29 seen). So the mixer-input base is 12 + n_physical_outputs, per model.
     "clarett-2pre": {
         1024: (12, "measured"), 1025: (13, "measured"),  # Line Output 1-2 (Monitor L/R)
         1026: (14, "measured"), 1027: (15, "measured"),  # Line Output 3-4
+        # Mixer Input 01-30 at pins 0x300.. -> slots 18.. (01/02/05/13/30 measured, rest by the stride)
+        **{0x300 + i: (18 + i, "measured" if i in (0, 1, 4, 12, 29) else "stride")
+           for i in range(30)},
     },
 }
 
