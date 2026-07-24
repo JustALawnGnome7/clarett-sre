@@ -267,6 +267,16 @@ struct snd_pcm_substream;
 #define FCP_SET_MIX              0x002002
 #define FCP_SET_MUX              0x003002
 
+/*
+ * 0x000001 is also the CAPABILITY READ: {u16 category} -> one byte, non-zero = that opcode category
+ * is live on this session. fcp-server calls it first and refuses the device unless INIT (0x000) and
+ * DATA (0x800) both answer non-zero, so it is the authoritative "is the session really up?" test —
+ * see clarett_is_armed(). tools/fcp_cap_read.c dumps every category.
+ */
+#define FCP_CAP_READ             FCP_INIT_1
+#define FCP_CAT_INIT             0x000
+#define FCP_CAT_DATA             0x800
+
 /* One replayed bring-up command: opcode + a [off, off+len) slice of clarett_init_blob[]. */
 struct clarett_init_step {
 	u32 opcode;

@@ -547,28 +547,39 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 		 m->name, armed_with->name, sent, fails);
 }
 
+/* One CAP_READ: is this opcode category live on the current session? */
+static bool clarett_cap_supported(struct clarett *c, u16 category)
+{
+	__le16 req = cpu_to_le16(category);
+	u8 supported = 0;
+
+	if (clarett_fcp_cmd(c, FCP_CAP_READ, (const u8 *)&req, sizeof(req),
+			    &supported, sizeof(supported)))
+		return false;
+	return supported != 0;
+}
+
 /*
- * Is the device already armed? A freshly power-cycled device REFUSES GET_DATA (walled error / refusal
- * stub) until the host replays the vendor init; an already-armed one — e.g. this driver reloaded without a
- * device power-cycle — answers with real data. Re-running the full init on an armed device WEDGES it: the
- * config reads come back garbage (control-plane §8; the "value 87 out of range" fcp-server symptoms). So
- * probe uses this to skip the re-init and keep the live session intact. Cheap and non-destructive: one
- * small GET_DATA, validated by the echoed opcode + response size exactly like the arm's own capture guard.
- * A refused probe on a fresh device is harmless (the same read the old walled probe did) and does not
+ * Is the device already armed? An already-armed device — e.g. this driver reloaded without a device
+ * power-cycle — has a live session; a freshly power-cycled one does not until the host replays the vendor
+ * init. Re-running the init on an armed device WEDGES it: the config reads come back garbage
+ * (control-plane §8; the "value 87 out of range" fcp-server symptoms). So probe uses this to skip the
+ * re-init and keep the live session intact.
+ *
+ * The test is CAP_READ on the two categories fcp-server requires, which is the same question fcp-server
+ * asks before it will touch the device — so passing here means fcp-server starts. An earlier version
+ * probed GET_DATA and accepted any well-formed reply (echoed opcode + size >= 8); that FALSE-POSITIVED on
+ * a fresh 2Pre, which answers GET_DATA with a well-formed but all-zero response while every capability
+ * byte reads 0. Probe then skipped the bring-up and fcp-server refused the device with "does not support
+ * required INIT category". Validate what the session can DO, not that a reply came back.
+ *
+ * Cheap and non-destructive: two small commands, refused harmlessly on a fresh device, and they do not
  * disturb the arm that follows.
  */
 static bool clarett_is_armed(struct clarett *c)
 {
-	const u8 *r = c->resp_buf;
-	u32 echo;
-	u16 size;
-
-	if (clarett_get_data(c, 0, 8))
-		return false;
-	dma_rmb();	/* order the DMAed response before reading resp_buf */
-	echo = clarett_get_le32(r + FCP_RESP_ECHO_OFF);
-	size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-	return echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= 8;
+	return clarett_cap_supported(c, FCP_CAT_INIT) &&
+	       clarett_cap_supported(c, FCP_CAT_DATA);
 }
 
 static int clarett_arm_device(struct clarett *c)
@@ -1655,11 +1666,18 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * re-running the init on an armed device wedges GET_DATA. force_arm overrides. The detection GET_DATA
 	 * is harmless on a fresh device (refused) and on an armed one (real data) alike.
 	 */
-	if (!force_arm && clarett_is_armed(c))
+	if (!force_arm && clarett_is_armed(c)) {
 		dev_info(&pci->dev,
 			 "device already armed; skipping vendor re-init (a re-init would wedge GET_DATA)\n");
-	else
+	} else {
 		clarett_arm_device(c);
+		/* Say plainly whether the session came up: a device that still reports no capabilities
+		 * will be refused by fcp-server, and that is far easier to read here than there. */
+		if (!clarett_is_armed(c))
+			dev_warn(&pci->dev,
+				 "bring-up did not take: the device reports no INIT/DATA capability, so "
+				 "fcp-server will refuse it. Power-cycle the unit and reload.\n");
+	}
 	c->model = forced ? forced : armed_with;
 
 	/* The armed device can say who it is; everything model-dependent (PCM geometry, card

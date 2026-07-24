@@ -246,9 +246,14 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()` replays it at probe.
   Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA` (garbage config
   reads → fcp-server "value 87 out of range"). **HANDLED (July 23 2026):** probe now calls
-  `clarett_is_armed()` (one small `GET_DATA`, valid echo+size ⇒ armed) and **skips the re-init** when the
-  device is already armed (driver reloaded without a device power-cycle), so a reload no longer wedges it.
-  `force_arm=1` overrides. Transport spec §8.
+  `clarett_is_armed()` and **skips the re-init** when the device is already armed (driver reloaded without
+  a device power-cycle), so a reload no longer wedges it. `force_arm=1` overrides. The test is
+  **`CAP_READ` (`0x000001`) on categories INIT (`0x000`) + DATA (`0x800`), both non-zero** — the same
+  question fcp-server asks before it will touch the device. An earlier `GET_DATA` echo+size test
+  **false-positived**: a fresh 2Pre answers `GET_DATA` with a well-formed, all-zero response while every
+  capability byte reads 0, so probe skipped the bring-up and fcp-server refused the device with "Device
+  does not support required INIT category". Validate what the session can *do*, not that a reply came
+  back. `tools/fcp_cap_read.c` dumps the raw bytes. Transport spec §8.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
