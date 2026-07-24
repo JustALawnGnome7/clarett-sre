@@ -509,60 +509,60 @@
         "_peak-index-provenance": "stride"
       },
       {
+        "name": "Loopback 1",
+        "router-pin": "1540"
+      },
+      {
+        "name": "Loopback 2",
+        "router-pin": "1541"
+      },
+      {
         "name": "PCM 05",
-        "router-pin": "1540",
+        "router-pin": "1542",
         "peak-index": 4,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 06",
-        "router-pin": "1541",
+        "router-pin": "1543",
         "peak-index": 5,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 07",
-        "router-pin": "1542",
+        "router-pin": "1544",
         "peak-index": 6,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 08",
-        "router-pin": "1543",
+        "router-pin": "1545",
         "peak-index": 7,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 09",
-        "router-pin": "1544",
+        "router-pin": "1546",
         "peak-index": 8,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 10",
-        "router-pin": "1545",
+        "router-pin": "1547",
         "peak-index": 9,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 11",
-        "router-pin": "1546",
+        "router-pin": "1548",
         "peak-index": 10,
         "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 12",
-        "router-pin": "1547",
+        "router-pin": "1549",
         "peak-index": 11,
         "_peak-index-provenance": "stride"
-      },
-      {
-        "name": "PCM 13",
-        "router-pin": "1548"
-      },
-      {
-        "name": "PCM 14",
-        "router-pin": "1549"
       }
     ]
   },

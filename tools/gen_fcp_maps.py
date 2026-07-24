@@ -54,12 +54,14 @@ def band0_mux(key):
 # models remap (the 2Pre reaches S/PDIF *input* at 0x186/0x187 where the 8PreX has S/PDIF *output*,
 # and its two analogue inputs are 0x400/0x402, skipping 0x401). So names are derived from the pins
 # the model actually presents, by position within each group, never by a fixed table.
-def name_destinations(dsts):
+def name_destinations(dsts, slug=None):
     """dst pin -> (name, mixer_input_index or None), for the pins this model routes to."""
     out = OD()
     analogue = sorted(p for p in dsts if 0x400 <= p <= 0x409)
     # 8PreX-style: 0x408/0x409 are the monitor pair and the 0x400 block starts at Line Output 3.
     monitor_pair = 0x408 in dsts
+    # Capture pins: use the model's record/loopback layout (loopback pins named, records renumbered).
+    cap = capture_names(slug) if slug else {}
     for pin in sorted(dsts, key=_dest_rank):
         if 0x186 <= pin <= 0x187:
             out[pin] = (f"S/PDIF Output {pin - 0x186 + 1}", None)
@@ -73,7 +75,7 @@ def name_destinations(dsts):
             n = analogue.index(pin) + (3 if monitor_pair else 1)
             out[pin] = (f"Line Output {n}", None)
         elif 0x600 <= pin <= 0x61f:
-            out[pin] = (f"PCM {pin - 0x600 + 1:02d}", None)
+            out[pin] = (cap.get(pin, f"PCM {pin - 0x600 + 1:02d}"), None)
     return out
 
 
@@ -114,6 +116,35 @@ def _dest_rank(pin):
     if 0x300 <= pin <= 0x31f:                 return (3, 0, pin)  # Mixer input
     if 0x600 <= pin <= 0x61f:                 return (4, 0, pin)  # PCM
     return (9, 0, pin)
+
+
+# Capture (record-output) layout, from each model's vendor XML <record-outputs>. The capture stream is a
+# contiguous pin block 0x600.. whose entries are physical record inputs with a Loopback PAIR inserted at a
+# model-specific position (2Pre after input 3, the others after input 9). So a plain "PCM = pin - 0x600 + 1"
+# naming mislabels the two loopback pins as PCM and shifts every record channel after them. CAPTURE_CHANNELS
+# is the total (records + 2 loopback); LOOPBACK_PINS are the two inserted pins.
+CAPTURE_CHANNELS = {"clarett-2pre": 14, "clarett-4pre": 20, "clarett-8pre": 20, "clarett-8prex": 28}
+LOOPBACK_PINS    = {"clarett-2pre": (0x604, 0x605), "clarett-4pre": (0x60a, 0x60b),
+                    "clarett-8pre": (0x60a, 0x60b), "clarett-8prex": (0x60a, 0x60b)}
+
+def capture_record_pins(slug):
+    """Ordered capture pins that are physical record channels (loopback excluded). Index i is record
+    input i -> PCM (i+1) -> meter slot i."""
+    loop = LOOPBACK_PINS[slug]
+    return [p for p in range(0x600, 0x600 + CAPTURE_CHANNELS[slug]) if p not in loop]
+
+def capture_names(slug):
+    """capture pin -> display name: physical records numbered PCM 1..N by input order, the inserted pair
+    named Loopback 1/2 (matching the vendor XML)."""
+    loop = LOOPBACK_PINS[slug]
+    out, n = OD(), 0
+    for p in range(0x600, 0x600 + CAPTURE_CHANNELS[slug]):
+        if p in loop:
+            out[p] = f"Loopback {loop.index(p) + 1}"
+        else:
+            n += 1
+            out[p] = f"PCM {n:02d}"
+    return out
 
 
 def name_sources(srcs):
@@ -204,11 +235,12 @@ METER_SLOTS_DST = {
     # 2-slot reserved gap (26-27) before mixer inputs at 28-57 — so its mixer base is 12 + n_out + 2, not
     # 12 + n_out. See the RESOLVED July 24 note above.
     "clarett-2pre": {
-        # PCM 01-12, the record channels, at slots 0-11. PCM 1 -> slot 0 and PCM 3 -> slot 2 were
-        # measured directly by re-routing one input between them; the rest follow the stride and were
-        # each seen lit under default routing (analogue 1/2, S/PDIF, ADAT 1-8, in that order).
-        # PCM 13/14 are the loopback pair and are NOT metered — slots 12/13 are the line outputs.
-        **{0x600 + i: (i, "measured" if i in (0, 2) else "stride") for i in range(12)},
+        # PCM 01-12, the physical record channels, at slots 0-11 (loopback pins 0x604/0x605 sit BETWEEN
+        # record inputs 3 and 4 and are NOT metered, so the record pins skip them — capture_record_pins).
+        # PCM 1 -> slot 0 and PCM 3 -> slot 2 were measured directly by re-routing one input between them;
+        # the rest follow the stride and were each seen lit under default routing.
+        **{pin: (i, "measured" if i in (0, 2) else "stride")
+           for i, pin in enumerate(capture_record_pins("clarett-2pre"))},
         1024: (12, "measured"), 1025: (13, "measured"),  # Line Output 1-2 (Monitor L/R)
         1026: (14, "measured"), 1027: (15, "measured"),  # Line Output 3-4
         # Mixer Input 01-30 at pins 0x300.. -> slots 18.. (01/02/05/13/30 measured, rest by the stride)
@@ -220,8 +252,9 @@ METER_SLOTS_DST = {
     # Mixer Input 30 -> 57. The record block (0-17) keeps its historical "reinterpreted" provenance —
     # this session drove destinations from PCM playback, which does not exercise the input meters.
     "clarett-4pre": {
-        # PCM 01-18 record channels at 0-17 (loopback PCM 19-20 not metered; outputs start at 18)
-        **{0x600 + i: (i, "reinterpreted") for i in range(18)},
+        # PCM 01-18 physical record channels at slots 0-17 (loopback pins 0x60a/0x60b sit between record
+        # inputs 9 and 10 and are NOT metered; the record pins skip them). Outputs start at slot 18.
+        **{pin: (i, "reinterpreted") for i, pin in enumerate(capture_record_pins("clarett-4pre"))},
         # Line Output 1-6 at 18-23 (1 and 6 measured, rest by stride)
         **{0x400 + i: (18 + i, "measured" if i in (0, 5) else "stride") for i in range(6)},
         # S/PDIF Output 1-2 at 24-25 (Output 1 measured; slots 26-27 are an unidentified reserved pair)
@@ -230,7 +263,8 @@ METER_SLOTS_DST = {
         **{0x300 + i: (28 + i, "measured" if i in (0, 29) else "stride") for i in range(30)},
     },
     # 8Pre: record block only, PREDICTED from the packing rule (no 8Pre hardware). Outputs/mixer unmapped.
-    "clarett-8pre": {0x600 + i: (i, "predicted") for i in range(18)},
+    # Same loopback-skipping record pins as the 4Pre (identical capture layout).
+    "clarett-8pre": {pin: (i, "predicted") for i, pin in enumerate(capture_record_pins("clarett-8pre"))},
 }
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
@@ -422,7 +456,7 @@ for slug, spec in MODELS.items():
         # router source. Add 0x600 .. 0x600+pcm_out-1 so all of PCM 1..pcm_out are selectable.
         src_pins |= {0x600 + i for i in range(spec.get("pcm_out", 0))}
         src_names = name_sources(src_pins)
-        dst_names = name_destinations({d for _, d in pairs})
+        dst_names = name_destinations({d for _, d in pairs}, slug)
         assert len(set(src_names.values())) == len(src_names), f"{slug}: duplicate source name"
         assert len(set(n for n, _ in dst_names.values())) == len(dst_names), f"{slug}: dup sink name"
 

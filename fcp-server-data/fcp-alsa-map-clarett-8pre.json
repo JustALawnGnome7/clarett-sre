@@ -533,6 +533,14 @@
       "alsa_name": "PCM 10"
     },
     {
+      "device_name": "Loopback 1",
+      "alsa_name": "Loopback 1"
+    },
+    {
+      "device_name": "Loopback 2",
+      "alsa_name": "Loopback 2"
+    },
+    {
       "device_name": "PCM 11",
       "alsa_name": "PCM 11"
     },
@@ -563,14 +571,6 @@
     {
       "device_name": "PCM 18",
       "alsa_name": "PCM 18"
-    },
-    {
-      "device_name": "PCM 19",
-      "alsa_name": "PCM 19"
-    },
-    {
-      "device_name": "PCM 20",
-      "alsa_name": "PCM 20"
     }
   ]
 }
