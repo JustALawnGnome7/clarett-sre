@@ -19,7 +19,7 @@ transport — expect the 8PreX to reuse the packet/opcodes, confirm the values);
 > inline: (a) "control changes don't manifest *without the data plane*" — the data-plane requirement is
 > FALSE (FC moves the LEDs at idle, no stream); (b) "GET-response returns `config[off+i]`, CONFIRMED" —
 > our driver's `GET_DATA` returns an **empty** payload (`size=0`) in every tested state; (c) the
-> notification mask is `0x3`, not `0x200000`/`0x400000`. See `spec/clarett-manifestation-wall.md`.
+> notification mask is `0x3`, not `0x200000`/`0x400000`. See `spec/provenance/clarett-manifestation-wall.md`.
 
 ---
 
@@ -257,7 +257,7 @@ manifestation does not require the data plane. This session added a second, clea
 root: `GET_DATA` returns an **empty** payload too (below). Both the control plane and the data plane fail
 the same way — our observable traffic (BAR0 + FCP + PCI config) is byte-identical to FC's, yet neither
 functions — so the differentiator is **off-wire / below the BAR surface**, not a missing control-plane
-command and not the data plane. Full elimination chain: `spec/clarett-manifestation-wall.md`.
+command and not the data plane. Full elimination chain: `spec/provenance/clarett-manifestation-wall.md`.
 
 ### Opcode map — CONFIRMED by stimulus (master-mute capture, `8prex_master_mute.log`; decode via `tools/fcp_decode.py`)
 | opcode | name | payload | proof |
@@ -299,7 +299,7 @@ correction below the table:
 **⚠⚠ `+8` CORRECTION `[TRACE — July 9 2026]`: `0x3` is NOT "success"; it is an error/refusal code.**
 The original "`0x3` on success" reading was calibrated **entirely on walled responses** (our driver's —
 the only response headers ever seen before). Live pmemsave sampling of the **working** Windows session's
-response buffer (`spec/clarett-respbuf-plan.md`; S0 + 668-snapshot S1 burst, 460 distinct states) shows
+response buffer (`spec/provenance/clarett-respbuf-plan.md`; S0 + 668-snapshot S1 burst, 460 distinct states) shows
 the working device writes **`+8 = 0x00` on every response, with real payload sizes** (`GET_METER`
 size=192, `GET_6.5` size=4 payload=48000, `SET_DATA` size=0 write-ack) — matching the scarlett2/FCP
 convention (error field, 0 = OK). Our device answers **every** command with `+8 = 0x3, size=0`: a named
@@ -326,7 +326,7 @@ fine (`resp[+0]=0x80800000` echo, `resp[+8]=0x03` **error — see the July 9 cor
 onward) is never written — exhaustively confirmed on **both** 8PreX and 2Pre, at every offset, every
 length (4 / 0x3f8 / 92 / 32), with a 3 s settle, in FC's exact read window, and even in a genuine Mute
 notification context. So `resp[16+i] == config[off+i]` does **not** hold for us; the device's config
-backend is dormant and returns zero bytes (`spec/clarett-manifestation-wall.md` §5a).
+backend is dormant and returns zero bytes (`spec/provenance/clarett-manifestation-wall.md` §5a).
 
 The single non-empty read this section originally cited — `GET_DATA{24,92}` → `resp[16]=0x01`, "on a Mute
 notification" — **could not be reproduced** and must have been a different historical state. A reader

@@ -3,8 +3,8 @@
  * Focusrite Clarett 8PreX (Thunderbolt) ALSA driver — shared definitions.
  *
  * Register map and FCP framing are from the reverse-engineering notes in
- * ../spec/clarett-fcp-transport.md (confirmed against MMIO traces).
- * Control offsets/commands are from ../spec/clarett-control-plane.md.
+ * ../spec/provenance/clarett-fcp-transport.md (confirmed against MMIO traces).
+ * Control offsets/commands are from ../spec/provenance/clarett-control-plane.md.
  */
 #ifndef CLARETT_H
 #define CLARETT_H
@@ -410,7 +410,7 @@ struct clarett_model {
  * stale buffer (seen on the first GET at load, which DMAs all zeroes). But the echo
  * word alone is NOT sufficient: our device answers GET_DATA with the header present
  * yet size=0 and NO payload — the config backend refuses our session (see below and
- * spec/clarett-manifestation-wall.md §5a/§7). So a reader must ALSO
+ * spec/provenance/clarett-manifestation-wall.md §5a/§7). So a reader must ALSO
  * require size > 0 before consuming resp[16+]; otherwise it copies stale buffer bytes.
  *
  * resp[8..11] is the FCP ERROR word: 0 = OK. A working session's responses carry 0

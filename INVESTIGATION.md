@@ -373,13 +373,13 @@ statement of support and a point of contact — would be warmly received.
 
 The project is a self-contained clean-room record:
 
-- **`spec/clarett-control-plane.md`** — offsets, opcodes, enums, pins, mixer/routing, provenance-tagged.
-- **`spec/clarett-fcp-transport.md`** — mailbox/transport framing and the confirmed register map.
-- **`spec/clarett-data-plane.md`** — the PCM-DMA RE: method, register/descriptor maps, and the
+- **`spec/provenance/clarett-control-plane.md`** — offsets, opcodes, enums, pins, mixer/routing, provenance-tagged.
+- **`spec/provenance/clarett-fcp-transport.md`** — mailbox/transport framing and the confirmed register map.
+- **`spec/provenance/clarett-data-plane.md`** — the PCM-DMA RE: method, register/descriptor maps, and the
   engine (re-opened, §9).
-- **`spec/clarett-manifestation-wall.md`** — the full elimination record (§§1–7 here, in detail, with
+- **`spec/provenance/clarett-manifestation-wall.md`** — the full elimination record (§§1–7 here, in detail, with
   `[TRACE]`/`[TEST]`/`[CONCLUSION]` provenance tags) and §8, the crossing.
-- **`spec/clarett-macos-dtrace-plan.md`**, **`spec/clarett-windbg-plan.md`** — the two cross-platform
+- **`spec/provenance/clarett-macos-dtrace-plan.md`**, **`spec/provenance/clarett-windbg-plan.md`** — the two cross-platform
   confirmation passes (methods, runbooks, results).
 - **`driver/`** — the out-of-tree `snd-clarett` module (control plane + experimental capture PCM).
   The landed-gated ack is the default mailbox cycle; the timing instruments from §8 are the

@@ -2268,7 +2268,7 @@ static const struct clarett_model clarett_2pre = {
  * Clarett 4Pre (Thunderbolt). Control plane from vendor-reference/Devices/Clarett 4Pre.xml [XML],
  * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Auto-detected after the
  * arm by its (8,20) geometry, live-confirmed July 17 2026 (clarett_detect_model); model=4pre forces it.
- * See spec/clarett-control-plane.md §4 and -data-plane.md §3b.
+ * See spec/provenance/clarett-control-plane.md §4 and -data-plane.md §3b.
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).

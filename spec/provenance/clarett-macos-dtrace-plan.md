@@ -15,7 +15,7 @@
 ## Why this can cross the wall when the vfio trace can't
 
 The Windows/QEMU `x-no-mmap` method sees **MMIO** but is blind to **DMA** — that blindness is exactly
-where both walls sit (`spec/clarett-manifestation-wall.md §5c`: the device answers our whole command
+where both walls sit (`spec/provenance/clarett-manifestation-wall.md §5c`: the device answers our whole command
 stream with `SUCCESS + size=0` from query #1, over a verified-working DMA path). The off-wire
 differentiator is a **bus-master DMA payload/timing FC produces that our driver never does**.
 

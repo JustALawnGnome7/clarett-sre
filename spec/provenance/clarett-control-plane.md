@@ -14,7 +14,7 @@
 > overstate confirmation. Reality: control writes complete (`done=1, fcperr=0`) but **do NOT physically
 > manifest** from our driver, and `GET_DATA` returns an **empty** payload (`size=0`) — the device's
 > config backend is dormant for us despite an FC-identical command stream
-> (`spec/clarett-manifestation-wall.md`). The encodings below are still correct (verified against
+> (`spec/provenance/clarett-manifestation-wall.md`). The encodings below are still correct (verified against
 > FC's live traffic); what is wrong is any claim that our driver *effected* a change. §7 (clock as the
 > "cause" of no streaming) and §11 (notification mask) are corrected inline.
 

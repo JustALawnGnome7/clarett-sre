@@ -17,7 +17,7 @@ Built from the clean-room notes in `../spec/`.
 > nothing happened, a wall attributed to an "off-wire / below-driver" boundary after
 > four independent methods agreed. That attribution was **wrong**, and the record of how
 > it fell is worth reading before trusting any negative result here —
-> `../spec/clarett-manifestation-wall.md` §8. The cause was a trailing doorbell ack sent
+> `../spec/provenance/clarett-manifestation-wall.md` §8. The cause was a trailing doorbell ack sent
 > before the device's response DMA had landed; every "known-good" vendor trace had been
 > captured under MMIO trapping slow enough to hide it.
 >
@@ -199,7 +199,7 @@ Never load this while the VM is using the device.
   the device's full source inventory (the 8Pre, whose map is not table-derived, lists all of them).
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
   DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass
-  (`../spec/clarett-data-plane.md`). It used to be attributed to the same wall as the
+  (`../spec/provenance/clarett-data-plane.md`). It used to be attributed to the same wall as the
   control plane; that attribution died with the wall and the stall is **unexplained**.
   Our post-arm state is byte-identical to the vendor's, whose own arms stall the same way
   several times before streaming, so the engine setup is exonerated and the next lead is
@@ -248,7 +248,7 @@ Never load this while the VM is using the device.
   by refusing the session outright. Every vendor trace was captured under MMIO trapping at
   ~20 µs per access, under which the response had always landed long before the ack — so
   the traces could not show a precondition they always satisfied. Gating the ack on the
-  response actually arriving fixed it. Full account: `../spec/clarett-manifestation-wall.md` §8.
+  response actually arriving fixed it. Full account: `../spec/provenance/clarett-manifestation-wall.md` §8.
 - **Device bring-up replay is fresh-device-only.** `clarett_arm_device` arms a
   power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
   (double-init). TODO: probe with a `GET` and skip the replay when already armed.

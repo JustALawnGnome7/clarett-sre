@@ -11,7 +11,7 @@ it flags "period 0 ready" and the `0x300` counter never advances, universal acro
 observable host→device surface (BAR0 setup regs, FCP handshake, PCI config, `0x500`/`0x510` enables,
 converter-ready status, **and** the DMA-buffer address via `dma_bits=30/31`) has been matched/eliminated.
 The black-box MMIO+FCP+config method is **exhausted**; the sustain blocker is below the BAR surface — the
-**same off-wire wall the control plane hits** (`spec/clarett-manifestation-wall.md`, memo
+**same off-wire wall the control plane hits** (`spec/provenance/clarett-manifestation-wall.md`, memo
 `clarett-dataplane-pcm-findings`). **Environment is ruled out:** the control plane was retested with our
 driver in a Fedora guest under the *same* vfio passthrough FC uses and still failed, so it is our-driver-
 vs-FC (off-wire bus-master DMA), not host/IOMMU/VM context. (Earlier data-plane notes called this

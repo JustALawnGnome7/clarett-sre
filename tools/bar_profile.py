@@ -2,9 +2,9 @@
 """bar_profile.py — profile Clarett 2Pre BAR0 register activity from QEMU vfio_region_* traces.
 
 Buckets every region0 access by offset and flags offsets OUTSIDE the known control-plane register
-map (spec/clarett-fcp-transport.md §8). The point: capture a PCM streaming session and see
+map (spec/provenance/clarett-fcp-transport.md §8). The point: capture a PCM streaming session and see
 which *new* registers light up — those are the data-plane DMA engine (ring base / size / pointer /
-control). See spec/clarett-data-plane.md for the capture plan.
+control). See spec/provenance/clarett-data-plane.md for the capture plan.
 
 Audio samples move by bus-master DMA and never touch the BAR, so this shows the streaming *setup and
 control*, not the sample flow — dump guest RAM at the ring base for the buffer layout.

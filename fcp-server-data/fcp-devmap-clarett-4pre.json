@@ -1,7 +1,7 @@
 {
   "_note": "DRAFT \u2014 hand-authored device-map for the Clarett 4Pre (Thunderbolt), paired with fcp-alsa-map-clarett-4pre.json for fcp-server. Loaded from file so fcp-server can create controls when the device's own DEVMAP_READ (0x80000d) is unavailable/silent. NOT a substitute for the device-provided devmap: offsets/types are carried from the snd-clarett driver (see _todo). Replace with the /tmp/fcp-devmap-clarett-4pre-*.json dump once DEVMAP_READ works.",
   "_schema": "structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read offset = member.offset + index*width, and index+1 fills the %d in the alsa-map name.",
-  "_provenance": "Offsets from the snd-clarett driver + spec/clarett-control-plane.md: air @ 174+i, mode @ 166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. Clean-room: authored from our own interface facts, not any vendor devmap.",
+  "_provenance": "Offsets from the snd-clarett driver + spec/provenance/clarett-control-plane.md: air @ 174+i, mode @ 166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. Clean-room: authored from our own interface facts, not any vendor devmap.",
   "_todo": [
     "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
     "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",

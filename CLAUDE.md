@@ -8,7 +8,7 @@ session (or contributor) can continue without the original chat history.
 ## Goal & status
 
 Build an in-kernel ALSA driver for the Clarett line (2Pre/4Pre/8PreX).
-**THE MANIFESTATION WALL IS CROSSED (July 16 2026 — `spec/clarett-manifestation-wall.md` §8).**
+**THE MANIFESTATION WALL IS CROSSED (July 16 2026 — `spec/provenance/clarett-manifestation-wall.md` §8).**
 The year-defining "off-wire/below-driver wall" was a **timing artifact of the measurement
 apparatus**: every "known-good" vendor trace ran under x-no-mmap MMIO trapping (~20 µs/access),
 under which the device's asynchronous response DMA had always landed before the trailing doorbell
@@ -31,7 +31,7 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
   sustain past one ring pass** (flags period 0, the `0x300` counter never advances).
   **Its "same below-BAR wall" attribution is now VOID** — retest on an armed session; the stall
   may be the same ack-timing class on the stream cause blocks, or may resolve outright.
-  Details: `spec/clarett-data-plane.md`.
+  Details: `spec/provenance/clarett-data-plane.md`.
 - **How the wall was crossed (method lesson — carry this):** the wall had been "confirmed
   below-driver" by four independent methods (Windows/vfio MMIO, macOS DTrace, our Linux replay,
   WinDbg of `FocusritePCIe.sys`) — every host-visible surface, warm and cold, matched the vendor
@@ -131,16 +131,22 @@ end-to-end: replayed by our driver these writes complete (`done=1`) but do not m
 ## Repository layout
 
 ```
-spec/clarett-control-plane.md       Authored control-plane spec (offsets, opcodes,
-                                    enums, pins, mixer, routing). Provenance-tagged.
-spec/clarett-fcp-transport.md       Mailbox/transport framing; confirmed reg map.
-spec/clarett-data-plane.md          PCM-DMA RE: method, recovered register/descriptor maps, and the
+spec/clarett-interface.md           Clean device & protocol specification (distilled): device, transport,
+                                    control protocol, data plane, bring-up, per-model tables. No provenance
+                                    notes or failed-experiment history — that lives in spec/provenance/.
+spec/provenance/                    The RE lab notebook: the evidence trail behind the clean spec — full
+                                    elimination records, wall narratives, per-experiment provenance tags,
+                                    and cross-platform plans. Kept as the clean-room audit log.
+  clarett-control-plane.md          Authored control-plane spec (offsets, opcodes, enums, pins, mixer,
+                                    routing). Provenance-tagged.
+  clarett-fcp-transport.md          Mailbox/transport framing; confirmed reg map.
+  clarett-data-plane.md             PCM-DMA RE: method, recovered register/descriptor maps, and the
                                     validated-but-won't-sustain engine (boot→stream traced; below-BAR wall).
-spec/clarett-manifestation-wall.md  The wall: full elimination record (§§1–7) + §8 THE CROSSING —
+  clarett-manifestation-wall.md     The wall: full elimination record (§§1–7) + §8 THE CROSSING —
                                     trailing-ack-vs-response-DMA race; landed-gated ack arms the session.
-spec/clarett-macos-dtrace-plan.md   DTrace of the working macOS driver (device runs on the M1): RUN and
+  clarett-macos-dtrace-plan.md      DTrace of the working macOS driver (device runs on the M1): RUN and
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
-spec/clarett-windbg-plan.md         RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
+  clarett-windbg-plan.md            RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
                                     driver-level DMA is attribute-equivalent to ours; wall confirmed below-driver.
 driver/                               Out-of-tree module `snd-clarett` (hwdep transport + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
@@ -311,7 +317,7 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
   cycles). **A module reload clears it with no bring-up and no power cycle** (`clarett_is_armed` correctly
   reports armed afterwards), so it is host/session state, not the device losing its arm. Trigger not
   isolated. Check with `sudo ./fcp_cap_read /dev/snd/hwCxD0`; recover with `rmmod`/`insmod`.
-- **Control plane WORKS (July 16 2026 — wall crossed, `spec/clarett-manifestation-wall.md` §8).**
+- **Control plane WORKS (July 16 2026 — wall crossed, `spec/provenance/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
   retired, `resp_trace` telemetry kept). The full bring-up answers `err=0` with real data and

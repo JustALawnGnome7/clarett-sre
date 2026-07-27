@@ -10,7 +10,7 @@ These are keyed on the **model slug** the driver publishes at
 the PCI id, selects the per-model map. (Requires the Stage-1 fcp-server patch that
 reads the slug; stock fcp-server keys on the USB product id.)
 
-Clean-room: authored from our own interface facts (`spec/clarett-control-plane.md`,
+Clean-room: authored from our own interface facts (`spec/provenance/clarett-control-plane.md`,
 `driver/clarett.h`), never from any vendor device-map.
 
 ## Files

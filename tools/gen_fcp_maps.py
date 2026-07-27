@@ -298,7 +298,7 @@ MODELS = {
 #
 # The 2Pre/4Pre/8Pre have a single combo XLR/TRS jack per input that cannot take both plugs at once,
 # so the hardware selects Mic itself when an XLR is inserted and software only chooses Line vs Inst
-# (spec/clarett-control-plane.md §4). Those get the {name, value} form so the device bytes stay 1/2
+# (spec/provenance/clarett-control-plane.md §4). Those get the {name, value} form so the device bytes stay 1/2
 # with no Mic entry — offering a Mic that the jack decides would be offering a setting that does
 # nothing. REQUIRES the fcp-server patch that accepts the object form in input-controls (the same
 # form global-controls.c already took).
@@ -397,7 +397,7 @@ for slug, spec in MODELS.items():
     # so it is set only where the device can actually change the value behind us: mute, dim and the
     # monitor gain (the front-panel knob). Air/mode/SW-HW are host-owned — there is no front-panel
     # control for any of them on this line, so nothing but us ever writes them — and the firmware
-    # version is static. See spec/clarett-control-plane.md and the config-ownership notes.
+    # version is static. See spec/provenance/clarett-control-plane.md and the config-ownership notes.
     members = OD()
     members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0, note="PLACEHOLDER offset; see _todo")
     members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute @ 24; activate 2. 1 = muted, 0 = unmuted (trace-confirmed, and confirmed on a 2Pre) - no inversion, same as dim @ 28")
@@ -501,7 +501,7 @@ for slug, spec in MODELS.items():
                          "notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,"
                          "outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read "
                          "offset = member.offset + index*width, and index+1 fills the %d in the alsa-map name.")
-    devmap["_provenance"] = ("Offsets from the snd-clarett driver + spec/clarett-control-plane.md: air @ 174+i, "
+    devmap["_provenance"] = ("Offsets from the snd-clarett driver + spec/provenance/clarett-control-plane.md: air @ 174+i, "
                              "mode @ 166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. "
                              "Clean-room: authored from our own interface facts, not any vendor devmap.")
     devmap["_todo"] = [

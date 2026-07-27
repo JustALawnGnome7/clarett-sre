@@ -12,7 +12,7 @@
  * Two things to know before believing a reading:
  *   - Bytes this host has never written read 0 whatever the hardware is doing. The device
  *     restores its own state from flash without mirroring it into the host-readable appspace
- *     (see spec/clarett-control-plane.md and the config-ownership notes), so 0 means "unwritten",
+ *     (see spec/provenance/clarett-control-plane.md and the config-ownership notes), so 0 means "unwritten",
  *     not "Mic".
  *   - Setting a control to the value it already holds writes nothing at all: no change, no
  *     SET_DATA. Toggle away and back if you need a byte written deliberately.
@@ -20,7 +20,7 @@
  * Build: gcc -O2 -o fcp_cfg_read tools/fcp_cfg_read.c
  * Run:   sudo ./fcp_cfg_read /dev/snd/hwC5D0 166 2   (stop fcp-server first: the hwdep is exclusive)
  *
- * Useful offsets (spec/clarett-control-plane.md): 24 master mute, 28 dim, 32+ output gains
+ * Useful offsets (spec/provenance/clarett-control-plane.md): 24 master mute, 28 dim, 32+ output gains
  * (strided), 166+i preamp mode, 174+i air.
  */
 #include <stdio.h>
