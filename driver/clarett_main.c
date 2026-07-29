@@ -295,16 +295,33 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c)
 	static const u8 band0;
 	const u8 *r = c->resp_buf;
 	u16 pb, cap, size;
-	int i;
+	u8 status;
+	int i, err;
 
-	if (clarett_fcp(c, FCP_GET_71, &band0, 1))
+	/*
+	 * GET_7.1's reply arrives by DMA, invisible in every MMIO trace — so a model's identity
+	 * pair is only trustworthy once read back from that model's live hardware (2Pre/4Pre are;
+	 * 8Pre/8PreX are XML-inferred). Instrument every early return with the raw response so a
+	 * first attach of an unconfirmed model pins the cause (transport vs. status vs. unmatched)
+	 * in one line, and surfaces the actual pair to fold back into the table.
+	 */
+	err = clarett_fcp(c, FCP_GET_71, &band0, 1);
+	if (err) {
+		dev_warn(&c->pci->dev,
+			 "model auto-detect: GET_7.1 transport failed (%d)\n", err);
 		return NULL;
+	}
 	dma_rmb();	/* order the DMAed response before we read resp_buf */
+	status = r[FCP_RESP_STATUS_OFF];
 	size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-	if (r[FCP_RESP_STATUS_OFF] != FCP_RESP_ERR_OK || size < 4)
-		return NULL;
 	pb  = r[FCP_RESP_DATA_OFF]     | r[FCP_RESP_DATA_OFF + 1] << 8;
 	cap = r[FCP_RESP_DATA_OFF + 2] | r[FCP_RESP_DATA_OFF + 3] << 8;
+	if (status != FCP_RESP_ERR_OK || size < 4) {
+		dev_warn(&c->pci->dev,
+			 "model auto-detect: GET_7.1 bad response (status=%u size=%u raw playback=%u capture=%u)\n",
+			 status, size, pb, cap);
+		return NULL;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(models); i++)
 		if (models[i]->playback_channels == pb &&
@@ -312,7 +329,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c)
 			return models[i];
 
 	dev_warn(&c->pci->dev,
-		 "unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
+		 "model auto-detect: unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
 		 pb, cap);
 	return NULL;
 }
