@@ -357,14 +357,6 @@
       "alsa_name": "PCM 04"
     },
     {
-      "device_name": "PCM 13",
-      "alsa_name": "PCM 13"
-    },
-    {
-      "device_name": "PCM 14",
-      "alsa_name": "PCM 14"
-    },
-    {
       "device_name": "PCM 05",
       "alsa_name": "PCM 05"
     },
@@ -395,6 +387,14 @@
     {
       "device_name": "PCM 12",
       "alsa_name": "PCM 12"
+    },
+    {
+      "device_name": "PCM 13",
+      "alsa_name": "PCM 13"
+    },
+    {
+      "device_name": "PCM 14",
+      "alsa_name": "PCM 14"
     }
   ]
 }

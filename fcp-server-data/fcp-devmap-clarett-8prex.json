@@ -1081,18 +1081,6 @@
         "_peak-index-provenance": "stride"
       },
       {
-        "name": "PCM 27",
-        "router-pin": "1546",
-        "peak-index": 54,
-        "_peak-index-provenance": "measured"
-      },
-      {
-        "name": "PCM 28",
-        "router-pin": "1547",
-        "peak-index": 55,
-        "_peak-index-provenance": "stride"
-      },
-      {
         "name": "PCM 11",
         "router-pin": "1548",
         "peak-index": 10,
@@ -1186,6 +1174,18 @@
         "name": "PCM 26",
         "router-pin": "1563",
         "peak-index": 25,
+        "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "PCM 27",
+        "router-pin": "1546",
+        "peak-index": 54,
+        "_peak-index-provenance": "measured"
+      },
+      {
+        "name": "PCM 28",
+        "router-pin": "1547",
+        "peak-index": 55,
         "_peak-index-provenance": "stride"
       }
     ]

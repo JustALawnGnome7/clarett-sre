@@ -716,14 +716,6 @@
         "_peak-index-provenance": "reinterpreted"
       },
       {
-        "name": "PCM 19",
-        "router-pin": "1546"
-      },
-      {
-        "name": "PCM 20",
-        "router-pin": "1547"
-      },
-      {
         "name": "PCM 11",
         "router-pin": "1548",
         "peak-index": 10,
@@ -770,6 +762,14 @@
         "router-pin": "1555",
         "peak-index": 17,
         "_peak-index-provenance": "reinterpreted"
+      },
+      {
+        "name": "PCM 19",
+        "router-pin": "1546"
+      },
+      {
+        "name": "PCM 20",
+        "router-pin": "1547"
       }
     ]
   },

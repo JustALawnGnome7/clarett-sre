@@ -62,7 +62,18 @@ def name_destinations(dsts, slug=None):
     monitor_pair = 0x408 in dsts
     # Capture pins: use the model's record/loopback layout (loopback pins named, records renumbered).
     cap = capture_names(slug) if slug else {}
-    for pin in sorted(dsts, key=_dest_rank):
+
+    # Order capture (PCM) sinks by their DISPLAY number, not register pin: the loopback pins are
+    # numbered last (8PreX PCM 27/28, 2Pre PCM 13/14, ...) but sit mid-block by pin (0x60a/0x60b,
+    # between PCM 10 and 11), so a pin-order list drops them mid-column in the routing window. Sort by
+    # the PCM number so they land at the END of the PCM block; non-PCM destinations keep _dest_rank.
+    def dest_key(pin):
+        if 0x600 <= pin <= 0x61f and pin in cap:
+            band, sub, _ = _dest_rank(pin)
+            return (band, sub, int(cap[pin].rsplit(None, 1)[-1]))
+        return _dest_rank(pin)
+
+    for pin in sorted(dsts, key=dest_key):
         if 0x186 <= pin <= 0x187:
             out[pin] = (f"S/PDIF Output {pin - 0x186 + 1}", None)
         elif 0x200 <= pin <= 0x20f:

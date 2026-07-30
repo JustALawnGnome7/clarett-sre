@@ -565,14 +565,6 @@
         "_peak-index-provenance": "stride"
       },
       {
-        "name": "PCM 13",
-        "router-pin": "1540"
-      },
-      {
-        "name": "PCM 14",
-        "router-pin": "1541"
-      },
-      {
         "name": "PCM 05",
         "router-pin": "1542",
         "peak-index": 4,
@@ -619,6 +611,14 @@
         "router-pin": "1549",
         "peak-index": 11,
         "_peak-index-provenance": "stride"
+      },
+      {
+        "name": "PCM 13",
+        "router-pin": "1540"
+      },
+      {
+        "name": "PCM 14",
+        "router-pin": "1541"
       }
     ]
   },
