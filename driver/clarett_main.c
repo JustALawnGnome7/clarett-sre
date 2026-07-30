@@ -1678,6 +1678,43 @@ static void clarett_hw_gain_follow(struct clarett *c, const u8 *cfg)
 	}
 }
 
+/*
+ * Meter-source follow (8PreX). fcp-server's "Meter Source" enum writes only the selector byte @184,
+ * but the physical meter bridge is routed by the per-source channel-index tables @136/146/156 (XML
+ * <hardware-meters>). Nothing derives those from 184 on its own — so without this the selector LED
+ * moves while the meters keep displaying whichever bank the tables were last set to. On a change we
+ * write the selected source's three per-band tables and commit with activate 8, which commits them
+ * together with the selector byte fcp-server already staged. No-op on models with no meter-source
+ * control or for an unrecognised source value. Called from the hwdep CMD path on a SET_DATA @184.
+ */
+void clarett_meter_source_follow(struct clarett *c, u8 source)
+{
+	const struct clarett_model *m = c->model;
+	const struct clarett_meter_source *ms = NULL;
+	int i, err;
+
+	for (i = 0; i < m->n_meter_sources; i++)
+		if (m->meter_sources[i].value == source) {
+			ms = &m->meter_sources[i];
+			break;
+		}
+	if (!ms)
+		return;
+
+	err = clarett_set_data(c, METER_TABLE_L_OFFSET, METER_TABLE_LEN, ms->tbl[0]);
+	if (!err)
+		err = clarett_set_data(c, METER_TABLE_M_OFFSET, METER_TABLE_LEN, ms->tbl[1]);
+	if (!err)
+		err = clarett_set_data(c, METER_TABLE_H_OFFSET, METER_TABLE_LEN, ms->tbl[2]);
+	if (!err)
+		err = clarett_data_cmd(c, METER_SOURCE_ACTIVATE);
+	if (err)
+		dev_warn_ratelimited(&c->pci->dev,
+				     "meter-source follow (%s) failed: %d\n", ms->name, err);
+	else
+		dev_dbg(&c->pci->dev, "meter-source follow: %s (0x%02x)\n", ms->name, source);
+}
+
 static void clarett_monitor_poll(struct clarett *c)
 {
 	u8 buf[MONITOR_CFG_LEN];

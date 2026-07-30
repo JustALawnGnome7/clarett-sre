@@ -820,6 +820,9 @@ int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
 int clarett_data_cmd(struct clarett *c, u32 activate);
 int clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate);
 int clarett_write_u8_nosave(struct clarett *c, u32 offset, u8 val, u32 activate);
+/* Write the selected meter source's per-band channel tables (@136/146/156) and commit; see the
+ * definition. Called from the hwdep CMD path when fcp-server writes the selector byte @184. */
+void clarett_meter_source_follow(struct clarett *c, u8 source);
 
 /* BAR0 access wrappers. */
 void clarett_wl(struct clarett *c, u32 off, u32 val);

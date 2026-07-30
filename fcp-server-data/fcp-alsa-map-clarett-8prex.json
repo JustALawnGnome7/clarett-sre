@@ -74,6 +74,28 @@
     "dimSwitch": {
       "name": "Dim Playback Switch",
       "type": "bool"
+    },
+    "meterSource": {
+      "name": "Meter Source Enum",
+      "type": "enum",
+      "values": [
+        {
+          "name": "Analogue",
+          "value": 1
+        },
+        {
+          "name": "S/PDIF",
+          "value": 2
+        },
+        {
+          "name": "ADAT 1",
+          "value": 4
+        },
+        {
+          "name": "ADAT 2",
+          "value": 8
+        }
+      ]
     }
   },
   "sources": [

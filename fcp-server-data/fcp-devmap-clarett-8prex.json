@@ -109,6 +109,13 @@
           "notify-device": 3,
           "notify-client": 0,
           "_note": "enable-hardware-gain bits for outputs 9/10 @ 68, bit 0/1; commit activate 3"
+        },
+        "meterSource": {
+          "offset": 184,
+          "type": "uint8",
+          "notify-device": 8,
+          "notify-client": 0,
+          "_note": "front-panel meter-bridge source @ 184; commit activate 8; enum Analogue=1/S/PDIF=2/ADAT 1=4/ADAT 2=8 [XML]"
         }
       }
     }

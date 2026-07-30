@@ -337,6 +337,18 @@ ENUM_LABELS = {
     "li2":  [OD([("name", "Line"), ("value", 1)]), OD([("name", "Inst"), ("value", 2)])],
 }
 
+# <meter-source> [XML]: which input bank the front-panel hardware meter bridge displays. The selected
+# value is written to config offset 184 and committed with DATA_CMD activate 8. Device values are
+# non-contiguous (1/2/4/8), so the {name, value} enum form is required. Only the 8PreX offers a real
+# choice; the 4Pre/8Pre XML has Analogue only (a one-option control, not worth exposing) and the 2Pre
+# has no <meter-source> element at all — so this table is the gate for the whole control.
+METER_SOURCE = {
+    "clarett-8prex": [OD([("name", "Analogue"), ("value", 1)]),
+                      OD([("name", "S/PDIF"),   ("value", 2)]),
+                      OD([("name", "ADAT 1"),   ("value", 4)]),
+                      OD([("name", "ADAT 2"),   ("value", 8)])],
+}
+
 
 # --- Clarett 8Pre band-0 router table (no capture exists for this model) -------------------------
 #
@@ -447,6 +459,15 @@ for slug, spec in MODELS.items():
                                                 note=f"enable-hardware-gain bits for outputs "
                                                      f"{2*pair+1}/{2*pair+2} @ {52 + 4*pair}, "
                                                      f"bit 0/1; commit activate 3")
+
+    # <meter-source> [XML]: front-panel meter-bridge bank selector (8PreX only). Value written to
+    # offset 184, committed with DATA_CMD activate 8. Host-owned (nc=0): no front-panel control
+    # changes it behind us.
+    if slug in METER_SOURCE:
+        members["meterSource"] = member(
+            184, "uint8", nd=8, nc=0,
+            note="front-panel meter-bridge source @ 184; commit activate 8; "
+                 "enum Analogue=1/S/PDIF=2/ADAT 1=4/ADAT 2=8 [XML]")
 
     phys_in = []
     for i in range(na):
@@ -678,6 +699,14 @@ for slug, spec in MODELS.items():
                               ("invert", True)])),
         ("dimSwitch",  OD(name="Dim Playback Switch",  type="bool")),
     ])
+    # Front-panel meter-bridge source selector (8PreX). Non-contiguous device values (1/2/4/8) need
+    # the {name, value} enum form, which global-controls.c accepts. Bound to the meterSource devmap
+    # member (offset 184, commit activate 8).
+    if slug in METER_SOURCE:
+        alsamap["global-controls"]["meterSource"] = OD([
+            ("name", "Meter Source Enum"), ("type", "enum"),
+            ("values", METER_SOURCE[slug]),
+        ])
 
     if alsa_sources:
         alsamap["sources"] = alsa_sources

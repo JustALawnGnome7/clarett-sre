@@ -66,6 +66,15 @@ static int clarett_hwdep_cmd(struct clarett *c, struct fcp_cmd __user *arg)
 	if (err)
 		goto out;
 
+	/* Meter-source follow: fcp-server's Meter Source enum writes only the selector byte @184, but
+	 * the front-panel meter bridge is routed by the per-source tables @136/146/156. When we see that
+	 * write go by, write the selected source's tables so the meters actually switch banks. The SET_DATA
+	 * payload is {u32 offset, u32 len, value...}; a selector write is offset 184, len 1. */
+	if (cmd.opcode == FCP_SET_DATA && cmd.req_size >= 9 &&
+	    clarett_get_le32(data) == METER_SOURCE_OFFSET &&
+	    clarett_get_le32((const u8 *)data + 4) == 1)
+		clarett_meter_source_follow(c, ((const u8 *)data)[8]);
+
 	if (cmd.resp_size && copy_to_user(arg->data, data, cmd.resp_size))
 		err = -EFAULT;
 out:
