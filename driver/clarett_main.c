@@ -768,8 +768,20 @@ static void clarett_error_probe(struct clarett *c)
 		u8 data[8];
 		u16 len;
 	} cmds[] = {
-		/* Discrimination set (July 10): valid/zero-len GET_DATA → err=3 (real header);
-		 * bad-offset / unknown-opcode → NO DMA response (device parses + drops). Kept as controls. */
+		/* Discrimination set — resp+8 status byte across session states (8PreX, July 30 2026;
+		 * legacy_mbox_cycle=1 reproducibly forces the premature-ack wall):
+		 *   WORKING session: per-command validation, distinct status per failure stage —
+		 *     valid → err=0; bad param (offset out of range / oversized length) → err=1;
+		 *     unsupported category (ESP_DFU 0x009, CAP_READ-disabled) → err=4; unknown opcode or
+		 *     bad sub-op in a SUPPORTED category → err=7. (Zero-length and off+len-past-end reads
+		 *     are accepted → err=0.) Vocabulary seen: {0,1,3,4,7}; 2/5/6 unobserved. The codes are
+		 *     an enum keyed to where validation fails, NOT an all-odd bitfield (err=4 is even).
+		 *   WALLED session (err=3): ALL commands — valid, bad-offset, unknown-opcode, exotic —
+		 *     return an identical canned refusal (err=3, size=0, seq=0 [request seq NOT echoed],
+		 *     opcode echoed, response landed). Per-command validation is fully suppressed; err=3
+		 *     is a session-level refusal that overrides it.
+		 *   (An earlier 2Pre run, July 10, saw malformed commands DROPPED with no response rather
+		 *     than a landed err=3 — a 2Pre/8PreX or condition difference.) Kept as controls. */
 		{ "GET_DATA{24,4} valid",     FCP_GET_DATA, { 24,0,0,0,  4,0,0,0 }, 8 },
 		{ "GET_DATA bad-offset",      FCP_GET_DATA, { 0,0,0xff,0xff, 4,0,0,0 }, 8 },
 		{ "unknown opcode 0x0000ff",  0x0000ff,     { 0 }, 0 },
@@ -782,6 +794,19 @@ static void clarett_error_probe(struct clarett *c)
 		{ "GET_6.2",                  0x006002,     { 0 }, 0 },
 		{ "CONFIG_PUSH{0x1e}",        0x005000,     { 0x1e, 0 }, 2 },
 		{ "GET_DATA{0xc8,8}",         FCP_GET_DATA, { 0xc8,0,0,0, 8,0,0,0 }, 8 },
+		/* Status-vocabulary probes (July 30): error conditions at DIFFERENT validation stages than
+		 * bad-offset/unknown-opcode, run on a WORKING session (a walled one flattens all to 3):
+		 * length errors, an unknown sub-op inside a SUPPORTED category, and a command in an
+		 * UNSUPPORTED category (CAP_READ reports 0x009 ESP_DFU disabled — the probe that surfaced
+		 * err=4, distinct from the err=7 an unknown opcode gets in a live category). Read-only /
+		 * no-op — no writes, no side effects. */
+		{ "GET_DATA zero-len",        FCP_GET_DATA, { 24,0,0,0,  0,0,0,0 }, 8 },
+		{ "GET_DATA oversized-len",   FCP_GET_DATA, { 0,0,0,0,  0,0,1,0 }, 8 },   /* len=0x10000 */
+		{ "GET_DATA overrun-end",     FCP_GET_DATA, { 0xf8,0,0,0, 0x40,0,0,0 }, 8 }, /* off ok, off+len past end */
+		{ "unknown sub-op in MUX",    0x0030ff,     { 0 }, 0 },   /* supported cat 0x003, bogus sub-op */
+		{ "unknown sub-op in MIX",    0x0020ff,     { 0 }, 0 },   /* supported cat 0x002, bogus sub-op */
+		{ "unsupported cat ESP_DFU",  0x009000,     { 0 }, 0 },   /* CAP_READ: 0x009 NOT SUPPORTED */
+		{ "unsupported cat ESP_DFU1", 0x009001,     { 0 }, 0 },
 	};
 	const u8 *r = c->resp_buf;
 	int i, ret;
