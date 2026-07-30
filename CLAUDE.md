@@ -154,6 +154,11 @@ driver/                               Out-of-tree module `snd-clarett` (hwdep tr
   enable_pcm=1), Makefile, README.md
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
+wireplumber/51-clarett-naming.conf    WirePlumber drop-in: promotes the driver's per-model card name
+                                      (api.alsa.card.name) into device.description so GNOME shows
+                                      "Clarett 2Pre" not the generic "Clarett Multichannel". Coupled to
+                                      the driver's card->shortname (matches on it); lives here, not in
+                                      fcp-support, because it depends on the driver, not on fcp-server.
 tools/gen_fcp_maps.py                 Generates all four map pairs (names, routing/mixer tables from
                                       the bring-up blobs, measured meter peak-index).
 tools/gen_sim_state.py                Map -> alsactl .state file, so alsa-scarlett-gui can render our
