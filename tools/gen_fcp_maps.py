@@ -134,13 +134,17 @@ def capture_record_pins(slug):
     return [p for p in range(0x600, 0x600 + CAPTURE_CHANNELS[slug]) if p not in loop]
 
 def capture_names(slug):
-    """capture pin -> display name: physical records numbered PCM 1..N by input order, the inserted pair
-    named Loopback 1/2 (matching the vendor XML)."""
+    """capture pin -> display name. Every capture channel is a PCM input: the physical records are
+    numbered PCM 1..N by input order, and the inserted loopback pair continues that numbering
+    (2Pre -> PCM 13/14, 4Pre/8Pre -> PCM 19/20, 8PreX -> PCM 27/28) rather than forming a separate
+    "Loopback" category. The loopback pins sit mid-block by register order but are numbered as if
+    appended after the records."""
     loop = LOOPBACK_PINS[slug]
+    n_records = CAPTURE_CHANNELS[slug] - len(loop)
     out, n = OD(), 0
     for p in range(0x600, 0x600 + CAPTURE_CHANNELS[slug]):
         if p in loop:
-            out[p] = f"Loopback {loop.index(p) + 1}"
+            out[p] = f"PCM {n_records + loop.index(p) + 1:02d}"
         else:
             n += 1
             out[p] = f"PCM {n:02d}"
@@ -270,13 +274,13 @@ METER_SLOTS_DST = {
     # Two ways it differs from the 2Pre/4Pre: the analogue outputs pack in CATEGORY order (Monitor before
     # Line), not pin order; and LOOPBACK IS METERED (slots 54-55, after the outputs) where the 2Pre/4Pre
     # leave those slots dark. Anchors read: PCM 01->0, Monitor Out 1->26, S/PDIF Out 1->36, ADAT Out 1->38,
-    # ADAT Out 16->53, Loopback 1->54, Mixer In 01->56, Mixer In 30->85.
+    # ADAT Out 16->53, PCM 27 (loopback pin)->54, Mixer In 01->56, Mixer In 30->85.
     #   0-25   PCM 01-26 record         (0x600.. minus loopback)
     #   26-27  Monitor Output 1-2       0x408/0x409
     #   28-35  Line Output 3-10         0x400-0x407
     #   36-37  S/PDIF Output 1-2        0x186/0x187
     #   38-53  ADAT Output 1-16         0x200-0x20f
-    #   54-55  Loopback 1-2             0x60a/0x60b
+    #   54-55  PCM 27-28 (loopback pins) 0x60a/0x60b
     #   56-85  Mixer Input 01-30        0x300-0x31d
     "clarett-8prex": {
         **{pin: (i, "measured" if i == 0 else "stride")
@@ -286,7 +290,7 @@ METER_SLOTS_DST = {
         0x186: (36, "measured"), 0x187: (37, "stride"),		# S/PDIF Output 1-2
         **{0x200 + i: (38 + i, "measured" if i in (0, 15) else "stride")
            for i in range(16)},					# ADAT Output 1-16
-        0x60a: (54, "measured"), 0x60b: (55, "stride"),		# Loopback 1-2 (metered on the 8PreX)
+        0x60a: (54, "measured"), 0x60b: (55, "stride"),		# PCM 27-28 = loopback pins (metered on the 8PreX)
         **{0x300 + i: (56 + i, "measured" if i in (0, 29) else "stride")
            for i in range(30)},					# Mixer Input 01-30
     },

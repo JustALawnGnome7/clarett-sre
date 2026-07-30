@@ -565,11 +565,11 @@
         "_peak-index-provenance": "stride"
       },
       {
-        "name": "Loopback 1",
+        "name": "PCM 13",
         "router-pin": "1540"
       },
       {
-        "name": "Loopback 2",
+        "name": "PCM 14",
         "router-pin": "1541"
       },
       {

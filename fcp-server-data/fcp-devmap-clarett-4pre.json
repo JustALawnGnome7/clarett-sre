@@ -716,11 +716,11 @@
         "_peak-index-provenance": "reinterpreted"
       },
       {
-        "name": "Loopback 1",
+        "name": "PCM 19",
         "router-pin": "1546"
       },
       {
-        "name": "Loopback 2",
+        "name": "PCM 20",
         "router-pin": "1547"
       },
       {

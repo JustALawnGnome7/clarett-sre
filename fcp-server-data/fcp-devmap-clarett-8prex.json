@@ -1074,13 +1074,13 @@
         "_peak-index-provenance": "stride"
       },
       {
-        "name": "Loopback 1",
+        "name": "PCM 27",
         "router-pin": "1546",
         "peak-index": 54,
         "_peak-index-provenance": "measured"
       },
       {
-        "name": "Loopback 2",
+        "name": "PCM 28",
         "router-pin": "1547",
         "peak-index": 55,
         "_peak-index-provenance": "stride"
