@@ -265,15 +265,31 @@ METER_SLOTS_DST = {
     # 8Pre: record block only, PREDICTED from the packing rule (no 8Pre hardware). Outputs/mixer unmapped.
     # Same loopback-skipping record pins as the 4Pre (identical capture layout).
     "clarett-8pre": {pin: (i, "predicted") for i, pin in enumerate(capture_record_pins("clarett-8pre"))},
-    # 8PreX: record block, from the packing rule. 26 record pins (28 capture - 2 loopback) -> slots 0-25.
-    # Without any peak-index fcp-server logs "No meters found" and alsa-scarlett-gui errors "Level Meter
-    # control not found". PCM 01 -> slot 0 is MEASURED on hardware (July 29 2026: signal on Analogue 1,
-    # routed to PCM 01, read slot 0 = 2658/3742 via tools/fcp_meter_watch and the Level Meter control, all
-    # other slots dark); the rest follow the PCM-order stride confirmed on the 2Pre/4Pre. Outputs and the 30
-    # mixer inputs are NOT mapped yet: their slots (line-output base, S/PDIF, the model-specific mixer gap)
-    # are not predictable across this line and must be measured with tools/fcp_meter_watch on the live unit.
-    "clarett-8prex": {pin: (i, "measured" if i == 0 else "stride")
-                      for i, pin in enumerate(capture_record_pins("clarett-8prex"))},
+    # 8PreX: FULL 86-slot layout, MEASURED on hardware (July 29-30 2026, tools/fcp_meter_watch, one
+    # destination at a time; "measured" = read directly, "stride" = filled between measured anchors).
+    # Two ways it differs from the 2Pre/4Pre: the analogue outputs pack in CATEGORY order (Monitor before
+    # Line), not pin order; and LOOPBACK IS METERED (slots 54-55, after the outputs) where the 2Pre/4Pre
+    # leave those slots dark. Anchors read: PCM 01->0, Monitor Out 1->26, S/PDIF Out 1->36, ADAT Out 1->38,
+    # ADAT Out 16->53, Loopback 1->54, Mixer In 01->56, Mixer In 30->85.
+    #   0-25   PCM 01-26 record         (0x600.. minus loopback)
+    #   26-27  Monitor Output 1-2       0x408/0x409
+    #   28-35  Line Output 3-10         0x400-0x407
+    #   36-37  S/PDIF Output 1-2        0x186/0x187
+    #   38-53  ADAT Output 1-16         0x200-0x20f
+    #   54-55  Loopback 1-2             0x60a/0x60b
+    #   56-85  Mixer Input 01-30        0x300-0x31d
+    "clarett-8prex": {
+        **{pin: (i, "measured" if i == 0 else "stride")
+           for i, pin in enumerate(capture_record_pins("clarett-8prex"))},
+        0x408: (26, "measured"), 0x409: (27, "stride"),		# Monitor Output 1-2
+        **{0x400 + i: (28 + i, "stride") for i in range(8)},	# Line Output 3-10
+        0x186: (36, "measured"), 0x187: (37, "stride"),		# S/PDIF Output 1-2
+        **{0x200 + i: (38 + i, "measured" if i in (0, 15) else "stride")
+           for i in range(16)},					# ADAT Output 1-16
+        0x60a: (54, "measured"), 0x60b: (55, "stride"),		# Loopback 1-2 (metered on the 8PreX)
+        **{0x300 + i: (56 + i, "measured" if i in (0, 29) else "stride")
+           for i in range(30)},					# Mixer Input 01-30
+    },
 }
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)

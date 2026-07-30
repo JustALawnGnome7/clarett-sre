@@ -637,264 +637,380 @@
     "destinations": [
       {
         "name": "Monitor Output 1",
-        "router-pin": "1032"
+        "router-pin": "1032",
+        "peak-index": 26,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Monitor Output 2",
-        "router-pin": "1033"
+        "router-pin": "1033",
+        "peak-index": 27,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 3",
-        "router-pin": "1024"
+        "router-pin": "1024",
+        "peak-index": 28,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 4",
-        "router-pin": "1025"
+        "router-pin": "1025",
+        "peak-index": 29,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 5",
-        "router-pin": "1026"
+        "router-pin": "1026",
+        "peak-index": 30,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 6",
-        "router-pin": "1027"
+        "router-pin": "1027",
+        "peak-index": 31,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 7",
-        "router-pin": "1028"
+        "router-pin": "1028",
+        "peak-index": 32,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 8",
-        "router-pin": "1029"
+        "router-pin": "1029",
+        "peak-index": 33,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 9",
-        "router-pin": "1030"
+        "router-pin": "1030",
+        "peak-index": 34,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "Line Output 10",
-        "router-pin": "1031"
+        "router-pin": "1031",
+        "peak-index": 35,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "S/PDIF Output 1",
-        "router-pin": "390"
+        "router-pin": "390",
+        "peak-index": 36,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "S/PDIF Output 2",
-        "router-pin": "391"
+        "router-pin": "391",
+        "peak-index": 37,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 1",
-        "router-pin": "512"
+        "router-pin": "512",
+        "peak-index": 38,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "ADAT Output 2",
-        "router-pin": "513"
+        "router-pin": "513",
+        "peak-index": 39,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 3",
-        "router-pin": "514"
+        "router-pin": "514",
+        "peak-index": 40,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 4",
-        "router-pin": "515"
+        "router-pin": "515",
+        "peak-index": 41,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 5",
-        "router-pin": "516"
+        "router-pin": "516",
+        "peak-index": 42,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 6",
-        "router-pin": "517"
+        "router-pin": "517",
+        "peak-index": 43,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 7",
-        "router-pin": "518"
+        "router-pin": "518",
+        "peak-index": 44,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 8",
-        "router-pin": "519"
+        "router-pin": "519",
+        "peak-index": 45,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 9",
-        "router-pin": "520"
+        "router-pin": "520",
+        "peak-index": 46,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 10",
-        "router-pin": "521"
+        "router-pin": "521",
+        "peak-index": 47,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 11",
-        "router-pin": "522"
+        "router-pin": "522",
+        "peak-index": 48,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 12",
-        "router-pin": "523"
+        "router-pin": "523",
+        "peak-index": 49,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 13",
-        "router-pin": "524"
+        "router-pin": "524",
+        "peak-index": 50,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 14",
-        "router-pin": "525"
+        "router-pin": "525",
+        "peak-index": 51,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 15",
-        "router-pin": "526"
+        "router-pin": "526",
+        "peak-index": 52,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "ADAT Output 16",
-        "router-pin": "527"
+        "router-pin": "527",
+        "peak-index": 53,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Mixer Input 01",
         "router-pin": "768",
+        "peak-index": 56,
+        "_peak-index-provenance": "measured",
         "mixer-input-index": 0
       },
       {
         "name": "Mixer Input 02",
         "router-pin": "769",
+        "peak-index": 57,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 1
       },
       {
         "name": "Mixer Input 03",
         "router-pin": "770",
+        "peak-index": 58,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 2
       },
       {
         "name": "Mixer Input 04",
         "router-pin": "771",
+        "peak-index": 59,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 3
       },
       {
         "name": "Mixer Input 05",
         "router-pin": "772",
+        "peak-index": 60,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 4
       },
       {
         "name": "Mixer Input 06",
         "router-pin": "773",
+        "peak-index": 61,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 5
       },
       {
         "name": "Mixer Input 07",
         "router-pin": "774",
+        "peak-index": 62,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 6
       },
       {
         "name": "Mixer Input 08",
         "router-pin": "775",
+        "peak-index": 63,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 7
       },
       {
         "name": "Mixer Input 09",
         "router-pin": "776",
+        "peak-index": 64,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 8
       },
       {
         "name": "Mixer Input 10",
         "router-pin": "777",
+        "peak-index": 65,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 9
       },
       {
         "name": "Mixer Input 11",
         "router-pin": "778",
+        "peak-index": 66,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 10
       },
       {
         "name": "Mixer Input 12",
         "router-pin": "779",
+        "peak-index": 67,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 11
       },
       {
         "name": "Mixer Input 13",
         "router-pin": "780",
+        "peak-index": 68,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 12
       },
       {
         "name": "Mixer Input 14",
         "router-pin": "781",
+        "peak-index": 69,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 13
       },
       {
         "name": "Mixer Input 15",
         "router-pin": "782",
+        "peak-index": 70,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 14
       },
       {
         "name": "Mixer Input 16",
         "router-pin": "783",
+        "peak-index": 71,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 15
       },
       {
         "name": "Mixer Input 17",
         "router-pin": "784",
+        "peak-index": 72,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 16
       },
       {
         "name": "Mixer Input 18",
         "router-pin": "785",
+        "peak-index": 73,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 17
       },
       {
         "name": "Mixer Input 19",
         "router-pin": "786",
+        "peak-index": 74,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 18
       },
       {
         "name": "Mixer Input 20",
         "router-pin": "787",
+        "peak-index": 75,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 19
       },
       {
         "name": "Mixer Input 21",
         "router-pin": "788",
+        "peak-index": 76,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 20
       },
       {
         "name": "Mixer Input 22",
         "router-pin": "789",
+        "peak-index": 77,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 21
       },
       {
         "name": "Mixer Input 23",
         "router-pin": "790",
+        "peak-index": 78,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 22
       },
       {
         "name": "Mixer Input 24",
         "router-pin": "791",
+        "peak-index": 79,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 23
       },
       {
         "name": "Mixer Input 25",
         "router-pin": "792",
+        "peak-index": 80,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 24
       },
       {
         "name": "Mixer Input 26",
         "router-pin": "793",
+        "peak-index": 81,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 25
       },
       {
         "name": "Mixer Input 27",
         "router-pin": "794",
+        "peak-index": 82,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 26
       },
       {
         "name": "Mixer Input 28",
         "router-pin": "795",
+        "peak-index": 83,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 27
       },
       {
         "name": "Mixer Input 29",
         "router-pin": "796",
+        "peak-index": 84,
+        "_peak-index-provenance": "stride",
         "mixer-input-index": 28
       },
       {
         "name": "Mixer Input 30",
         "router-pin": "797",
+        "peak-index": 85,
+        "_peak-index-provenance": "measured",
         "mixer-input-index": 29
       },
       {
@@ -959,11 +1075,15 @@
       },
       {
         "name": "Loopback 1",
-        "router-pin": "1546"
+        "router-pin": "1546",
+        "peak-index": 54,
+        "_peak-index-provenance": "measured"
       },
       {
         "name": "Loopback 2",
-        "router-pin": "1547"
+        "router-pin": "1547",
+        "peak-index": 55,
+        "_peak-index-provenance": "stride"
       },
       {
         "name": "PCM 11",
