@@ -2060,9 +2060,14 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	}
 
 	strscpy(card->driver, "Clarett", sizeof(card->driver));
-	snprintf(card->shortname, sizeof(card->shortname), "Focusrite %s", c->model->name);
+	/* Mirror snd-usb-audio's naming: brand-free product name in the shortname
+	 * (== api.alsa.card.name), manufacturer only in the longname. The USB
+	 * Claretts show "Clarett 8Pre USB" on the /proc/asound/cards bracket line
+	 * because snd-usb-audio takes the shortname from the device's iProduct
+	 * string; we have no such descriptor, so we synthesise the same shape. */
+	snprintf(card->shortname, sizeof(card->shortname), "%s", c->model->name);
 	snprintf(card->longname, sizeof(card->longname),
-		 "%s at %s, fw app 0x%08x", card->shortname, pci_name(pci),
+		 "Focusrite %s at %s, fw app 0x%08x", c->model->name, pci_name(pci),
 		 c->fw_app);
 
 	/* Expose the stable per-model slug at /proc/asound/cardN/clarett (see clarett_proc_read).
