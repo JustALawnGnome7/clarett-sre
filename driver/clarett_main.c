@@ -546,13 +546,27 @@ static int clarett_push_mux_band0(struct clarett *c)
 	return err;
 }
 
-static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with)
+static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with,
+					bool preserve_routing)
 {
 	const struct clarett_model *m = c->model;
 	int i, sent = 0, fails = 0;
 
 	if (m == armed_with)			/* right tables already */
 		return;
+
+	/* The arm ran as armed_with but the device is really m; normally we now swap in m's routing.
+	 * But if the arm PRESERVED live routing (the device was already configured — see
+	 * clarett_band0_routed) or was skipped entirely, then armed_with's routing was never applied, so
+	 * there is nothing to correct: sending m's DEFAULT tables here would clobber the user's routing —
+	 * the exact regression clarett_band0_routed exists to prevent, and it bit every non-default model
+	 * (4Pre/8Pre/8PreX arm as the 2Pre default) until this guard. Leave the live routing alone. */
+	if (preserve_routing) {
+		dev_info(&c->pci->dev,
+			 "kept live routing after detect (%s default tables not applied; armed as %s)\n",
+			 m->name, armed_with->name);
+		return;
+	}
 
 	if (!m->init_blob) {			/* no capture for this model (8Pre) */
 		if (m->mux_band0)
@@ -1942,12 +1956,19 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * populated, arm while preserving it (skip only those two step kinds). A fresh/unconfigured device
 	 * reads empty (or refuses the read) and gets the full arm, default routing included.
 	 */
+	/* Did we leave the device's live routing in place? True when the arm preserved it (device already
+	 * configured) or was skipped — either way armed_with's default routing was NOT applied, which
+	 * clarett_apply_model_routing() below must know so it doesn't clobber that routing with the
+	 * detected model's defaults. skip_arm counts as preserving: it leaves the device untouched. */
+	bool preserve_routing = skip_arm;
+
 	if (skip_arm) {
 		dev_info(&pci->dev, "skip_arm=1: not replaying the vendor bring-up\n");
 	} else {
 		int routed = clarett_band0_routed(c);
 
-		clarett_arm_device(c, routed > 0);
+		preserve_routing = routed > 0;
+		clarett_arm_device(c, preserve_routing);
 	}
 	c->model = forced ? forced : armed_with;
 
@@ -1967,8 +1988,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			 det ? " (auto-detected)" : "");
 	}
 
-	/* The arm used armed_with's tables; give the selected model its own. */
-	clarett_apply_model_routing(c, armed_with);
+	/* The arm used armed_with's tables; give the selected model its own — unless we preserved the
+	 * device's live routing (or skipped the arm), in which case leave that routing untouched. */
+	clarett_apply_model_routing(c, armed_with, preserve_routing);
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
 	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
