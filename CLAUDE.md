@@ -190,7 +190,14 @@ captures/*.log                        Trace captures (vfio_region_* logs, guest-
 ```sh
 cd driver && make                 # builds snd-clarett.ko
 sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
+sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
+                                  # WirePlumber drop-in -> conf.d. PREFIX=/usr must
+                                  # match the fcp-server install PREFIX. `make help`.
 ```
+- **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
+  WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
+  copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +
+  systemd template) still installs from fcp-support (`make install PREFIX=/usr` there).
 - **Mixer-only**: `aplay -l` shows nothing (no PCM yet). Use `amixer -c N
   contents` / `alsamixer -c N`.
 - **Device must be free of `vfio-pci`** to test on the host (stop the VM, unbind).
