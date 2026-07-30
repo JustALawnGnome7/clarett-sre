@@ -265,6 +265,15 @@ METER_SLOTS_DST = {
     # 8Pre: record block only, PREDICTED from the packing rule (no 8Pre hardware). Outputs/mixer unmapped.
     # Same loopback-skipping record pins as the 4Pre (identical capture layout).
     "clarett-8pre": {pin: (i, "predicted") for i, pin in enumerate(capture_record_pins("clarett-8pre"))},
+    # 8PreX: record block, from the packing rule. 26 record pins (28 capture - 2 loopback) -> slots 0-25.
+    # Without any peak-index fcp-server logs "No meters found" and alsa-scarlett-gui errors "Level Meter
+    # control not found". PCM 01 -> slot 0 is MEASURED on hardware (July 29 2026: signal on Analogue 1,
+    # routed to PCM 01, read slot 0 = 2658/3742 via tools/fcp_meter_watch and the Level Meter control, all
+    # other slots dark); the rest follow the PCM-order stride confirmed on the 2Pre/4Pre. Outputs and the 30
+    # mixer inputs are NOT mapped yet: their slots (line-output base, S/PDIF, the model-specific mixer gap)
+    # are not predictable across this line and must be measured with tools/fcp_meter_watch on the live unit.
+    "clarett-8prex": {pin: (i, "measured" if i == 0 else "stride")
+                      for i, pin in enumerate(capture_record_pins("clarett-8prex"))},
 }
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
