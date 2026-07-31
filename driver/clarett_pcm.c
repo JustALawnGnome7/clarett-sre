@@ -57,6 +57,7 @@ MODULE_PARM_DESC(tx_tone,
 		 "outputs if the engine runs). Tests whether the engine gates on TX content.");
 
 
+
 /* One cycle of 1 kHz at 48 kHz, 24-bit signed; shifted left 8 for S32_LE MSB-justified. */
 static const s32 clarett_sine48[48] = {
 	        0,    136867,    271391,    401273,    524288,    638333,
@@ -114,38 +115,11 @@ static size_t clarett_tx_ring_bytes(struct clarett *c)
 	return clarett_stream_tx_area_bytes(c);
 }
 
-/*
- * Copy nframes of interleaved audio between a hardware sample ring and the ALSA buffer. Both are
- * ring_frames long and wrap independently: the ALSA buffer is indexed from the stream's own frame 0
- * while the hardware ring is indexed from the engine's, and the two are offset by the direction's
- * attach base. Hence separate start positions, each wrapping at its own end.
- * Used both ways: RX ring -> capture ALSA (drain) and playback ALSA -> TX ring (fill).
- */
-static void clarett_ring_copy(u8 *dst, u32 dst_start, const u8 *src, u32 src_start,
-			      u32 nframes, u32 ring_frames, u32 frame_bytes)
-{
-	while (nframes) {
-		/* Up to whichever side wraps first. */
-		u32 chunk = min3(nframes, ring_frames - dst_start, ring_frames - src_start);
-
-		memcpy(dst + (size_t)dst_start * frame_bytes,
-		       src + (size_t)src_start * frame_bytes,
-		       (size_t)chunk * frame_bytes);
-
-		dst_start += chunk;
-		if (dst_start == ring_frames)
-			dst_start = 0;
-		src_start += chunk;
-		if (src_start == ring_frames)
-			src_start = 0;
-		nframes -= chunk;
-	}
-}
-
-/* Silence the TX ring (playback-idle: capture-only must not loop stale playback audio out the DACs). */
+/* Silence the whole TX device area (all slots, including any inter-fragment padding): playback-idle,
+ * capture-only must not loop stale playback audio out the DACs. */
 static void clarett_zero_tx(struct clarett *c)
 {
-	memset(clarett_tx_area(c), 0, clarett_tx_ring_bytes(c));
+	memset(clarett_tx_area(c), 0, clarett_pcm_tx_dev_bytes(c));
 }
 
 /*
@@ -172,6 +146,41 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
 
 		memcpy(alsa + (size_t)apos * frame,
 		       ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
+		       (size_t)chunk * frame);
+		pos += chunk;
+		if (pos == ring_frames)
+			pos = 0;
+		apos += chunk;
+		if (apos == ring_frames)
+			apos = 0;
+		nframes -= chunk;
+	}
+}
+
+/*
+ * Fill nframes of playback audio into the TX device area (starting at hardware ring frame `pos`) from the
+ * contiguous ALSA playback buffer (starting at that stream's own frame `apos`). Exact mirror of
+ * clarett_rx_drain with source/destination swapped: the TX area is NDESC fragment SLOTS of c->tx_slot
+ * bytes; ring frame f lives in slot (f/FRAG_FRAMES) at byte (f%FRAG_FRAMES)*frame within that slot. When
+ * tx_slot == audio-bytes/fragment (tx_frag_pad=0) this degenerates to the old linear copy; when padded it
+ * scatters per fragment across the gaps (matching the vendor's non-contiguous TX ring). FRAG_FRAMES divides
+ * the ring, so a chunk clipped to the fragment boundary also handles the ring wrap.
+ */
+static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos, u32 nframes)
+{
+	u8 *ring = clarett_tx_area(c);
+	u32 frame = (u32)c->model->playback_channels * 4;
+	u32 slot  = c->tx_slot;
+	u32 ring_frames = CLARETT_STREAM_NDESC * CLARETT_FRAG_FRAMES;
+
+	while (nframes) {
+		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
+		u32 chunk = min(nframes, CLARETT_FRAG_FRAMES - fio);	/* up to the fragment (and ring) boundary */
+
+		chunk = min(chunk, ring_frames - apos);			/* and up to the ALSA buffer wrap */
+
+		memcpy(ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
+		       alsa + (size_t)apos * frame,
 		       (size_t)chunk * frame);
 		pos += chunk;
 		if (pos == ring_frames)
@@ -245,8 +254,8 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 			u32 start = do_div(q, ring);		/* hardware ring position */
 			u32 astart = do_div(aq, ring);		/* same frame in the ALSA buffer */
 
-			clarett_ring_copy(clarett_tx_area(c), start, ps->runtime->dma_area, astart,
-					  ring - CLARETT_TX_GUARD_FRAMES, ring, frame);
+			clarett_tx_fill(c, ps->runtime->dma_area, astart, start,
+					ring - CLARETT_TX_GUARD_FRAMES);
 		}
 	}
 
@@ -566,20 +575,23 @@ static const struct snd_pcm_ops clarett_pcm_ops = {
  * the sample area, so a clean zeroed sample area is correct and fault-free.
  */
 /*
- * Write the 1 kHz sine over the whole TX sample area, every playback channel. The area is a plain
- * contiguous frame ring — clarett_frag_bytes() is always a whole number of frames and the descriptors
- * tile it in order — so a linear frame-by-frame fill matches what the engine will read out.
+ * Write the 1 kHz sine over the whole TX sample area, every playback channel. Slot-aware: logical frame f
+ * lives in slot (f/FRAG_FRAMES) at byte (f%FRAG_FRAMES)*frame (== a linear fill when tx_slot is unpadded).
  */
 static void clarett_fill_tx_tone(struct clarett *c)
 {
 	u8 chans   = c->model->playback_channels;
-	__le32 *p  = (__le32 *)((u8 *)c->stream_buf + clarett_stream_tx_off(c));
-	size_t frames = clarett_stream_tx_area_bytes(c) / ((size_t)chans * 4);
+	u32 frame  = (u32)chans * 4;
+	u8 *ring   = clarett_tx_area(c);
+	u32 slot   = c->tx_slot;
+	size_t frames = clarett_stream_tx_area_bytes(c) / frame;	/* logical frame count */
 	size_t f;
 	u8 ch;
 
 	for (f = 0; f < frames; f++) {
 		__le32 v = cpu_to_le32((u32)(clarett_sine48[f % ARRAY_SIZE(clarett_sine48)] << 8));
+		__le32 *p = (__le32 *)(ring + (f / CLARETT_FRAG_FRAMES) * slot
+					    + (f % CLARETT_FRAG_FRAMES) * frame);
 
 		for (ch = 0; ch < chans; ch++)
 			*p++ = v;
@@ -607,6 +619,7 @@ static void clarett_build_rings(struct clarett *c)
 	}
 	size_t tx_ring = clarett_pcm_tx_ring(c);
 	u32 tx_frag = clarett_frag_bytes(c->model->playback_channels);
+	u32 tx_slot = c->tx_slot;		/* TX descriptor stride: audio bytes, or a padded slot */
 	u32 rx_slot = c->rx_slot;		/* RX descriptor stride: audio bytes, or a padded slot (experiment) */
 	__le64 *tx_tbl = (__le64 *)c->stream_buf;
 	__le64 *rx_tbl = (__le64 *)((u8 *)c->stream_buf + tx_ring);
@@ -615,7 +628,7 @@ static void clarett_build_rings(struct clarett *c)
 	unsigned int i;
 
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
-		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_frag);
+		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_slot);	/* slotted: non-contiguous when padded */
 		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_slot);	/* slotted: fragments non-contiguous when padded */
 		/* Periodic RX IRQ marker (spec §14): the engine raises a counted 0x300 period when it
 		 * consumes an IRQ-flagged descriptor. Every CLARETT_IRQ_DESCS-th one, matching the vendor's
@@ -630,8 +643,9 @@ static void clarett_build_rings(struct clarett *c)
 		clarett_fill_tx_tone(c);
 
 	dev_info(&c->pci->dev,
-		 "descriptor rings: %u entries, frag tx=0x%x rx audio=0x%x slot=0x%x, RX IRQ every %u desc (%u frames/period)\n",
-		 CLARETT_STREAM_NDESC, tx_frag, clarett_frag_bytes(c->model->capture_channels), rx_slot,
+		 "descriptor rings: %u entries, tx audio=0x%x slot=0x%x, rx audio=0x%x slot=0x%x, RX IRQ every %u desc (%u frames/period)\n",
+		 CLARETT_STREAM_NDESC, tx_frag, tx_slot,
+		 clarett_frag_bytes(c->model->capture_channels), rx_slot,
 		 CLARETT_IRQ_DESCS, clarett_irq_period_frames());
 }
 

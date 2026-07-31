@@ -972,4 +972,26 @@ LOGICAL size (contiguous frames = the ALSA buffer + per-period math) from a DEVI
 Result on the 2Pre (`rx_frag_pad=-1`, the default, slot `0x400`): **channels 2–13 read exactly `0`**
 (were full of bursts), **ch0 is a clean 1000.00 Hz tone with zero dropouts**, and the engine clocks
 normally (`periods` climbing at ~234/s). `rx_frag_pad` kept as a lever: `0` = old contiguous (drifts,
-for A/B), `>0` = manual padding. TX/playback unchanged (already page-safe).
+for A/B), `>0` = manual padding.
+
+## 16. TX has the SAME page-alignment bug — the 8PreX playback fold (July 30 2026) `[HW — Clarett 8PreX, FIXED]`
+
+The "TX unchanged (already page-safe)" note above was true only for the models tested then. **8PreX
+playback was garbled and folded 28ch→4** (a tone on PCM 1 also drove PCM 5, 9, … — every output ≡ its
+source mod 4), while capture was clean 28-wide. Exhaustive comparison against a fresh VM dump showed
+**everything the device reads is byte-identical to the vendor** — registers, descriptor table
+(`0x700` stride), source-ids, handshake, arm, and (confirmed by dumping both the vendor's TX sample
+fragments *and* our live TX ring) the 28-ch interleaved sample layout. The fill clock was perfect
+(`tx_trace`: `pcm_frames` tracked the 0x300 counter exactly). The one remaining difference was that our
+TX fragments were **contiguous** while the vendor's (and our working RX) were not.
+
+**Root cause = the exact TX analog of §15.** The TX fragment is `channels·4·16`; it is page-safe only
+when that is a power of two. 2Pre (`0x100`) and 4Pre (`0x200`) are — which is why their playback always
+worked and hid the bug. **8Pre (`0x500`) and 8PreX (`0x700`) straddle the 4 KB page**, and the device's
+per-fragment TX **read** mis-frames across the page boundary, collapsing 28 interleaved channels into
+4-channel groups. **Fix:** mirror the RX slotting for TX — `c->tx_slot` = fragment rounded up to a
+power of two (`0x700 → 0x800`), descriptors strided by the slot, and a slot-aware fill (`clarett_tx_fill`,
+the mirror of `clarett_rx_drain`); the ALSA buffer / per-period math stay on the LOGICAL contiguous size.
+`tx_frag_pad` lever mirrors `rx_frag_pad` (`-1` auto pow2 default, `0` = old contiguous for A/B).
+**Hardware-confirmed on the 8PreX: clean music playback, fold gone.** No change for the 2Pre/4Pre
+(fragment already a power of two).

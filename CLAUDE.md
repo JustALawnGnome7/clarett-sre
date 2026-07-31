@@ -246,8 +246,21 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     never torn); `pcm_lock` serialises the copies vs `hw_free`. TX plays silence when no playback stream is
     attached. **Confirmed audible** via `aplay` once **PCM 1 is routed to Analogue Output 1** in the router
     (alsa-scarlett-gui) — there is NO default route, so playback is silent until a PCM source is wired to a
-    physical output (a mixer-config step, not a DMA problem). Not yet tested: 8PreX/4Pre/8Pre playback,
-    simultaneous duplex stress.
+    physical output (a mixer-config step, not a DMA problem). Simultaneous duplex stress not yet stressed.
+  - **8PreX PLAYBACK WORKS — TX fragments must be page-safe too (July 30 2026, hardware-confirmed; spec
+    data-plane §16).** 8PreX playback was garbled and folded 28ch→4 (a tone on PCM 1 also drove PCM 5/9/… —
+    every output ≡ its source mod 4) while capture was clean. Everything the device reads was proven
+    byte-identical to the vendor (registers, descriptor table, source-ids, handshake, arm, AND the 28-ch
+    interleaved sample layout — confirmed by dumping the vendor's TX sample fragments *and* our live TX
+    ring; fill clock perfect via `tx_trace`). **Root cause = the exact TX analog of the §15 RX drift:** the
+    TX fragment `channels·4·16` is page-safe only when a power of two. 2Pre (`0x100`)/4Pre (`0x200`) are —
+    which hid the bug — but **8Pre (`0x500`)/8PreX (`0x700`) straddle the 4 KB page**, and the device's
+    per-fragment TX *read* mis-frames across the boundary into 4-channel groups. **Fix:** mirror RX slotting
+    for TX — `c->tx_slot` = fragment rounded up to pow2 (`0x700→0x800`), descriptors strided by the slot,
+    slot-aware fill `clarett_tx_fill` (mirror of `clarett_rx_drain`); ALSA buffer / per-period math stay on
+    the LOGICAL contiguous size. Lever `tx_frag_pad` mirrors `rx_frag_pad`. No change for 2Pre/4Pre
+    (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
+    Not yet tested: 8Pre playback (derived, no init blob), simultaneous duplex stress.
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
     (commit `f086e22`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`

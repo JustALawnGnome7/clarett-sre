@@ -58,6 +58,15 @@ static int rekick_ms = 20;
 module_param(rekick_ms, int, 0444);
 MODULE_PARM_DESC(rekick_ms, "Stall threshold for rekick: ms with no new 0x300 period before kicking.");
 
+static int tx_trace;
+module_param(tx_trace, int, 0644);
+MODULE_PARM_DESC(tx_trace,
+		 "Diagnostic (off by default): every Nth 0x300 period, log the engine's block-0 (TX) and "
+		 "block-1 (RX) DMA pointer regs (0x218/0x318) alongside the ctr step and our fill clock "
+		 "(pcm_frames). N = the value (e.g. tx_trace=32 logs one line per 32 periods; 1 = every "
+		 "period). Reveals whether the engine consumes TX faster than our fill (the 8PreX playback "
+		 "rate/tearing hypothesis). Writable at runtime via /sys/module/snd_clarett/parameters.");
+
 /*
  * The vendor's arm ritual (data-plane spec §12). EVERY vendor stream capture — 2Pre, 4Pre, 8PreX —
  * opens with exactly FOUR throwaway arms ~13 ms apart, each held ~2 ms then torn down without ever
@@ -153,6 +162,14 @@ module_param(rx_frag_pad, int, 0444);
 MODULE_PARM_DESC(rx_frag_pad,
 		 "RX fragment slot: -1 = auto page-safe pow2 (default, fixes the even-channel drift), "
 		 "0 = contiguous (old, drifts), >0 = audio bytes + this padding (manual).");
+
+static int tx_frag_pad = -1;
+module_param(tx_frag_pad, int, 0444);
+MODULE_PARM_DESC(tx_frag_pad,
+		 "TX fragment slot (mirror of rx_frag_pad): -1 = auto page-safe pow2 (default), "
+		 "0 = contiguous (the old back-to-back TX ring that folded 28ch->4 on the 8PreX), "
+		 ">0 = audio bytes + this padding. The working RX path and the vendor TX ring are both "
+		 "non-contiguous; this makes our TX match.");
 
 static int arm_settle_ms;
 module_param(arm_settle_ms, int, 0644);
@@ -546,14 +563,51 @@ static int clarett_push_mux_band0(struct clarett *c)
 	return err;
 }
 
+static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geometry_only);
+
+/*
+ * After model detection, re-declare the DETECTED model's stream geometry by re-running its bring-up
+ * with the config read/writeback (GET_DATA/SET_DATA) skipped (clarett_arm_device geometry_only). The
+ * arm ran armed_with's bring-up (the id_table default, so GET_7.1 could answer), which set armed_with's
+ * per-direction channel counts + CONFIG_PUSH map. This lever re-runs the detected model's bring-up minus
+ * the GET_DATA/SET_DATA config read/writeback (that re-init wedges GET_DATA, so fcp-server can't read the
+ * control map), re-declaring geometry (+routing per preserve) without touching the appspace config.
+ *
+ * NOTE (July 30 2026): this was built to test the hypothesis that the 8PreX 28ch->4 playback FOLD was a
+ * stale-2Pre-geometry declaration. That hypothesis was WRONG — the fold was TX-fragment page-alignment
+ * (0x700 straddles the 4 KB page), fixed by tx_slot page-safe slotting (spec data-plane §16). Re-declaring
+ * geometry does NOT fix the fold (hardware-confirmed). Kept as a harmless off-by-default diagnostic lever.
+ */
+static bool rearm_geometry;
+module_param(rearm_geometry, bool, 0644);
+MODULE_PARM_DESC(rearm_geometry,
+		 "Diagnostic (default off): after detection, re-declare the detected model's stream geometry "
+		 "(re-run its bring-up minus the GET_DATA/SET_DATA config read/writeback). Does NOT fix the "
+		 "8PreX playback fold (that was TX fragment page-alignment; see tx_frag_pad / spec §16).");
+
 static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with,
 					bool preserve_routing)
 {
 	const struct clarett_model *m = c->model;
 	int i, sent = 0, fails = 0;
 
-	if (m == armed_with)			/* right tables already */
+	if (m == armed_with)			/* armed as the right model already */
 		return;
+
+	/*
+	 * Geometry re-declare (opt-in diagnostic; does NOT fix the 8PreX playback fold — that was TX fragment
+	 * page-alignment, see rearm_geometry note above / spec §16). clarett_arm_device threads preserve_routing
+	 * through (skips SET_MUX/SET_MIX when set) and geometry_only skips the config read/writeback that would
+	 * wedge GET_DATA. Only models with a captured blob can re-arm (not the 8Pre).
+	 */
+	if (rearm_geometry && m->init_blob) {
+		clarett_arm_device(c, preserve_routing, true);
+		dev_info(&c->pci->dev,
+			 "re-declared %s stream geometry after arming as %s (geometry_only re-arm, %s)\n",
+			 m->name, armed_with->name,
+			 preserve_routing ? "live routing preserved" : "default routing applied");
+		return;
+	}
 
 	/* The arm ran as armed_with but the device is really m; normally we now swap in m's routing.
 	 * But if the arm PRESERVED live routing (the device was already configured — see
@@ -636,9 +690,9 @@ static int clarett_band0_routed(struct clarett *c)
  * so a reload no longer resets the user's routing to the vendor default while still doing the arm a
  * fresh device needs. See clarett_band0_routed() for how the caller decides.
  */
-static int clarett_arm_device(struct clarett *c, bool preserve_routing)
+static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geometry_only)
 {
-	int i, err, fails = 0, echoed = 0, verbatim = 0, skipped = 0;
+	int i, err, fails = 0, echoed = 0, verbatim = 0, skipped = 0, skipped_cfg = 0;
 	bool clk_sent = false;
 	unsigned long *have = NULL;
 	u8 *cfg, *wb = NULL;
@@ -662,6 +716,17 @@ static int clarett_arm_device(struct clarett *c, bool preserve_routing)
 		if (preserve_routing &&
 		    (s->opcode == FCP_SET_MUX || s->opcode == FCP_SET_MIX)) {
 			skipped++;
+			continue;
+		}
+
+		/*
+		 * geometry_only (a re-arm to re-declare a detected model's stream geometry): skip the config
+		 * read/writeback — re-running GET_DATA/SET_DATA over an already-armed device is the re-init that
+		 * wedges GET_DATA. The CONFIG_PUSH/subsystem/count steps that declare channel geometry still run.
+		 */
+		if (geometry_only &&
+		    (s->opcode == FCP_GET_DATA || s->opcode == FCP_SET_DATA)) {
+			skipped_cfg++;
 			continue;
 		}
 
@@ -743,6 +808,10 @@ static int clarett_arm_device(struct clarett *c, bool preserve_routing)
 		dev_info(&c->pci->dev,
 			 "arm: preserved live routing/mixer (%d SET_MUX/SET_MIX steps skipped)\n",
 			 skipped);
+	if (skipped_cfg)
+		dev_info(&c->pci->dev,
+			 "arm: geometry-only re-arm (%d GET_DATA/SET_DATA config steps skipped)\n",
+			 skipped_cfg);
 
 	kfree(wb);
 	bitmap_free(have);
@@ -1161,6 +1230,17 @@ static int clarett_stream_service(void *data)
 			if (step > step_max)
 				step_max = step;
 
+			if (tx_trace > 0 && (atomic_read(&c->stream_periods) % tx_trace) == 0) {
+				u32 txptr = readl(bar + STREAM_BLK0 + STREAM_OFF_PTR); /* 0x218 engine TX read pos */
+				u32 rxptr = readl(bar + STREAM_BLK1 + STREAM_OFF_PTR); /* 0x318 engine RX write pos */
+
+				dev_info(&c->pci->dev,
+					 "tx-trace[%d]: ctr=0x%x step=%u frames=%u | TXptr=0x%08x RXptr=0x%08x | fill=pcm_frames=%llu\n",
+					 atomic_read(&c->stream_periods), ctr, step,
+					 step * CLARETT_CTR_FRAMES, txptr, rxptr,
+					 (unsigned long long)c->pcm_frames);
+			}
+
 			atomic_inc(&c->stream_periods);
 			clarett_pcm_tick(c, step * CLARETT_CTR_FRAMES);	/* advance by real captured frames (no-op if idle) */
 		} else if (rekick && seen &&
@@ -1310,15 +1390,20 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 	 * pointers start; PTR is the vendor's own progress read (0x21c/0x31c in its steady-state sweep).
 	 */
 	dev_info(&c->pci->dev,
-		 "engine armed: blk0 base=%08x:%08x ctrl=%08x ptr=%08x | blk1 base=%08x:%08x ctrl=%08x ptr=%08x\n",
+		 "engine armed: blk0 chans=%u size=0x%x base=%08x:%08x ctrl=%08x ptr=%08x | blk1 chans=%u size=0x%x base=%08x:%08x ctrl=%08x ptr=%08x (model chans tx=%u rx=%u)\n",
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_CHANS),
+		 readl(bar + STREAM_BLK0 + STREAM_OFF_SIZE),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_CTRL),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_CHANS),
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_SIZE),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_CTRL),
-		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
+		 c->model->playback_channels, c->model->capture_channels);
 }
 
 /* Start the persistent 0x300 servicer kthread. The caller flips stream_run to release ACKing. */
@@ -2030,7 +2115,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		int routed = clarett_band0_routed(c);
 
 		preserve_routing = routed > 0;
-		clarett_arm_device(c, preserve_routing);
+		clarett_arm_device(c, preserve_routing, false);
 	}
 	c->model = forced ? forced : armed_with;
 
@@ -2064,6 +2149,15 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		c->rx_slot = rx_frag_pad < 0 ? roundup_pow_of_two(frag)
 			   : rx_frag_pad == 0 ? frag
 					      : frag + rx_frag_pad;
+	}
+	/* TX fragment slot stride, mirror of rx_slot: the working RX and the vendor TX are both
+	 * non-contiguous; our contiguous TX ring folded 28ch->4 on the 8PreX. Default page-safe pow2. */
+	{
+		u32 frag = clarett_frag_bytes(c->model->playback_channels);
+
+		c->tx_slot = tx_frag_pad < 0 ? roundup_pow_of_two(frag)
+			   : tx_frag_pad == 0 ? frag
+					      : frag + tx_frag_pad;
 	}
 
 	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
@@ -2278,6 +2372,33 @@ static const struct clarett_preamp clarett_8prex_preamps[] = {
 	{ clarett_mode_ml,  NULL, 2 }, { clarett_mode_ml,  NULL, 2 },
 };
 
+/*
+ * Per-channel stream-routing CONFIG_PUSH ids, DERIVED (not captured) from the global source-id
+ * enumeration proven byte-for-byte on the 2Pre AND 4Pre captures (2pre_streamstart.log): the id space
+ * is model-independent with per-category reserved blocks —
+ *   Analogue N -> 0x0d + (N-1)   (block reserves 8: 0x0d..0x14)
+ *   S/PDIF   N -> 0x15 + (N-1)   (0x15..0x16)
+ *   ADAT     N -> 0x17 + (N-1)   (block reserves 16: 0x17..0x26 — why loopback is 0x27 even on the
+ *                                 8-ADAT 2Pre/4Pre, which use only 0x17..0x1e)
+ *   Loopback N -> 0x27 + (N-1)
+ *   Playback N -> 0x2b + (N-1)   (TX)
+ * The 8PreX just fills more of each block. Order follows the XML: TX = Playback 1..28; RX = the
+ * record-outputs order (Analogue 1-8, S/PDIF 1-2, Loopback 1-2, then ADAT 1-16). Without these the
+ * stream-config handshake pushes nothing, the device streams at a narrower default width, and a 28ch
+ * playback ring is consumed as ~12ch — the stereo pair smears onto outputs 1-2/5-6/9-10 (28 mod 12 = 4).
+ */
+static const u8 clarett_8prex_stream_tx[] = {
+	0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+	0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+};
+static const u8 clarett_8prex_stream_rx[] = {
+	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,	/* Analogue 1-8 */
+	0x15, 0x16,					/* S/PDIF 1-2 */
+	0x27, 0x28,					/* Loopback 1-2 (mid-block, matching record-outputs) */
+	0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,	/* ADAT 1-8 */
+	0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,	/* ADAT 9-16 */
+};
+
 static const struct clarett_model clarett_8prex = {
 	.name = "Clarett 8PreX",
 	.slug = "clarett-8prex",
@@ -2293,6 +2414,10 @@ static const struct clarett_model clarett_8prex = {
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.stream_frag = STREAM_SIZE_VAL,
+	.stream_tx_ids = clarett_8prex_stream_tx,
+	.n_stream_tx_ids = ARRAY_SIZE(clarett_8prex_stream_tx),
+	.stream_rx_ids = clarett_8prex_stream_rx,
+	.n_stream_rx_ids = ARRAY_SIZE(clarett_8prex_stream_rx),
 	.init_blob = clarett_init_blob_8prex,
 	.init_seq = clarett_init_seq_8prex,
 	.n_init_steps = ARRAY_SIZE(clarett_init_seq_8prex),
@@ -2468,6 +2593,23 @@ static const struct clarett_out_gain clarett_8pre_gains[] = {
 	{ "Line 09 (Headphones 2 L)", 48 }, { "Line 10 (Headphones 2 R)", 49 },
 };
 
+/*
+ * Per-channel stream-routing CONFIG_PUSH ids, DERIVED from the same model-independent global source-id
+ * enumeration as the 8PreX (see clarett_8prex_stream_tx). The 8Pre's physical input layout is identical
+ * to the 4Pre (Analogue 1-8, S/PDIF 1-2, ADAT 1-8, Loopback mid-block), so its RX ids come out equal to
+ * the 4Pre's; TX is Playback 1-20 -> 0x2b..0x3e.
+ */
+static const u8 clarett_8pre_stream_tx[] = {
+	0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34,
+	0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e,
+};
+static const u8 clarett_8pre_stream_rx[] = {
+	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,	/* Analogue 1-8 */
+	0x15, 0x16,					/* S/PDIF 1-2 */
+	0x27, 0x28,					/* Loopback 1-2 (mid-block, matching record-outputs) */
+	0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,	/* ADAT 1-8 */
+};
+
 static const struct clarett_model clarett_8pre = {
 	.name = "Clarett 8Pre",
 	.slug = "clarett-8pre",
@@ -2481,9 +2623,14 @@ static const struct clarett_model clarett_8pre = {
 	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
 	.stream_frag = 0,
+	.stream_tx_ids = clarett_8pre_stream_tx,
+	.n_stream_tx_ids = ARRAY_SIZE(clarett_8pre_stream_tx),
+	.stream_rx_ids = clarett_8pre_stream_rx,
+	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
 	/*
-	 * No .init_blob / .stream_*_ids: those need an 8Pre capture. The routing table does not —
-	 * it is constructed (clarett_mux_8pre.h) and pushed once detection has identified the
+	 * .stream_*_ids are derived (above); .init_blob still needs an 8Pre capture — the bring-up is a
+	 * genuine per-device byte sequence, not derivable from XML — so this model cannot yet arm. The
+	 * routing table is constructed (clarett_mux_8pre.h) and pushed once detection identifies the
 	 * device, which is what lets fcp-server build this model's routing and mixer controls.
 	 */
 	.mux_band0 = clarett_mux_band0_8pre,

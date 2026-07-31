@@ -543,6 +543,9 @@ struct clarett {
 	u32 rx_slot;			/* RX descriptor fragment SLOT stride in bytes (>= audio bytes/fragment).
 					 * = audio bytes when contiguous (rx_frag_pad=0); larger to break buffer
 					 * contiguity (scatter-gather experiment for the page-drift glitch). */
+	u32 tx_slot;			/* TX descriptor fragment SLOT stride, mirror of rx_slot (the working
+					 * RX path is non-contiguous; the contiguous TX ring folded 28ch->4 on the
+					 * 8PreX). = audio bytes when contiguous (tx_frag_pad=0); page-safe pow2 default. */
 	void *stream_buf;		/* coherent streaming ring buffer */
 	dma_addr_t stream_dma;
 	size_t stream_size;
@@ -723,9 +726,19 @@ static inline size_t clarett_pcm_tbl_bytes(void)
 {
 	return ALIGN((size_t)CLARETT_STREAM_NDESC * sizeof(__le64), CLARETT_DESC_ALIGN);
 }
+/*
+ * TX, like RX, has two byte sizes once the fragments are slot-padded (c->tx_slot > audio bytes):
+ *   _samples = LOGICAL audio (contiguous frames) — the ALSA playback buffer and the per-period frame math.
+ *   _dev     = DEVICE sample area = NDESC slots of c->tx_slot each — what is allocated and what the
+ *              descriptors stride over (gaps between fragments when padded). Equal when unpadded.
+ */
 static inline size_t clarett_pcm_tx_samples(const struct clarett *c)
 {
 	return (size_t)CLARETT_STREAM_NDESC * clarett_frag_bytes(c->model->playback_channels);
+}
+static inline size_t clarett_pcm_tx_dev_bytes(const struct clarett *c)
+{
+	return (size_t)CLARETT_STREAM_NDESC * c->tx_slot;
 }
 /*
  * RX has TWO byte sizes once the scatter-gather experiment pads the fragments (c->rx_slot > audio bytes):
@@ -744,7 +757,7 @@ static inline size_t clarett_pcm_rx_dev_bytes(const struct clarett *c)
 /* One ring per direction = table + samples. The contiguous buffer is [TX ring][RX ring]; r1 = r0 + tx ring. */
 static inline size_t clarett_pcm_tx_ring(const struct clarett *c)
 {
-	return clarett_pcm_tbl_bytes() + clarett_pcm_tx_samples(c);
+	return clarett_pcm_tbl_bytes() + clarett_pcm_tx_dev_bytes(c);	/* device area (slotted) for allocation */
 }
 static inline size_t clarett_pcm_rx_ring(const struct clarett *c)
 {
