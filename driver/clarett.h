@@ -12,6 +12,7 @@
 #include <linux/types.h>
 #include <linux/bitmap.h>		/* DECLARE_BITMAP, set_bit/test_bit — shadow_known */
 #include <linux/mutex.h>
+#include <linux/spinlock.h>	/* spinlock_t — MIDI RX drain serialisation */
 #include <linux/pci.h>
 #include <linux/atomic.h>
 #include <linux/wait.h>		/* wait_queue_head_t — hwdep notification relay */
@@ -618,6 +619,13 @@ struct clarett {
 	bool midi_in_up;			/* input trigger gate: push RX bytes to ALSA */
 	bool midi_out_up;			/* output trigger gate: TX work may run */
 	struct work_struct midi_tx_work;	/* drains rawmidi output -> REG_MIDI_DATA */
+	/*
+	 * Serialises the RX FIFO drain. clarett_midi_irq() runs from clarett_irq for EVERY MSI vector, and
+	 * while streaming the period vectors (vec1/vec2) fire alongside vec0 on other CPUs — two concurrent
+	 * drainers of the single-byte 0x58c FIFO otherwise interleave the byte order and corrupt multi-byte
+	 * MIDI. Hardirq-only, so a plain spinlock suffices.
+	 */
+	spinlock_t midi_rx_lock;
 
 	/*
 	 * Shadow of the config space backing mixer "get". Updated write-through on

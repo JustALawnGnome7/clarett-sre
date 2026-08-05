@@ -66,17 +66,26 @@ MODULE_PARM_DESC(midi_tx_pace_us,
  */
 void clarett_midi_irq(struct clarett *c)
 {
-	struct snd_rawmidi_substream *ss = READ_ONCE(c->midi_in);
-	bool deliver = ss && READ_ONCE(c->midi_in_up);
-	bool got = false;
+	struct snd_rawmidi_substream *ss;
+	bool deliver, got = false;
 	int guard = 64;
+
+	/*
+	 * Serialise: this runs for every MSI vector, and while streaming the period vectors fire on other
+	 * CPUs concurrently with vec0 — two drainers of the one-byte FIFO would interleave and reorder the
+	 * bytes (corrupting multi-byte messages). Hardirq-only, so plain spin_lock (local IRQs already off).
+	 */
+	spin_lock(&c->midi_rx_lock);
+
+	ss = READ_ONCE(c->midi_in);
+	deliver = ss && READ_ONCE(c->midi_in_up);
 
 	while (guard-- > 0) {
 		u32 v = clarett_rl(c, REG_MIDI_DATA);
 		u8 byte;
 
 		if (v == 0xffffffff)		/* failed transaction — never a real byte */
-			return;
+			break;
 		if (!(v & MIDI_RX_VALID))	/* FIFO empty */
 			break;
 		byte = v & MIDI_RX_BYTE_MASK;
@@ -87,6 +96,8 @@ void clarett_midi_irq(struct clarett *c)
 
 	if (got)
 		clarett_wl(c, REG_MIDI_ACK, MIDI_IRQ_ACK_VAL);
+
+	spin_unlock(&c->midi_rx_lock);
 }
 
 /*
@@ -222,6 +233,7 @@ int clarett_create_midi(struct clarett *c)
 	list_for_each_entry(s, &rmidi->streams[SNDRV_RAWMIDI_STREAM_INPUT].substreams, list)
 		strscpy(s->name, name, sizeof(s->name));
 
+	spin_lock_init(&c->midi_rx_lock);
 	INIT_WORK(&c->midi_tx_work, clarett_midi_tx_work);
 	WRITE_ONCE(c->rmidi, rmidi);	/* set LAST: the ISR uses this as the "MIDI live" gate */
 
