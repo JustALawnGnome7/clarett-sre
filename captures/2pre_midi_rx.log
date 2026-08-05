@@ -1,0 +1,678 @@
+2026-08-05T02:10:02.066629Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.066698Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.066716Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.066734Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.066751Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.066774Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.066803Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.066823Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.066845Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.066918Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.066937Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.066955Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.066973Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.066990Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.067056Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.067077Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.067095Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.067110Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.067239Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.067259Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.067278Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.067296Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.067315Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.067339Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.067358Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.067377Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.067392Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.067678Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.067694Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.169459Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.169485Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.169503Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.169520Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.169538Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.169579Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.169602Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.169628Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.169646Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.169770Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.169790Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.169807Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.169825Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.169842Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.169875Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.169895Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.169912Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.169928Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.170094Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.170114Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.170133Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.170151Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.170169Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.170191Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.170209Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.170227Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.170242Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.170435Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.170451Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.272108Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.272137Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.272156Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.272173Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.272193Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272216Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272239Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.272258Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.272277Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.272422Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.272441Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.272460Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.272478Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.272496Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272518Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272537Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.272555Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.272571Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.272742Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.272761Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.272780Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.272798Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.272816Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272838Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.272857Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.272876Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.272891Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.273070Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.273086Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.374790Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.374818Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.374835Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.374853Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.374870Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.374893Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.374915Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.374935Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.374951Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.375103Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.375123Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.375141Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.375159Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.375176Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.375197Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.375218Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.375236Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.375250Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.375441Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.375461Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.375481Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.375498Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.375518Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.375545Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.375568Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.375587Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.375621Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.376222Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.376238Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.477506Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.477534Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.477552Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.477570Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.477587Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.477621Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.477643Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.477662Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.477678Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.477818Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.477838Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.477858Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.477876Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.477894Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.477916Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.477936Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.477954Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.477969Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.478141Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.478161Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.478180Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.478198Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.478216Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.478238Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.478257Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.478276Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.478292Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.478488Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.478503Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.580475Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.580506Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.580528Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.580549Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.580571Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.580604Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.580640Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.580664Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.580686Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.580784Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.580808Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.580831Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.580853Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.580875Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.580915Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.580939Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.580962Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.580981Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.581113Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.581137Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.581160Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.581182Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.581204Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.581232Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.581256Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.581278Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.581298Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.581506Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.581522Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.683546Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.683575Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.683596Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.683630Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.683653Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.683681Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.683706Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.683729Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.683750Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.683866Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.683890Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.683912Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.683934Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.683956Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.683984Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.684007Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.684030Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.684050Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.684185Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.684210Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.684232Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.684253Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.684276Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.684303Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.684327Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.684350Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.684369Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.684601Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.684625Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.786698Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.786729Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.786752Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.786772Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.786796Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.786823Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.786848Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.786870Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.786891Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.786997Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.787020Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.787042Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.787063Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.787084Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.787111Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.787134Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.787155Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.787174Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.787326Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.787349Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.787371Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.787392Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.787422Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.787450Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.787472Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.787494Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.787512Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.787758Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.787778Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.889767Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.889798Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.889819Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.889843Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.889864Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.889892Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.889918Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.889940Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.889961Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.890070Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.890095Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.890116Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.890138Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.890160Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.890188Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.890212Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.890234Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.890254Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.890407Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.890432Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.890454Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.890476Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.890499Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.890527Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.890550Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.890573Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.890593Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.890836Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.890856Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:02.992849Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.992880Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.992901Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.992921Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.992942Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.992970Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.992995Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:02.993018Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.993039Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.993136Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.993159Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.993180Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.993205Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.993227Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.993265Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.993289Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:02.993311Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.993330Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.993467Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:02.993492Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:02.993514Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:02.993537Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:02.993559Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.993587Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:02.993611Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:02.993643Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:02.993663Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:02.993904Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:02.993924Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.095908Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.095940Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.095962Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.095984Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.096006Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096036Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096063Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.096087Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.096110Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.096207Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.096232Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.096254Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.096277Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.096299Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096326Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096350Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.096376Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.096405Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.096537Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.096562Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.096583Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.096605Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.096634Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096662Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.096685Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.096707Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.096727Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.096949Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.096968Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.199206Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.199237Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.199258Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.199278Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.199299Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199330Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199355Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.199378Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.199408Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.199501Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.199525Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.199546Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.199567Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.199589Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199637Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199660Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.199682Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.199699Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.199829Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.199852Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.199874Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.199895Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.199916Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199943Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.199965Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.199987Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.200005Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.200242Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.200261Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.302456Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.302487Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.302508Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.302528Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.302552Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.302580Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.302605Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.302637Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.302659Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.302751Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.302774Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.302795Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.302816Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.302837Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.302863Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.302885Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.302906Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.302925Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.303079Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.303102Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.303123Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.303144Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.303165Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.303192Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.303214Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.303235Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.303254Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.303492Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.303511Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.405364Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.405404Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.405426Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.405447Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.405468Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.405496Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.405522Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.405544Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.405565Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.405661Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.405684Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.405706Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.405727Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.405748Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.405774Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.405796Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.405818Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.405836Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.405989Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.406012Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.406033Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.406051Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.406069Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.406092Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.406111Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.406130Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.406145Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.406333Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.406349Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.508187Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.508219Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.508240Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.508261Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.508282Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508313Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508338Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.508361Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.508381Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.508497Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.508520Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.508542Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.508563Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.508584Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508613Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508644Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.508666Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.508685Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.508817Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.508840Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.508862Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.508883Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.508905Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508931Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.508954Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.508975Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.508993Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.509225Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.509244Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.611135Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.611160Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.611177Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.611195Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.611212Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611237Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611259Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.611278Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.611296Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.611455Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.611474Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.611492Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.611509Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.611527Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611549Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611568Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.611586Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.611601Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.611771Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.611790Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.611808Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.611825Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.611843Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611865Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.611884Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.611902Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.611917Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.612112Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.612128Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.714106Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.714137Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.714158Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.714179Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.714199Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714227Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714253Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.714275Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.714295Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.714421Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.714444Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.714465Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.714488Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.714509Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714535Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714557Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.714578Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.714593Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.714733Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.714752Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.714771Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.714789Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.714807Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714830Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.714849Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.714867Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.714883Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.715082Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.715098Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.817285Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.817314Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.817334Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.817354Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.817374Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.817407Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.817432Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.817454Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.817474Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.817596Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.817621Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.817650Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.817671Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.817691Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.817717Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.817736Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.817756Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.817770Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.817916Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.817935Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.817953Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.817970Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.817988Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.818010Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.818029Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.818049Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.818063Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.818264Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.818280Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:03.920188Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.920217Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.920238Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.920258Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.920279Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920306Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920330Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:03.920352Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.920373Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.920500Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.920523Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.920545Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.920566Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.920586Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920612Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920644Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:03.920667Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.920685Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.920822Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:03.920845Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:03.920867Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:03.920888Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:03.920909Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920935Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:03.920957Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:03.920979Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:03.920997Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:03.921198Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:03.921214Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:04.023124Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:04.023153Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:04.023174Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:04.023194Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:04.023213Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023240Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023265Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000090
+2026-08-05T02:10:04.023286Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:04.023306Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:04.023435Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:04.023458Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:04.023478Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:04.023498Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:04.023519Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023545Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023567Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100003c
+2026-08-05T02:10:04.023588Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:04.023606Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:04.023757Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:04.023780Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:04.023800Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:04.023821Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:04.023841Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023867Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:04.023888Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007f
+2026-08-05T02:10:04.023909Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:04.023927Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:04.024151Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:04.024169Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x37f3c90, 4)
+2026-08-05T02:10:12.054550Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.054582Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.054603Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.054624Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.054645Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.054673Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.054700Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x10000f0
+2026-08-05T02:10:12.054729Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.054752Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.054848Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.054870Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.054890Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.054910Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.054930Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.054967Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.054988Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100007d
+2026-08-05T02:10:12.055007Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.055022Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.055183Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.055207Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.055228Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.055250Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.055271Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.055298Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.055321Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000043
+2026-08-05T02:10:12.055343Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.055362Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.055563Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.055586Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.055607Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.055628Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.055649Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.055675Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.055697Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x100004c
+2026-08-05T02:10:12.055727Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.055746Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.055882Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.055905Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.055926Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.055947Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.055968Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.055994Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.056017Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000041
+2026-08-05T02:10:12.056038Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.056056Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.056204Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.056227Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.056248Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.056269Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.056290Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.056316Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.056338Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000052
+2026-08-05T02:10:12.056357Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.056371Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.056588Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.056607Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.056625Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.056643Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.056661Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.056683Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.056710Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000045
+2026-08-05T02:10:12.056729Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.056744Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.056906Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.056925Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.056943Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.056961Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.056979Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057001Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057020Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000054
+2026-08-05T02:10:12.057039Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.057054Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.057228Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.057247Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.057266Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.057284Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.057302Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057324Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057343Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x1000054
+2026-08-05T02:10:12.057361Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.057376Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.057619Z vfio_region_read  (0000:09:00.0:region0+0x100, 4) = 0x10000000
+2026-08-05T02:10:12.057639Z vfio_region_read  (0000:09:00.0:region0+0x300, 4) = 0x0
+2026-08-05T02:10:12.057657Z vfio_region_read  (0000:09:00.0:region0+0x200, 4) = 0x0
+2026-08-05T02:10:12.057675Z vfio_region_read  (0000:09:00.0:region0+0x400, 4) = 0x0
+2026-08-05T02:10:12.057695Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057722Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff000a
+2026-08-05T02:10:12.057742Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x10000f7
+2026-08-05T02:10:12.057761Z vfio_region_read  (0000:09:00.0:region0+0x58c, 4) = 0x0
+2026-08-05T02:10:12.057775Z vfio_region_write  (0000:09:00.0:region0+0x504, 0x8, 4)
+2026-08-05T02:10:12.059880Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:12.059897Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x3437df0, 4)
+2026-08-05T02:10:12.059914Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:12.059928Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x352414c, 4)
+2026-08-05T02:10:12.059946Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:12.059960Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x3545445, 4)
+2026-08-05T02:10:12.059977Z vfio_region_read  (0000:09:00.0:region0+0x500, 4) = 0xff0000
+2026-08-05T02:10:12.059990Z vfio_region_write  (0000:09:00.0:region0+0x58c, 0x10000f7, 4)

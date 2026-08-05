@@ -6,7 +6,7 @@
 ifneq ($(KERNELRELEASE),)
 
 obj-m := snd-clarett.o
-snd-clarett-objs := clarett_main.o clarett_mailbox.o clarett_pcm.o clarett_hwdep.o
+snd-clarett-objs := clarett_main.o clarett_mailbox.o clarett_pcm.o clarett_hwdep.o clarett_midi.o
 
 # clarett_main.c #includes the generated clarett_init_8prex.h; Kbuild's auto-dep tracking
 # misses regenerated headers, so force a recompile when it changes.

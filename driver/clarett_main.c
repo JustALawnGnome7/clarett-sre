@@ -1566,6 +1566,14 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 	struct clarett_irqctx *ic = dev_id;
 	struct clarett *c = ic->c;
 
+	/*
+	 * MIDI RX is register PIO (REG_MIDI_DATA); which MSI vector signals it is unconfirmed, so drain on
+	 * every vector — that is vector-agnostic AND stops an undrained RX FIFO from livelocking whichever
+	 * line it lands on. A no-op until the rawmidi device exists and whenever the FIFO is empty.
+	 */
+	if (READ_ONCE(c->rmidi))
+		clarett_midi_irq(c);
+
 	if (ic->idx == CLARETT_VEC_EVENT) {
 		bool inflight = atomic_read(&c->cmd_inflight);
 
@@ -1974,6 +1982,7 @@ static void clarett_card_free(struct snd_card *card)
 	if (cancel_delayed_work_sync(&c->save_work))
 		clarett_data_cmd(c, FCP_ACTIVATE_PERSIST);
 	cancel_work_sync(&c->notify_work);
+	clarett_midi_stop(c);			/* cancel the MIDI TX drain before the rawmidi is freed */
 	clarett_engine_stop(c);			/* halt streaming DMA before devres frees the ring */
 	if (c->bar0)
 		writel(0, c->bar0 + REG_IRQ0_ENABLE);	/* mask causes before freeing handlers */
@@ -2227,6 +2236,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			dev_warn(&pci->dev, "PCM create failed (%d); continuing mixer-only\n", err);
 		err = 0;
 	}
+
+	/* DIN MIDI (rawmidi over the 0x58c register UART). Line-wide, so not model-gated; no-op if
+	 * enable_midi is off. Non-fatal — a failure just leaves the card without MIDI. */
+	err = clarett_create_midi(c);
+	if (err)
+		dev_warn(&pci->dev, "MIDI create failed (%d); continuing without MIDI\n", err);
+	err = 0;
 
 	/* Opt-in data-plane experiment: start the audio engine and watch what happens. Best-effort;
 	 * needs the IRQ handlers (above) hooked first so vec1/vec2 period IRQs are counted. */
