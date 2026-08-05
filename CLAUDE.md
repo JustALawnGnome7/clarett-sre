@@ -262,7 +262,7 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
     Not yet tested: 8Pre playback (derived, no init blob), simultaneous duplex stress.
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
-    (commit `f086e22`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
+    (commit `5f4bbcb`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`
     solely on the arming path). ALSA zeroes `hw_ptr` at every prepare, so any other attach — the second
     direction, or **the same one re-preparing after an xrun** — got a first `.pointer` return of wherever

@@ -746,7 +746,7 @@ data movement* — NOT in: table address (base_hi settled), table fetch (ptr adv
 (no fault), period timing (IRQ fires), arm-register program (byte-identical), elapsed time, or TX
 content. Every host-visible and host-RAM channel we can drive is now eliminated.
 
-**This re-converges on the b53abb5 tension.** That commit unified both models to descriptor mode on
+**This re-converges on the d792678 tension.** That commit unified both models to descriptor mode on
 the theory "descriptor is the hardware default, buffer mode is the FCP-handshake response." But the
 2Pre RAM dump (§9) showed **flat audio** at the live `0x310` target (no table), and the reverted flat
 path was the one config that ever got the 2Pre **counter advancing** (`ctr=0x1c10`, 28 passes) — vs
@@ -762,7 +762,7 @@ is now the only remaining unobserved channel.
 ### Flat path rebuilt + the pre-arm capture (July 23 2026) `[DRIVER]`/`[PLAN]`
 
 Acting on §13's surviving lead: the per-model flat-buffer path is back in tree (it had only ever lived
-in an uncommitted working tree; the b53abb5 rewrite dropped it on the "descriptor is the default"
+in an uncommitted working tree; the d792678 rewrite dropped it on the "descriptor is the default"
 theory, which the 2Pre's `ctr=0` refutes).
 
 **Driver.** `struct clarett_model.flat_buffer` (bool) selects the mode; set on the 2Pre only (the model
