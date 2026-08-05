@@ -1107,6 +1107,12 @@ static int clarett_stream_service(void *data)
 	ktime_t last_ev = ktime_get();
 	u64 gap_max_us = 0;
 	u32 gap_late = 0, step_max = 0;
+	/*
+	 * readmax = longest a single MMIO read-block took (us). Distinguishes the ~48 ms blackout's mechanism:
+	 * if readmax ~= gapmax, the time is spent INSIDE a readl() (the TB link/tunnel stalling a read
+	 * completion); if readmax stays small while gapmax spikes, the thread was descheduled BETWEEN reads.
+	 */
+	u64 read_us_max = 0;
 
 	while (!kthread_should_stop()) {
 		u32 c2;
@@ -1135,6 +1141,7 @@ static int clarett_stream_service(void *data)
 		 * The meter poll and every fcp-server command set cmd_inflight, so the guard covers all of them.
 		 */
 		bool busy = atomic_read(&c->cmd_inflight);
+		ktime_t rt0 = ktime_get();		/* time the read block: is the blackout inside a readl()? */
 
 		if (!busy)
 			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 per-period cause (bit31) + mailbox DONE */
@@ -1143,6 +1150,12 @@ static int clarett_stream_service(void *data)
 		if (!busy) {
 			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 command-phase/notify — mailbox's during a command */
 			readl(bar + 0x500);		/* 0x500 IRQ summary */
+		}
+		{
+			u64 rus = ktime_us_delta(ktime_get(), rt0);
+
+			if (rus > read_us_max)
+				read_us_max = rus;
 		}
 		/*
 		 * An all-ones read is a FAILED PCIe transaction, never data. bit31 is set in ~0, so it would
@@ -1260,10 +1273,11 @@ static int clarett_stream_service(void *data)
 		}
 		if (time_after(jiffies, next_log)) {
 			dev_info(&c->pci->dev,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus late=%u stepmax=0x%x badreads=%u\n",
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u\n",
 				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
-				 gap_max_us, gap_late, step_max, bad_reads);
+				 gap_max_us, read_us_max, gap_late, step_max, bad_reads);
 			gap_max_us = 0;
+			read_us_max = 0;
 			gap_late = 0;
 			step_max = 0;
 			next_log = jiffies + msecs_to_jiffies(2000);
