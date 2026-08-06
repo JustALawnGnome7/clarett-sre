@@ -277,9 +277,31 @@ METER_SLOTS_DST = {
         # Mixer Input 01-30 at 28-57 (01 and 30 measured, rest by stride)
         **{0x300 + i: (28 + i, "measured" if i in (0, 29) else "stride") for i in range(30)},
     },
-    # 8Pre: record block only, PREDICTED from the packing rule (no 8Pre hardware). Outputs/mixer unmapped.
-    # Same loopback-skipping record pins as the 4Pre (identical capture layout).
-    "clarett-8pre": {pin: (i, "predicted") for i, pin in enumerate(capture_record_pins("clarett-8pre"))},
+    # 8Pre: FULL 70-slot layout, MEASURED on hardware Aug 6 2026 (tools/fcp_meter_watch). It is the 8PreX
+    # pattern scaled down — the 8Pre's output inventory matches the 8PreX EXACTLY except ADAT is 8-wide (one
+    # optical port) not 16, and the record block is 18 (capture 20 - 2 loopback) not 26. Like the 8PreX (and
+    # unlike the 4Pre) LOOPBACK IS METERED, packed right after the outputs and before the mixer.
+    #   0-17   PCM 01-18 record   (0x600.. minus loopback)
+    #   18-19  Monitor Output 1-2 (0x408/0x409)
+    #   20-27  Line Output 3-10   (0x400-0x407)
+    #   28-29  S/PDIF Output 1-2  (0x186/0x187)
+    #   30-37  ADAT Output 1-8    (0x200-0x207)
+    #   38-39  PCM 19-20 = loopback pins (0x60a/0x60b) — MEASURED metered (route to Loopback 1 lit slot 38)
+    #   40-69  Mixer Input 01-30  (0x300-0x31d)
+    # Anchors read directly: Mixer In 01 -> 40 (PCM 1 routed in) and Mixer In 30 -> 69 (PCM 2), delta 29
+    # confirming the +1 stride; loopback 38-39 confirmed. The base 40 (not 38) proved the two loopback slots
+    # sit before the mixer, exactly the 8PreX packing. The output block (18-37) is transitively confirmed:
+    # loopback landing at 38 places the outputs' end at 37 and the record block's end at 17.
+    "clarett-8pre": {
+        **{pin: (i, "stride") for i, pin in enumerate(capture_record_pins("clarett-8pre"))},
+        0x408: (18, "stride"), 0x409: (19, "stride"),           # Monitor Output 1-2
+        **{0x400 + i: (20 + i, "stride") for i in range(8)},    # Line Output 3-10
+        0x186: (28, "stride"), 0x187: (29, "stride"),           # S/PDIF Output 1-2
+        **{0x200 + i: (30 + i, "stride") for i in range(8)},    # ADAT Output 1-8
+        0x60a: (38, "measured"), 0x60b: (39, "stride"),         # PCM 19-20 = loopback pins (metered)
+        **{0x300 + i: (40 + i, "measured" if i in (0, 29) else "stride")
+           for i in range(30)},                                 # Mixer Input 01-30
+    },
     # 8PreX: FULL 86-slot layout, MEASURED on hardware (July 29-30 2026, tools/fcp_meter_watch, one
     # destination at a time; "measured" = read directly, "stride" = filled between measured anchors).
     # Two ways it differs from the 2Pre/4Pre: the analogue outputs pack in CATEGORY order (Monitor before
