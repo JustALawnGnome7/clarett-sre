@@ -1099,6 +1099,7 @@ static int clarett_stream_service(void *data)
 	unsigned long last_tick = jiffies;
 	u32 wraps = 0, rekicks = 0, bad_reads = 0;
 	bool seen = false;
+	bool gone = false;	/* set when the device leaves the bus: park the loop, never return early (kthread_stop UAF) */
 	/*
 	 * Tick-lateness telemetry (audible-skip diagnosis, July 24 2026). The period counters cannot show
 	 * this: they accumulate the HARDWARE ctr delta, so a late servicer catches up on the next tick and
@@ -1120,6 +1121,11 @@ static int clarett_stream_service(void *data)
 
 	while (!kthread_should_stop()) {
 		u32 c2;
+
+		if (gone) {		/* bus gone (below): idle here, never self-exit, until kthread_stop() reaps us */
+			usleep_range(1000, 2000);
+			continue;
+		}
 
 		/*
 		 * Gate ACKing on stream_run. The engine is armed (and prefilled ~4 descriptors) by
@@ -1173,8 +1179,19 @@ static int clarett_stream_service(void *data)
 		 * good read's modular difference recover the whole advance.
 		 */
 		if (c2 == 0xffffffff) {
-			if (pci_dev_is_disconnected(c->pci))
-				break;
+			if (pci_dev_is_disconnected(c->pci)) {
+				/*
+				 * The device left the bus. Do NOT return from the threadfn here: this kthread
+				 * is the target of kthread_stop() in clarett_engine_stop(), and a kthread that
+				 * exits on its own BEFORE kthread_stop() runs makes kthread_stop() dereference
+				 * the already-reaped task — a use-after-free that oopses in kthread_stop() from
+				 * the pciehp remove thread (kthread_stop+0x44, near-NULL CR2). Park instead (the
+				 * `gone` check at the loop top idles without touching the dead device) and let
+				 * kthread_stop() set kthread_should_stop() to end the loop and reap us cleanly.
+				 */
+				gone = true;
+				continue;
+			}
 			if (!bad_reads++)
 				dev_warn(&c->pci->dev,
 					 "0x300 read returned ~0 with the device still attached: the link is "
