@@ -497,7 +497,11 @@ static void clarett_hw_init(struct clarett *c)
 #include "clarett_init_2pre.h"
 /* clarett_init_blob_4pre[] / clarett_init_seq_4pre[] (fcp_decode.py --emit-init --init-model 4pre). */
 #include "clarett_init_4pre.h"
-/* clarett_mux_band0_8pre[]: constructed, not captured — the 8Pre has no traced boot. */
+/* clarett_init_blob_8pre[] / clarett_init_seq_8pre[] (fcp_decode.py --emit-init --init-model 8pre;
+ * captures/8pre_boot_to_stream.log truncated to one arm cycle — see the header). */
+#include "clarett_init_8pre.h"
+/* clarett_mux_band0_8pre[]: constructed from XML; the captured routing (SET_MUX bands 0/1/2) is
+ * available in 8pre_boot_to_stream.log for verification against this table. */
 #include "clarett_mux_8pre.h"
 
 /*
@@ -598,7 +602,7 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 	 * Geometry re-declare (opt-in diagnostic; does NOT fix the 8PreX playback fold — that was TX fragment
 	 * page-alignment, see rearm_geometry note above / spec §16). clarett_arm_device threads preserve_routing
 	 * through (skips SET_MUX/SET_MIX when set) and geometry_only skips the config read/writeback that would
-	 * wedge GET_DATA. Only models with a captured blob can re-arm (not the 8Pre).
+	 * wedge GET_DATA. Only models with a captured blob can re-arm (all four now have one).
 	 */
 	if (rearm_geometry && m->init_blob) {
 		clarett_arm_device(c, preserve_routing, true);
@@ -622,7 +626,7 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 		return;
 	}
 
-	if (!m->init_blob) {			/* no capture for this model (8Pre) */
+	if (!m->init_blob) {			/* no captured blob (guard for a future XML-only model) */
 		if (m->mux_band0)
 			clarett_push_mux_band0(c);
 		return;
@@ -2109,9 +2113,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
 	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled.
 	 *
-	 * The bring-up is model-agnostic, which matters for a model with no captured blob of its
-	 * own (the 8Pre): arm as the id_table default, then hand the routing back below. Without
-	 * this, model=8pre would replay an empty sequence and arm nothing at all.
+	 * The bring-up is model-agnostic: arm as the id_table default, detect below, then hand the
+	 * detected model's routing back. All four models now carry a captured blob (the 8Pre gained
+	 * one Aug 6 2026), so the fallback below no longer fires for any shipping model — it stays as
+	 * a guard for a future XML-only model that would otherwise replay an empty sequence and arm
+	 * nothing. Forcing model=<x> arms with THAT model's own full blob.
 	 */
 	armed_with = c->model;
 	if (!armed_with->init_blob) {
@@ -2658,10 +2664,16 @@ static const struct clarett_model clarett_8pre = {
 	.stream_rx_ids = clarett_8pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
 	/*
-	 * .stream_*_ids are derived (above); .init_blob still needs an 8Pre capture — the bring-up is a
-	 * genuine per-device byte sequence, not derivable from XML — so this model cannot yet arm. The
-	 * routing table is constructed (clarett_mux_8pre.h) and pushed once detection identifies the
-	 * device, which is what lets fcp-server build this model's routing and mixer controls.
+	 * Bring-up captured Aug 6 2026 (captures/8pre_boot_to_stream.log) — the 8Pre now arms with its
+	 * OWN blob rather than falling back to the id_table default. Structure matches the 8PreX arm
+	 * (INIT_2x6, 8 KB config read/writeback, SET_MIXx16, SET_MUXx3); see clarett_init_8pre.h.
+	 */
+	.init_blob = clarett_init_blob_8pre,
+	.init_seq = clarett_init_seq_8pre,
+	.n_init_steps = ARRAY_SIZE(clarett_init_seq_8pre),
+	/*
+	 * Routing table is constructed from XML (clarett_mux_8pre.h); the captured SET_MUX bands in the
+	 * boot trace are available to verify it against live hardware.
 	 */
 	.mux_band0 = clarett_mux_band0_8pre,
 	.n_mux_band0 = ARRAY_SIZE(clarett_mux_band0_8pre),
