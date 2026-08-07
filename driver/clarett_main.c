@@ -303,8 +303,14 @@ static const struct clarett_model *clarett_pick_model(void)
  * starts, so nothing else touches resp_buf between the (landed-gated) completion and the parse.
  * Returns NULL if the query fails or the pair matches no known model (new hardware — warn and
  * let the caller keep its default).
+ *
+ * *collapsed distinguishes WHY it failed, so the caller can say the useful thing instead of the
+ * misleading "assuming 2Pre": true = the GET path is dead (transport error, or a status=3/size=0
+ * refusal) — the session-collapse signature (GETs refused while SETs still err=0), which no model
+ * fallback can paper over; false = either a clean match (return non-NULL) or a VALID reply whose
+ * geometry we don't recognize (genuinely new hardware — the fallback is a reasonable guess).
  */
-static const struct clarett_model *clarett_detect_model(struct clarett *c)
+static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed)
 {
 	static const struct clarett_model *const models[] = {
 		&clarett_2pre, &clarett_4pre, &clarett_8pre, &clarett_8prex,
@@ -314,6 +320,8 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c)
 	u16 pb, cap, size;
 	u8 status;
 	int i, err;
+
+	*collapsed = false;
 
 	/*
 	 * GET_7.1's reply arrives by DMA, invisible in every MMIO trace — so a model's identity
@@ -326,6 +334,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c)
 	if (err) {
 		dev_warn(&c->pci->dev,
 			 "model auto-detect: GET_7.1 transport failed (%d)\n", err);
+		*collapsed = true;	/* GET didn't complete at all — the path is dead */
 		return NULL;
 	}
 	dma_rmb();	/* order the DMAed response before we read resp_buf */
@@ -337,6 +346,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c)
 		dev_warn(&c->pci->dev,
 			 "model auto-detect: GET_7.1 bad response (status=%u size=%u raw playback=%u capture=%u)\n",
 			 status, size, pb, cap);
+		*collapsed = true;	/* GET refused (status=3/size=0) while SETs pass — collapse */
 		return NULL;
 	}
 
@@ -2169,10 +2179,20 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * names) comes after this point. Must precede the meter heartbeat: detection parses
 	 * resp_buf after its command returns, and the meter worker shares that buffer. */
 	if (!forced) {
-		const struct clarett_model *det = clarett_detect_model(c);
+		bool collapsed = false;
+		const struct clarett_model *det = clarett_detect_model(c, &collapsed);
 
 		if (det)
 			c->model = det;
+		else if (collapsed)
+			/* Not "assuming 2Pre" — the session is collapsed (GETs refused, SETs OK),
+			 * so no model fallback works: metering and config readback are dead until
+			 * it is recovered. Stop the userspace that re-collapses it, then reload. */
+			dev_err(&pci->dev,
+				"session collapsed: GET_7.1 refused (GETs dead / SETs OK) — cannot detect model; "
+				"stop fcp-server + PipeWire, then reload the module to recover. Registering as %s "
+				"geometry as a placeholder; metering/config will not work until recovered.\n",
+				c->model->name);
 		else
 			dev_warn(&pci->dev,
 				 "model auto-detect failed; assuming %s (override with model=)\n",
