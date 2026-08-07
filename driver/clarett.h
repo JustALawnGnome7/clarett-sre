@@ -18,6 +18,7 @@
 #include <linux/wait.h>		/* wait_queue_head_t — hwdep notification relay */
 #include <linux/workqueue.h>
 #include <linux/lcm.h>		/* lcm() — descriptor fragment alignment */
+#include <linux/string.h>	/* memcpy/memset — clarett_arm_emit() */
 #include <linux/log2.h>		/* roundup_pow_of_two() — page-safe fragment slots */
 #include <sound/core.h>
 
@@ -285,9 +286,9 @@ struct snd_rawmidi_substream;
 
 /*
  * Device bring-up opcodes seen in the vendor attach capture (8prex_full_init_mute.log).
- * Not fully decoded; the bring-up is replayed verbatim at probe (clarett_arm_device) from the
- * generated clarett_init_8prex.h, which precedes config writes actually taking effect on hardware.
- * Named here for documentation only — the replay table carries raw opcodes.
+ * Not fully decoded; the bring-up is replayed at probe (clarett_arm_device) from the de-blobbed
+ * typed step list clarett_arm_<model>[] (clarett_arm_<model>.h), which precedes config writes
+ * actually taking effect on hardware. Named here for documentation only.
  *   0x000001 subsystem enable {u16 id}; 0x001000/0x002000/0x003000/0x004000 subsystem-count
  *   queries; 0x002002 SET_MIX {u16 mix, u16 coeff[30]}; 0x003002 SET_MUX; 0x004001/0x004005
  *   subsystem-4 setup; 0x005000 CONFIG_PUSH {u16 id}.
@@ -306,12 +307,9 @@ struct snd_rawmidi_substream;
 #define FCP_CAT_INIT             0x000
 #define FCP_CAT_DATA             0x800
 
-/* One replayed bring-up command: opcode + a [off, off+len) slice of clarett_init_blob[]. */
-struct clarett_init_step {
-	u32 opcode;
-	u16 off;
-	u16 len;
-};
+/* De-blobbed bring-up: a typed command list replaces the opaque captured init blob.
+ * enum clarett_arm_kind, struct clarett_arm_step and the byte-exact clarett_arm_emit() builder. */
+#include "clarett_arm.h"
 
 /*
  * One router patch: this destination pin is fed from this source pin (src 0 = unrouted). A model's
@@ -409,12 +407,11 @@ struct clarett_model {
 	u8 n_stream_tx_ids;
 	u8 n_stream_rx_ids;
 
-	/* device bring-up replay (per-model; from fcp_decode.py --emit-init) */
-	const u8 *init_blob;
-	const struct clarett_init_step *init_seq;
-	int n_init_steps;
+	/* device bring-up replay (per-model; de-blobbed by fcp_decode.py --emit-deblob) */
+	const struct clarett_arm_step *arm_seq;
+	int n_arm_steps;
 
-	/* Band-0 router patch for a model with no init_blob (tools/gen_fcp_maps.py --emit-mux). */
+	/* Band-0 router patch for a model with no arm_seq (tools/gen_fcp_maps.py --emit-mux). */
 	const struct clarett_mux_entry *mux_band0;
 	int n_mux_band0;
 };
