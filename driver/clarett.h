@@ -565,6 +565,10 @@ struct clarett {
 	u32 tx_slot;			/* TX descriptor fragment SLOT stride, mirror of rx_slot (the working
 					 * RX path is non-contiguous; the contiguous TX ring folded 28ch->4 on the
 					 * 8PreX). = audio bytes when contiguous (tx_frag_pad=0); page-safe pow2 default. */
+	u32 irq_descs;			/* effective RX IRQ cadence (descriptors between markers); 0 = default 16.
+					 * dyn_period derives it from the negotiated ALSA period (clarett_irq_descs). */
+	u32 lock_period;		/* dyn_period: frame count both directions share this session (0 = none).
+					 * The first configured direction pins it; the other is constrained to match. */
 	void *stream_buf;		/* coherent streaming ring buffer */
 	dma_addr_t stream_dma;
 	size_t stream_size;
@@ -730,11 +734,21 @@ static inline u32 clarett_frag_bytes(u8 channels)
 {
 	return (u32)channels * 4 * CLARETT_FRAG_FRAMES;
 }
-/* Frames advanced per 0x300 period IRQ (one IRQ-flagged descriptor consumed = CLARETT_IRQ_DESCS frags).
- * Used only as the ALSA period granularity; the actual capture advance is ctr-delta driven (below). */
-static inline u32 clarett_irq_period_frames(void)
+/*
+ * Effective RX IRQ cadence (descriptors between periodic IRQ markers). CLARETT_IRQ_DESCS (16) is the
+ * default; the dyn_period path (clarett_pcm.c) overrides c->irq_descs per-stream from the negotiated ALSA
+ * period so a DAW can pick a smaller buffer. A zero field reads as the default, so it is safe before probe
+ * sets it. Must divide CLARETT_STREAM_NDESC so the markers (and the wrap on the last entry) place evenly.
+ */
+static inline u32 clarett_irq_descs(const struct clarett *c)
 {
-	return CLARETT_IRQ_DESCS * CLARETT_FRAG_FRAMES;
+	return c->irq_descs ? c->irq_descs : CLARETT_IRQ_DESCS;
+}
+/* Frames advanced per 0x300 period IRQ (one IRQ-flagged descriptor consumed = irq_descs frags).
+ * Used only as the ALSA period granularity; the actual capture advance is ctr-delta driven (below). */
+static inline u32 clarett_irq_period_frames(const struct clarett *c)
+{
+	return clarett_irq_descs(c) * CLARETT_FRAG_FRAMES;
 }
 /*
  * Frames per 0x300 counter unit (spec §10/§14). Hardware-derived: the vendor steps +0xc/period == 192

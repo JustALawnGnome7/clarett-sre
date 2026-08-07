@@ -25,7 +25,10 @@
 #include <linux/jiffies.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
+#include <sound/pcm_params.h>
 #include "clarett.h"
+
+static void clarett_build_rings(struct clarett *c);	/* rebuilt at prepare when dyn_period changes cadence */
 
 /*
  * Replay the vendor's pre-arm re-init batch in the stream handshake (see clarett_stream_handshake).
@@ -55,6 +58,35 @@ module_param(tx_tone, bool, 0444);
 MODULE_PARM_DESC(tx_tone,
 		 "Fill the dummy TX ring with a 1 kHz -18 dBFS sine instead of silence (audible on the "
 		 "outputs if the engine runs). Tests whether the engine gates on TX content.");
+
+/*
+ * dyn_period: derive the RX IRQ cadence from the negotiated ALSA period instead of the fixed 256-frame
+ * default, so a DAW can pick a smaller device buffer (down to one 16-frame fragment). It rebuilds the
+ * descriptor ring at a finer marker cadence; both directions are locked to one period (option a: DAWs use a
+ * single duplex buffer size anyway).
+ *
+ * HARDWARE-VERIFIED (8Pre, Aug 6 2026): the 0x300 counter free-runs in 16-frame units regardless of marker
+ * spacing — its per-event step scaled proportionally with the cadence across a 64x range (+0x01/+0x04/+0x08/
+ * +0x10/+0x40 at cadence 1/4/8/16/64), so the servicer's step*CLARETT_CTR_FRAMES advance stays correct with no
+ * change, and a 1 kHz reference captured at 1000.0 Hz (no drift) at every one. Cadence 1 (EVERY descriptor
+ * IRQ-flagged, 8x the vendor's ~14 density) held stable over 132k periods / ~44 s with rekicks=0, wraps=0,
+ * late=0 — the engine tolerates maximum flag density. Consequently the counter's wrap/recovery window is 0x100
+ * units = 4096 frames = ~85 ms at EVERY cadence, so a finer period does not reduce the scheduling-gap tolerance
+ * (it rode through the platform's ~42 ms SMI freeze at cadence 4, coalesced periods recovered exactly, wraps=0).
+ *
+ * ON by default. The floor is one 16-frame fragment (CLARETT_DYN_MIN_FRAMES = CLARETT_FRAG_FRAMES, cadence 1),
+ * the hardware minimum and verified above — a 16x drop from the old 256 floor. dyn_period=0 restores the fixed
+ * 256-frame cadence. NOTE: with PipeWire adopting the card it arms the engine first and the duplex lock coerces
+ * the app to PipeWire's quantum, so a DAW controls the buffer size only once PipeWire has released the card
+ * (standard pro-audio setup). The total ALSA buffer stays pinned to the 4096-frame ring regardless of period.
+ */
+#define CLARETT_DYN_MIN_FRAMES	CLARETT_FRAG_FRAMES	/* one fragment = 16 frames (cadence 1); the verified floor */
+static bool dyn_period = true;
+module_param(dyn_period, bool, 0444);
+MODULE_PARM_DESC(dyn_period,
+		 "Derive the RX IRQ cadence from the chosen ALSA period, lowering the minimum device buffer from "
+		 "256 to 16 frames (default on; verified drift-free at cadence 1-64). 0 = fixed 256-frame cadence. "
+		 "A DAW controls the period only once PipeWire has released the card.");
 
 
 
@@ -289,6 +321,27 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 		snd_pcm_period_elapsed(ps);
 }
 
+/*
+ * dyn_period duplex lock (option a): once either direction has pinned the session's period (clarett_pcm_hw_params
+ * -> c->lock_period), constrain the other direction's period to the same frame count. DAWs drive the card as a
+ * single duplex device with one buffer size, so this takes nothing real away; it guarantees the two directions
+ * share the one RX marker cadence the engine is armed with. No lock pinned yet -> leave the period free.
+ */
+static int clarett_rule_lock_period(struct snd_pcm_hw_params *params, struct snd_pcm_hw_rule *rule)
+{
+	struct clarett *c = rule->private;
+	u32 locked = READ_ONCE(c->lock_period);
+	struct snd_interval *ps = hw_param_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	struct snd_interval t;
+
+	if (!locked)
+		return 0;
+	snd_interval_any(&t);
+	t.min = t.max = locked;
+	t.integer = 1;
+	return snd_interval_refine(ps, &t);
+}
+
 static int clarett_pcm_open(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
@@ -296,29 +349,60 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	bool play = ss->stream == SNDRV_PCM_STREAM_PLAYBACK;
 	u8 chans   = play ? c->model->playback_channels : c->model->capture_channels;
 	size_t buf = play ? clarett_tx_ring_bytes(c) : clarett_rx_ring_bytes(c);
-	u32 period = clarett_irq_period_frames() * chans * 4;	/* one 0x300 period in bytes */
+	u32 frame  = (u32)chans * 4;
+	/*
+	 * Minimum period. Fixed path: one 256-frame hardware IRQ period (CLARETT_IRQ_DESCS descriptors) — a fixed
+	 * tiny period forced PipeWire into a rigid 5 ms cadence it serviced badly (audible skipping), so a floor
+	 * plus a step lets it pick a comfortable larger period. dyn_period lowers the floor to the finest verified
+	 * cadence (CLARETT_DYN_MIN_FRAMES) and derives the marker cadence from whatever period the app picks
+	 * (clarett_pcm_prepare). Either way the BUFFER is pinned to the ring size — RX/TX copies map ALSA frame k
+	 * to ring frame k.
+	 */
+	u32 min_frames = dyn_period ? CLARETT_DYN_MIN_FRAMES : (CLARETT_IRQ_DESCS * CLARETT_FRAG_FRAMES);
+	u32 min_period = min_frames * frame;
 	int err;
 
 	runtime->hw = clarett_pcm_hw;
 	runtime->hw.channels_min     = chans;
 	runtime->hw.channels_max     = chans;
 	runtime->hw.buffer_bytes_max = buf;
-	/*
-	 * Let the app choose its period between the hardware IRQ period (256 frames) and half the buffer, in
-	 * whole IRQ-period steps. A fixed tiny period forced PipeWire into a rigid 5 ms cadence it services
-	 * badly (audible skipping on music); a range lets it pick a comfortable larger period. The tick reports
-	 * period_elapsed off runtime->period_size, so any multiple of the hardware period works. The BUFFER is
-	 * still pinned to the ring size — the RX/TX copies map ALSA frame k to hardware ring frame k (mod ring).
-	 */
-	runtime->hw.period_bytes_min = period;
+	runtime->hw.period_bytes_min = min_period;
 	runtime->hw.period_bytes_max = buf / 2;			/* periods_min = 2 */
-	runtime->hw.periods_max      = buf / period;
+	runtime->hw.periods_max      = buf / min_period;
 
 	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
 	if (err < 0)
 		return err;
-	/* Period must be a whole number of hardware IRQ periods (CLARETT_IRQ_DESCS descriptors). */
-	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, period);
+
+	if (dyn_period) {
+		/*
+		 * The period becomes the RX marker cadence (irq_descs = period/16), which must divide
+		 * CLARETT_STREAM_NDESC so the markers place evenly to the wrap. A power-of-two frame count
+		 * guarantees that (16..2048 all divide the 4096-frame ring), and DAW/PipeWire buffers are pow2.
+		 */
+		err = snd_pcm_hw_constraint_pow2(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+		if (err < 0)
+			return err;
+		/* Lock both directions to one period (option a). */
+		return snd_pcm_hw_rule_add(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+					   clarett_rule_lock_period, c,
+					   SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
+	}
+	/* Legacy fixed cadence: period is a whole number of 256-frame hardware periods. */
+	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, min_period);
+}
+
+/*
+ * Pin the session's shared period the first time a direction is configured (dyn_period only). The other
+ * direction's open() rule reads this and is constrained to match, so both arm the one marker cadence.
+ */
+static int clarett_pcm_hw_params(struct snd_pcm_substream *ss, struct snd_pcm_hw_params *params)
+{
+	struct clarett *c = snd_pcm_substream_chip(ss);
+
+	if (dyn_period)
+		WRITE_ONCE(c->lock_period, params_period_size(params));
+	return 0;
 }
 
 /*
@@ -342,8 +426,10 @@ static void clarett_pcm_detach(struct clarett *c, struct snd_pcm_substream *ss)
 	}
 	mutex_unlock(&c->pcm_lock);
 
-	if (!c->pcm_sub && !c->pcm_play_sub)
-		clarett_engine_stop(c);		/* last user out: tear the engine down */
+	if (!c->pcm_sub && !c->pcm_play_sub) {
+		WRITE_ONCE(c->lock_period, 0);	/* last user out: release the shared-period lock (dyn_period) */
+		clarett_engine_stop(c);		/* and tear the engine down */
+	}
 }
 
 static int clarett_pcm_close(struct snd_pcm_substream *ss)
@@ -488,6 +574,22 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 	if (!arm)			/* engine already armed: just attached at the current clock */
 		return 0;
 
+	/*
+	 * dyn_period: match the RX marker cadence to the negotiated (shared) period before arming, so the
+	 * engine raises a 0x300 period at the app's buffer granularity. Rebuild the descriptor ring at the new
+	 * cadence — the engine is not yet armed on this (first-direction) path, so the table is quiescent. The
+	 * cadence must divide NDESC; the pow2 period constraint in open() already guarantees that.
+	 */
+	if (dyn_period && c->lock_period) {
+		u32 descs = clamp_t(u32, c->lock_period / CLARETT_FRAG_FRAMES, 1, CLARETT_STREAM_NDESC / 2);
+
+		if (descs != c->irq_descs) {
+			c->irq_descs = descs;
+			clarett_build_rings(c);
+			wmb();		/* descriptor table visible to the device before we arm */
+		}
+	}
+
 	/* First direction in: arm the full-duplex engine. block 0 (TX) base, block 1 (RX) base — in
 	 * descriptor mode each points at its table; r1 offset is clarett_stream_r1_off() for the mode. */
 	r0 = c->stream_dma;
@@ -554,12 +656,13 @@ static snd_pcm_uframes_t clarett_pcm_pointer(struct snd_pcm_substream *ss)
 }
 
 static const struct snd_pcm_ops clarett_pcm_ops = {
-	.open     = clarett_pcm_open,
-	.close    = clarett_pcm_close,
-	.hw_free  = clarett_pcm_hw_free,
-	.prepare  = clarett_pcm_prepare,
-	.trigger  = clarett_pcm_trigger,
-	.pointer  = clarett_pcm_pointer,
+	.open      = clarett_pcm_open,
+	.close     = clarett_pcm_close,
+	.hw_params = clarett_pcm_hw_params,
+	.hw_free   = clarett_pcm_hw_free,
+	.prepare   = clarett_pcm_prepare,
+	.trigger   = clarett_pcm_trigger,
+	.pointer   = clarett_pcm_pointer,
 };
 
 /*
@@ -631,9 +734,10 @@ static void clarett_build_rings(struct clarett *c)
 		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_slot);	/* slotted: non-contiguous when padded */
 		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_slot);	/* slotted: fragments non-contiguous when padded */
 		/* Periodic RX IRQ marker (spec §14): the engine raises a counted 0x300 period when it
-		 * consumes an IRQ-flagged descriptor. Every CLARETT_IRQ_DESCS-th one, matching the vendor's
-		 * ~14-descriptor cadence. TX carries no periodic marker (vendor TX flags only the last). */
-		if ((i + 1) % CLARETT_IRQ_DESCS == 0)
+		 * consumes an IRQ-flagged descriptor. Every clarett_irq_descs(c)-th one (default 16, matching
+		 * the vendor's ~14-descriptor cadence; dyn_period tightens it to the chosen ALSA period).
+		 * TX carries no periodic marker (vendor TX flags only the last). */
+		if ((i + 1) % clarett_irq_descs(c) == 0)
 			rx_tbl[i] |= cpu_to_le64(CLARETT_DESC_IRQ);
 	}
 	tx_tbl[CLARETT_STREAM_NDESC - 1] |= cpu_to_le64(CLARETT_DESC_WRAP_TX);
@@ -646,7 +750,7 @@ static void clarett_build_rings(struct clarett *c)
 		 "descriptor rings: %u entries, tx audio=0x%x slot=0x%x, rx audio=0x%x slot=0x%x, RX IRQ every %u desc (%u frames/period)\n",
 		 CLARETT_STREAM_NDESC, tx_frag, tx_slot,
 		 clarett_frag_bytes(c->model->capture_channels), rx_slot,
-		 CLARETT_IRQ_DESCS, clarett_irq_period_frames());
+		 clarett_irq_descs(c), clarett_irq_period_frames(c));
 }
 
 int clarett_create_pcm(struct clarett *c)
