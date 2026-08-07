@@ -28,3 +28,7 @@ tools/fcp_cap_read
 tools/fcp_cfg_read
 tools/fcp_meter_watch
 tools/fcp_mux_probe
+
+# Python bytecode cache (auto-generated when tools/*.py are imported)
+__pycache__/
+*.pyc
