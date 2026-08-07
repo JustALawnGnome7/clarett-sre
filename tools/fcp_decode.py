@@ -26,6 +26,7 @@ every control change and is collapsed to a single summary line by default; pass 
 see the individual chunks.
 """
 import argparse
+import os
 import re
 import sys
 
@@ -327,6 +328,171 @@ def u32(bmap, rel):
     return bs[0] | bs[1] << 8 | bs[2] << 16 | bs[3] << 24
 
 
+def _le(v, n):
+    return bytes((v >> (8 * i)) & 0xff for i in range(n))
+
+
+def deblob_typed(op, payload):
+    """Decompose one bring-up step into a typed record for the byte-faithful de-blob.
+
+    Returns (kind, human, reserialized_bytes). A typing is byte-faithful iff reserialized_bytes
+    == payload — the caller asserts this. Well-understood commands type to small fields
+    (CONFIG_PUSH id, GET_DATA range, mixer coeffs, routing words); genuinely opaque queries fall
+    back to 'raw' (which trivially round-trips). This is the extraction the driver's authored
+    tables + a builder will mirror, so a passing round-trip proves the driver refactor can be exact.
+    """
+    p = bytes(payload)
+
+    def u16(o=0):
+        return p[o] | p[o + 1] << 8
+
+    def u32(o=0):
+        return p[o] | p[o + 1] << 8 | p[o + 2] << 16 | p[o + 3] << 24
+
+    if len(p) == 0:                                  # INIT_2, count/identity queries — op carries the meaning
+        return ('none', f"op 0x{op:06x} (no payload)", b'')
+    if op == 0x005000 and len(p) == 2:
+        return ('push', f"CONFIG_PUSH id 0x{u16():04x}", _le(u16(), 2))
+    if op == 0x000001 and len(p) == 2:
+        return ('enable', f"SUBSYS_ENABLE id 0x{u16():04x}", _le(u16(), 2))
+    if op == 0x800005 and len(p) == 8:
+        return ('readseg', f"READ_SEG off={u32(0)} len={u32(4)}", _le(u32(0), 4) + _le(u32(4), 4))
+    if op == 0x800000 and len(p) == 8:
+        return ('getdata', f"GET_DATA off={u32(0)} len={u32(4)}", _le(u32(0), 4) + _le(u32(4), 4))
+    if op == 0x800002 and len(p) == 4:
+        return ('datacmd', f"DATA_CMD activate {u32(0)}", _le(u32(0), 4))
+    if op == 0x004001 and len(p) == 4:
+        return ('subsys4', f"SUBSYS4_SET {u32(0)}", _le(u32(0), 4))
+    if op == 0x002002 and len(p) >= 2 and len(p) % 2 == 0:
+        mix = u16(0)
+        coeffs = [p[2 + 2 * i] | p[3 + 2 * i] << 8 for i in range((len(p) - 2) // 2)]
+        rs = _le(mix, 2) + b''.join(_le(c, 2) for c in coeffs)
+        return ('mix', f"SET_MIX bus {mix} ({len(coeffs)} coeffs)", rs)
+    if op == 0x003002 and len(p) >= 4 and len(p) % 4 == 0:
+        words = [u32(4 * i) for i in range(len(p) // 4)]
+        rs = b''.join(_le(w, 4) for w in words)
+        return ('mux', f"SET_MUX band {u16(2)} ({len(words) - 1} route words)", rs)
+    if op == 0x800001 and len(p) >= 8:
+        off, ln, data = u32(0), u32(4), p[8:]
+        nz = len(data.rstrip(b'\x00'))
+        rs = _le(off, 4) + _le(ln, 4) + data
+        return ('setdata', f"SET_DATA off={off} len={ln} (hdr {nz}B + {len(data) - nz} zeros)", rs)
+    return ('raw', f"raw op=0x{op:06x} {len(p)}B", p)
+
+
+def deblob_check(path):
+    """Round-trip validator for the byte-faithful de-blob: decompose every step to a typed record,
+    re-serialize, and assert byte-identity. Report the typed/raw split so we know how much de-blobs."""
+    blob, steps = parse_init_header(path)
+    kinds, mismatches, raw_bytes, typed_bytes = {}, [], 0, 0
+    for i, (op, off, ln) in enumerate(steps):
+        payload = bytes(blob[off:off + ln])
+        kind, _human, rs = deblob_typed(op, payload)
+        kinds[kind] = kinds.get(kind, 0) + 1
+        if rs != payload:
+            mismatches.append((i, op))
+        if kind == 'raw':
+            raw_bytes += len(payload)
+        else:
+            typed_bytes += len(payload)
+    total = len(steps)
+    raw_steps = kinds.get('raw', 0)
+    print(f"{path}")
+    print(f"  {total} steps  |  typed {total - raw_steps}  raw {raw_steps}  |  "
+          f"payload bytes: typed {typed_bytes}  raw {raw_bytes}")
+    print(f"  byte-faithful round-trip: {'PASS' if not mismatches else 'FAIL ' + str(mismatches)}")
+    for k, c in sorted(kinds.items(), key=lambda kv: -kv[1]):
+        print(f"    {k:10} {c}")
+    return not mismatches
+
+
+def emit_deblob(path, suffix):
+    """Emit the de-blobbed per-model bring-up: typed step list + mix/mux/writeback/raw tables.
+    The step payloads are byte-identical to the original blob (asserted here; validated end-to-end
+    by tools/test_deblob.c). Symbols are suffixed so the de-blobbed form coexists with the old blob
+    during validation. Consumed by clarett_arm.h's clarett_arm_emit()."""
+    blob, steps = parse_init_header(path)
+    KIND = {'none': 'CARM_NONE', 'push': 'CARM_ID', 'enable': 'CARM_ID', 'datacmd': 'CARM_U32',
+            'subsys4': 'CARM_U32', 'getdata': 'CARM_RANGE', 'readseg': 'CARM_RANGE',
+            'mix': 'CARM_MIX', 'mux': 'CARM_MUX', 'setdata': 'CARM_WB', 'raw': 'CARM_RAW'}
+    mix_rows, mux_bands, wb_pool, raw_pool, steplines = [], [], bytearray(), bytearray(), []
+
+    for op, off, ln in steps:
+        p = bytes(blob[off:off + ln])
+        kind, _h, rs = deblob_typed(op, p)
+        assert rs == p, f"round-trip fail at op 0x{op:06x}"     # never emit an unfaithful step
+        ck = KIND[kind]
+        if kind == 'none':
+            steplines.append((op, ck, 0, 0, 'NULL', 0))
+        elif kind in ('push', 'enable'):
+            steplines.append((op, ck, p[0] | p[1] << 8, 0, 'NULL', 0))
+        elif kind in ('datacmd', 'subsys4'):
+            steplines.append((op, ck, int.from_bytes(p[:4], 'little'), 0, 'NULL', 0))
+        elif kind in ('getdata', 'readseg'):
+            steplines.append((op, ck, int.from_bytes(p[:4], 'little'),
+                              int.from_bytes(p[4:8], 'little'), 'NULL', 0))
+        elif kind == 'mix':
+            bus = p[0] | p[1] << 8
+            coeffs = [p[2 + 2 * i] | p[3 + 2 * i] << 8 for i in range((len(p) - 2) // 2)]
+            idx = len(mix_rows)
+            mix_rows.append(coeffs)
+            steplines.append((op, ck, bus, 0, f'clarett_armmix{suffix}[{idx}]', len(coeffs)))
+        elif kind == 'mux':
+            words = [int.from_bytes(p[4 * i:4 * i + 4], 'little') for i in range(len(p) // 4)]
+            idx = len(mux_bands)
+            mux_bands.append(words)
+            steplines.append((op, ck, 0, 0, f'clarett_armmux{suffix}_b{idx}', len(words)))
+        elif kind == 'setdata':
+            a, b, data = int.from_bytes(p[:4], 'little'), int.from_bytes(p[4:8], 'little'), p[8:]
+            hdr = data[:len(data.rstrip(b'\0'))]
+            o = len(wb_pool)
+            wb_pool += hdr
+            steplines.append((op, ck, a, b, f'clarett_armwb{suffix} + {o}' if hdr else 'NULL', len(hdr)))
+        elif kind == 'raw':
+            o = len(raw_pool)
+            raw_pool += p
+            steplines.append((op, ck, 0, 0, f'clarett_armraw{suffix} + {o}', len(p)))
+
+    ncoef = len(mix_rows[0]) if mix_rows else 0
+    assert all(len(r) == ncoef for r in mix_rows), "non-uniform mixer coeff counts"
+
+    def hexrows(bs, per=12):
+        return "\n".join("\t" + " ".join(f"0x{b:02x}," for b in bs[i:i + per])
+                         for i in range(0, len(bs), per))
+
+    src = os.path.basename(path)
+    print(f"/* Generated by tools/fcp_decode.py --emit-deblob --init-model {suffix.lstrip('_')} from "
+          f"{src}. Do not edit.")
+    print(" * De-blobbed bring-up tables (see clarett_arm.h). Payloads byte-identical to the vendor")
+    print(" * capture — verified by fcp_decode.py --deblob-check and tools/test_deblob.c. */")
+    if mix_rows:
+        print(f"static const u16 clarett_armmix{suffix}[{len(mix_rows)}][{ncoef}] = {{")
+        for r in mix_rows:
+            print("\t{ " + " ".join(f"0x{c:04x}," for c in r) + " },")
+        print("};")
+    for i, words in enumerate(mux_bands):
+        print(f"static const u32 clarett_armmux{suffix}_b{i}[] = {{")
+        print("\n".join("\t" + " ".join(f"0x{w:08x}," for w in words[j:j + 6])
+                        for j in range(0, len(words), 6)))
+        print("};")
+    if wb_pool:
+        print(f"/* Writeback fallback: capture-day config, normally OVERWRITTEN by echoed live device")
+        print(f" * state during arm (only used if a live GET_DATA read fails). */")
+        print(f"static const u8 clarett_armwb{suffix}[] = {{")
+        print(hexrows(wb_pool))
+        print("};")
+    if raw_pool:
+        print(f"/* Opaque query payloads (identity/version reads; responses discarded). */")
+        print(f"static const u8 clarett_armraw{suffix}[] = {{")
+        print(hexrows(raw_pool))
+        print("};")
+    print(f"static const struct clarett_arm_step clarett_arm{suffix}[] = {{")
+    for op, ck, a, b, data, dlen in steplines:
+        print(f"\t{{ 0x{op:06x}, {ck}, {a}, {b}, {data}, {dlen} }},")
+    print("};")
+    print(f"/* {len(steplines)} steps */")
+
+
 def synth_txn(n, opcode, payload):
     """Build a Txn from a bring-up step's (opcode, payload bytes), so the trace decoders
     (mix_coeffs / mux_entries / data_offset_len) apply unchanged to the replay table."""
@@ -468,6 +634,14 @@ def main():
                     help="emit a C device-bring-up replay table from this capture: every non-meter "
                          "command up to the first monitor-mute write (the bulk config read/writeback "
                          "included). Redirect to driver/clarett_init_<model>.h.")
+    ap.add_argument("--emit-deblob", action="store_true",
+                    help="input is a generated clarett_init_<model>.h; emit the de-blobbed bring-up "
+                         "(typed step list + mix/mux/writeback/raw tables, see clarett_arm.h). "
+                         "Use --init-model for the symbol suffix. Redirect to clarett_arm_<model>.h.")
+    ap.add_argument("--deblob-check", action="store_true",
+                    help="input is a generated clarett_init_<model>.h; decompose every step to a typed "
+                         "record, re-serialize, and verify byte-identity (the byte-faithful de-blob "
+                         "foundation). Reports the typed/raw split.")
     ap.add_argument("--annotate-init", action="store_true",
                     help="input is a generated clarett_init_<model>.h; classify every replay step "
                          "by decode tier (DECODED-SET / DECODED-GET / FORM-SET / QUERY), render the "
@@ -479,6 +653,14 @@ def main():
                          "clarett_init_seq_2pre); e.g. '8prex' for the 8PreX. Per-model headers coexist. "
                          "Pass '' for an unsuffixed symbol.")
     args = ap.parse_args()
+
+    if args.emit_deblob:              # offline: emit the de-blobbed per-model tables
+        emit_deblob(args.file, f"_{args.init_model}" if args.init_model else "")
+        return
+
+    if args.deblob_check:             # offline: round-trip validate the byte-faithful de-blob
+        deblob_check(args.file)
+        return
 
     if args.annotate_init:            # offline: input is a generated init header, not a trace
         annotate_init(args.file, args.summary)
