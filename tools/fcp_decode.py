@@ -64,6 +64,46 @@ OPCODE_NAMES = {
     0x7000:   "GET_7.0?", 0x7001: "GET_7.1?", 0x7002: "GET_7.2?", 0x7003: "GET_7.3?",
 }
 
+# --- bring-up-blob annotation (--annotate-init) -------------------------------
+# Per-opcode decode status for the init replay tables. category is one of:
+#   DECODED-SET  we understand the payload AND it writes device state -> keep, renderable
+#   DECODED-GET  we understand it, but it is a read (response DMAed/ignored)
+#   FORM-SET     shape known, per-item meaning opaque -> keep, NOT yet renderable
+#   QUERY        pure read whose response the driver discards -> PRUNE CANDIDATE (issuance
+#                may still be handshake-required; only a hardware A/B proves droppability)
+#   QUERY-KEEP   a query we depend on elsewhere (do not treat as a prune candidate)
+# name/note are documentation; nothing here is copied from vendor code (clean-room: these are
+# black-box observations of a captured MMIO trace).
+OPCODE_META = {
+    0x800001: ("SET_DATA",     "DECODED-SET", "config write {off,len,data}"),
+    0x800002: ("DATA_CMD",     "DECODED-SET", "activate {u32}"),
+    0x002002: ("SET_MIX",      "DECODED-SET", "mixer coeffs {mix,u16[]}"),
+    0x003002: ("SET_MUX",      "DECODED-SET", "routing {band,(src<<12|dst)[]}"),
+    0x800000: ("GET_DATA",     "DECODED-GET", "config read {off,len} -> DMA"),
+    0x002001: ("GET_MIX",      "DECODED-GET", "mixer read"),
+    0x003001: ("GET_MUX",      "DECODED-GET", "routing read -> DMA"),
+    0x005000: ("CONFIG_PUSH",  "FORM-SET",    "register config-item id {u16}; arms config space"),
+    0x000001: ("INIT_1/SUBEN", "FORM-SET",    "subsystem enable {u16 id} (also CAP_READ)"),
+    0x000002: ("INIT_2",       "FORM-SET",    "subsystem init (zero-len)"),
+    0x004001: ("SUBSYS4_SET",  "FORM-SET",    "subsystem-4 setup"),
+    0x004005: ("SUBSYS4_OP",   "FORM-SET",    "subsystem-4 op"),
+    0x001000: ("COUNT_1",      "QUERY",       "subsystem-1 count query (response discarded)"),
+    0x002000: ("COUNT_2",      "QUERY",       "subsystem-2 count query (response discarded)"),
+    0x003000: ("COUNT_3",      "QUERY",       "subsystem-3 count query (response discarded)"),
+    0x004000: ("COUNT_4",      "QUERY",       "subsystem-4 count query (response discarded)"),
+    0x800005: ("READ_SEG",     "QUERY",       "fw-segment/identity read (response discarded)"),
+    0x006000: ("GET_6.0",      "QUERY",       "identity/version (response discarded)"),
+    0x006001: ("GET_6.1",      "QUERY",       "identity/version (response discarded)"),
+    0x006002: ("GET_6.2",      "QUERY",       "identity/version (response discarded)"),
+    0x006004: ("GET_6.4",      "QUERY",       "identity/version (response discarded)"),
+    0x006005: ("GET_6.5",      "QUERY",       "identity/version (response discarded)"),
+    0x007000: ("GET_7.0",      "QUERY",       "identity/count (response discarded)"),
+    0x007001: ("GET_7.1",      "QUERY-KEEP",  "band0 {playback,capture} counts = model auto-detect"),
+    0x007002: ("GET_7.2",      "QUERY",       "identity/count (response discarded)"),
+    0x007003: ("GET_7.3",      "QUERY",       "identity/count (response discarded)"),
+}
+CATEGORY_ORDER = ("DECODED-SET", "DECODED-GET", "FORM-SET", "QUERY-KEEP", "QUERY", "UNKNOWN")
+
 # --- line parsing -------------------------------------------------------------
 RE_WRITE = re.compile(
     r'vfio_region_write\s+\([^)]*region(\d+)\+0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+),\s*(\d+)\)')
@@ -287,6 +327,126 @@ def u32(bmap, rel):
     return bs[0] | bs[1] << 8 | bs[2] << 16 | bs[3] << 24
 
 
+def synth_txn(n, opcode, payload):
+    """Build a Txn from a bring-up step's (opcode, payload bytes), so the trace decoders
+    (mix_coeffs / mux_entries / data_offset_len) apply unchanged to the replay table."""
+    mbox = {}
+    store_le(mbox, MBOX_BASE + OFF_CMD, 4, opcode | EXEC_FLAG)
+    store_le(mbox, MBOX_BASE + OFF_SIZESEQ, 4, len(payload) & 0xffff)
+    store_le(mbox, MBOX_BASE + OFF_ERROR, 4, 0)
+    store_le(mbox, MBOX_BASE + OFF_PAD, 4, 0)
+    for i, b in enumerate(payload):
+        mbox[MBOX_BASE + OFF_DATA + i] = b
+    return Txn(n, mbox)
+
+
+def parse_init_header(path):
+    """Parse a generated clarett_init_<model>.h into (blob bytes, [(opcode, off, len), ...])."""
+    text = open(path).read()
+    mb = re.search(r'clarett_init_blob\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
+    ms = re.search(r'clarett_init_seq\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
+    if not mb or not ms:
+        sys.exit(f"{path}: no clarett_init_blob/seq arrays found (is this a generated init header?)")
+    blob = [int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', mb.group(1))]
+    steps = [(int(o, 16), int(off), int(ln))
+             for o, off, ln in re.findall(r'\{\s*0x([0-9a-fA-F]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}',
+                                          ms.group(1))]
+    return blob, steps
+
+
+def annotate_detail(t):
+    """Render the meaning of one bring-up step's payload (best-effort, per decode tier)."""
+    op = t.opcode
+    if op == 0x002002:                                   # SET_MIX
+        mc = t.mix_coeffs()
+        if mc is not None:
+            mix, co = mc
+            nz = sum(1 for c in co if c)
+            return f"mix bus {mix}: {len(co)} coeffs, {nz} non-zero"
+    if op == 0x003002:                                   # SET_MUX
+        me = t.mux_entries()
+        if me is not None:
+            band, entries = me
+            routed = sum(1 for _d, s in entries if s)
+            return f"band {band}: {len(entries)} dests, {routed} routed"
+    if op in (0x800000, 0x800001):                       # GET_DATA / SET_DATA
+        ol = t.data_offset_len()
+        if ol is not None:
+            off, ln = ol
+            if op == 0x800000:
+                return f"off {off} len {ln} -> DMA"
+            val = fmt_bytes(t.data[8:min(t.size, 8 + 12)])
+            tail = " ..." if t.size > 8 + 12 else ""
+            note = "  [appspace persist]" if off >= APPSPACE_BASE else ""
+            return f"off {off} len {ln} val=[{val}{tail}]{note}"
+    if op == 0x800002 and t.size >= 4 and all(b is not None for b in t.data[:4]):
+        act = t.data[0] | t.data[1] << 8 | t.data[2] << 16 | t.data[3] << 24
+        return f"activate {act}"
+    if op == 0x005000 and t.size >= 2:                   # CONFIG_PUSH: the 2-byte id
+        return f"config-item id 0x{t.data[0] | t.data[1] << 8:04x}"
+    if op == 0x000001 and t.size >= 2:                   # INIT_1 / subsystem enable / CAP_READ
+        return f"subsystem/category id 0x{t.data[0] | t.data[1] << 8:04x}"
+    if t.size:
+        tail = " ..." if t.size > 8 else ""
+        return f"{t.size}B [{fmt_bytes(t.data[:min(t.size, 8)])}{tail}]"
+    return "(no payload)"
+
+
+def annotate_init(path, summary_only):
+    """Classify every step of a generated init header by decode tier and render Tier-1 meaning."""
+    blob, steps = parse_init_header(path)
+    cat_steps = {c: 0 for c in CATEGORY_ORDER}
+    cat_bytes = {c: 0 for c in CATEGORY_ORDER}
+    push_ids, suben_ids = [], []
+    print(f"# annotation of {path}  ({len(steps)} steps, {len(blob)} payload bytes)\n")
+    if not summary_only:
+        print(f"  {'#':>3}  {'opcode':<10} {'name':<14} {'category':<12} detail")
+        print("  " + "-" * 78)
+    for i, (op, off, ln) in enumerate(steps):
+        payload = blob[off:off + ln]
+        name, cat, _note = OPCODE_META.get(op, (OPCODE_NAMES.get(op, ""), "UNKNOWN", ""))
+        if cat not in cat_steps:
+            cat, cat_steps[cat], cat_bytes[cat] = "UNKNOWN", 0, 0
+        cat_steps[cat] += 1
+        cat_bytes[cat] += ln
+        t = synth_txn(i, op, payload)
+        if op == 0x005000 and ln >= 2:
+            push_ids.append(payload[0] | payload[1] << 8)
+        elif op == 0x000001 and ln >= 2:
+            suben_ids.append(payload[0] | payload[1] << 8)
+        if not summary_only:
+            print(f"  {i:>3}  0x{op:06x}   {name:<14} {cat:<12} {annotate_detail(t)}")
+
+    print("\n=== decode-tier summary ===")
+    print(f"  {'category':<12} {'steps':>6} {'bytes':>7}   meaning")
+    meaning = {
+        "DECODED-SET": "understood + writes state (renderable; must keep)",
+        "DECODED-GET": "understood read (response DMAed/ignored)",
+        "FORM-SET":    "shape known, per-item meaning OPAQUE (must keep)",
+        "QUERY-KEEP":  "query we depend on (model detect); keep",
+        "QUERY":       "response discarded -> PRUNE CANDIDATE (needs hw A/B)",
+        "UNKNOWN":     "opcode not in metadata table",
+    }
+    for c in CATEGORY_ORDER:
+        if cat_steps[c]:
+            print(f"  {c:<12} {cat_steps[c]:>6} {cat_bytes[c]:>7}   {meaning[c]}")
+    total = sum(cat_steps.values())
+    prune = cat_steps["QUERY"]
+    print(f"  {'-'*12} {'-'*6} {'-'*7}")
+    print(f"  {'TOTAL':<12} {total:>6} {sum(cat_bytes.values()):>7}")
+    print(f"\n  prune candidates (QUERY): {prune}/{total} steps "
+          f"({100*prune/total:.0f}%) — response-discarded queries, A/B on hardware to confirm droppable")
+    if push_ids:
+        uniq = sorted(set(push_ids))
+        dup = len(push_ids) - len(uniq)
+        print(f"  CONFIG_PUSH: {len(push_ids)} pushes, {len(uniq)} distinct ids"
+              f"{f' ({dup} duplicate pushes)' if dup else ''}")
+        print("    ids: " + " ".join(f"0x{x:04x}" for x in uniq))
+    if suben_ids:
+        print(f"  INIT_1/subsystem-enable ids: "
+              + " ".join(f"0x{x:04x}" for x in suben_ids))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Decode QEMU vfio_region_* traces into FCP transactions")
     ap.add_argument("file", help="trace file, or - for stdin")
@@ -308,11 +468,21 @@ def main():
                     help="emit a C device-bring-up replay table from this capture: every non-meter "
                          "command up to the first monitor-mute write (the bulk config read/writeback "
                          "included). Redirect to driver/clarett_init_<model>.h.")
+    ap.add_argument("--annotate-init", action="store_true",
+                    help="input is a generated clarett_init_<model>.h; classify every replay step "
+                         "by decode tier (DECODED-SET / DECODED-GET / FORM-SET / QUERY), render the "
+                         "Tier-1 meaning, and print prune-candidate + CONFIG_PUSH-id rollups.")
+    ap.add_argument("--summary", action="store_true",
+                    help="with --annotate-init, print only the decode-tier rollup (skip the per-step table)")
     ap.add_argument("--init-model", default="2pre",
                     help="symbol suffix for --emit-init (default '2pre' -> clarett_init_blob_2pre / "
                          "clarett_init_seq_2pre); e.g. '8prex' for the 8PreX. Per-model headers coexist. "
                          "Pass '' for an unsuffixed symbol.")
     args = ap.parse_args()
+
+    if args.annotate_init:            # offline: input is a generated init header, not a trace
+        annotate_init(args.file, args.summary)
+        return
 
     try:
         sys.stdout.reconfigure(line_buffering=True)   # flush each line for live `tail -f` pipes
