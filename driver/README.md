@@ -33,9 +33,11 @@ Built from the clean-room notes in `../spec/`.
   this device unmodified: mixer, routing patchbay, per-output levels, preamp air/mode,
   mute/dim and metering are all implemented in userspace. See *Controls* below.
 - **Device session bring-up** at probe (`clarett_arm_device`): replays the 232-command
-  vendor init from `clarett_init_8prex.h` (`CONFIG_PUSH`×122, subsystem enables, 8 KB config
-  sync, `SET_MIX`×16 + `SET_MUX`×3). Required on a **fresh** device — a self-booted 8PreX
-  rejects `GET_DATA` until armed. (Re-running it on an already-armed device wedges the GET.)
+  vendor init from the de-blobbed typed table `clarett_arm_8prex.h` (`CONFIG_PUSH`×122,
+  subsystem enables, 8 KB config sync, `SET_MIX`×16 + `SET_MUX`×3). Required on a genuinely
+  **virgin/unarmed** device — a self-booted 8PreX rejects `GET_DATA` until armed; note a
+  *previously-armed* unit self-arms across a power cycle (arm state is flash-persisted), so the
+  bring-up is a no-op there.
 - At probe the driver seeds its config shadow from the device (`GET_DATA(24,92)`)
   and **force-enables hardware Mute/Dim for Monitor Out 1-2** (bytes 72/73, command 3)
   so the global `Mute`/`Dim` actually act on those outputs — the master flag alone
