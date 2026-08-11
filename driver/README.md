@@ -101,7 +101,7 @@ route** — playback is silent until you wire a PCM source to a physical output 
 
 ### MIDI
 
-If the interface has DIN MIDI, it appears as a standard ALSA rawmidi device.
+The interface's DIN MIDI ports appear as a standard ALSA rawmidi device.
 
 ## Settings persistence
 

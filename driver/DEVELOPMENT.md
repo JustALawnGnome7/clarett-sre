@@ -140,22 +140,21 @@ matching the 8PreX (10 gains), and `(20, 20)` streams for detection. Its stream-
 derived from the model-independent source-id enumeration (equal to the 4Pre's, whose input
 layout is identical), not captured.
 
-What is **not** yet verified is PCM streaming on real 8Pre hardware: the channel counts are
-XML-derived rather than traced, and no capture or playback has been run end-to-end on an 8Pre.
-Its routing sources and meter `peak-index` values are likewise **predicted** — routing from the
-4Pre's identical input geometry, meters from the measured packing rule. First contact with
-real hardware should check both: that `MUX_READ` reads the routing back as pushed, and that one
+PCM streaming on the 8Pre is now confirmed on hardware, which validates its `(20, 20)` stream
+geometry. Still **predicted**, and worth checking against hardware, are its routing sources and
+meter `peak-index` values — routing from the 4Pre's identical input geometry, meters from the
+measured packing rule: confirm that `MUX_READ` reads the routing back as pushed, and that one
 excited input at a time lights the predicted meter slot.
 
 ## PCM data plane
 
 Full-duplex capture and playback run over one shared descriptor-ring engine, driven by the
-`0x300` period servicer (`clarett_pcm.c`). Hardware-confirmed on the 2Pre, 4Pre, and 8PreX. The
+`0x300` period servicer (`clarett_pcm.c`). Hardware-confirmed on the 2Pre, 4Pre, 8Pre, and 8PreX. The
 long-standing one-ring-pass stall turned out to be the descriptor-table **format** — a missing
 periodic RX IRQ marker, the flag that advances the counted `0x300` period — not a wall.
 
-Caveats: 8Pre streaming is untested (no 8Pre stream capture yet), and low-latency streaming can
-suffer periodic audible skips traced to a Thunderbolt-triggered platform SMI — a firmware/BIOS
+Caveats: low-latency streaming can suffer periodic audible skips traced to a
+Thunderbolt-triggered platform SMI — a firmware/BIOS
 issue, not the driver (the autonomous DMA rides through it; the click is the audio server
 re-preparing). There is no default route, so playback is silent until a PCM source is wired to
 a physical output in the router.
