@@ -1,316 +1,134 @@
 # snd-clarett — Focusrite Clarett (Thunderbolt) ALSA driver
 
-Supported: **Clarett 2Pre**, **Clarett 4Pre**, **Clarett 8Pre**, and **Clarett 8PreX** (one module,
-per-model descriptor).
+Out-of-tree ALSA driver for the Focusrite **Clarett** Thunderbolt audio interfaces —
+**Clarett 2Pre**, **4Pre**, **8Pre**, and **8PreX** — as a single module, with the model
+auto-detected at probe.
 
-Status: **working** — mixer control plane (via `fcp-server`), PCM capture and playback, and
-DIN MIDI, all confirmed on hardware. Built from clean-room reverse-engineering notes.
+**Status: working.** Mixer control plane (through `fcp-server`), PCM capture and playback,
+and DIN MIDI, all confirmed on real hardware. Built clean-room; for how it works and the
+reverse-engineering history, see **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
-> **Control changes take physical effect.** Confirmed on hardware: preamp Mode and Air
-> move a 2Pre's relays and front-panel LEDs, monitor Mute/Dim act on the outputs, the
-> SW/HW selector hands an output to the front-panel knob, and `GET_DATA` returns real
-> data — including the knob's own position, live. Encodings are verified by reading the
-> device's bytes back (a config-read bench tool), not by watching the hardware, since a
-> relay clicks the same for a right and a wrong value.
->
-> This was not always so: for most of this project's life every write completed and
-> nothing happened, a wall attributed to an "off-wire / below-driver" boundary after
-> four independent methods agreed. That attribution was **wrong**, and the negative
-> results it produced are worth distrusting before you trust any negative result here.
-> The cause was a trailing doorbell ack sent before the device's response DMA had landed;
-> every "known-good" vendor trace had been captured under MMIO trapping slow enough to
-> hide it.
->
-> The device-arming init replay is only *needed* on a virgin/unarmed unit; a
-> previously-armed device self-arms across a power cycle (arm state is flash-persisted),
-> so the probe-time replay is a harmless no-op on any used device.
+> Control changes take physical effect: preamp Mode/Air, monitor Mute/Dim, and the SW/HW
+> gain selector all move the hardware, and settings persist in the device's own NVRAM.
 
-## What works
+## Requirements
 
-- PCI bring-up for `1cb5:0002` (BAR0 map, bus master, 32-bit DMA response buffer).
-- FCP mailbox transport: `SET_DATA` / `DATA_CMD` / poll-for-completion.
-- **FCP hwdep** (`clarett_hwdep.c`) presenting the same ABI as the mainline USB FCP
-  driver (`sound/usb/fcp.c`), so Geoffrey Bennett's userspace **`fcp-server`** drives
-  this device unmodified: mixer, routing patchbay, per-output levels, preamp air/mode,
-  mute/dim and metering are all implemented in userspace. See *Controls* below.
-- **Device session bring-up** at probe (`clarett_arm_device`): replays a de-blobbed typed
-  init table (per-model `clarett_arm_<model>.h`: a `CONFIG_PUSH` burst, subsystem enables,
-  8 KB config sync, `SET_MIX` + `SET_MUX`). The probe always arms (with the id_table default,
-  then re-applies the detected model's routing — while preserving any live routing a configured
-  device already holds). Only a genuinely **virgin/unarmed** unit actually needs it (a self-booted
-  virgin device rejects `GET_DATA` until armed); a *previously-armed* unit self-arms across a power
-  cycle (arm state is flash-persisted), so the replay is a harmless no-op there.
-- At probe the driver seeds its config shadow from the device (`GET_DATA(24,92)`)
-  and **force-enables hardware Mute/Dim for Monitor Out 1-2** (bytes 72/73, command 3)
-  so the global `Mute`/`Dim` actually act on those outputs — the master flag alone
-  (offset 24/28) does nothing unless an output opts in via its enable bit.
-- **PCM streaming** (`clarett_pcm.c`, on by default): full-duplex capture and playback over one
-  shared descriptor-ring engine, driven by the `0x300` period servicer. Hardware-confirmed on the
-  2Pre, 4Pre, and 8PreX. See *Known limitations* for the caveats.
-- **DIN MIDI** (`clarett_midi.c`): ALSA rawmidi over the memory-mapped MIDI UART at BAR0 `0x58c`
-  (interrupt-driven RX, packed TX) — independent of the FCP control session, so it works regardless
-  of control-plane state.
+- Kernel headers for your running kernel (this is an out-of-tree module).
+- The interface **visible on the host PCI bus** (`lspci -d 1cb5:0002`). The Clarett line is
+  Thunderbolt 2, which needs some firmware/boot setup to reach a modern host — see
+  *Thunderbolt 2 setup* below.
+- Secure Boot **off**, or the module signed with an enrolled MOK (it ships unsigned).
+- For the mixer/routing controls: **`fcp-server`** with the Clarett device maps (see
+  `fcp-server-data/`), and **`alsa-scarlett-gui`** for the full mixer/router. **At the moment
+  both need patched builds** — the required changes are not yet in Geoffrey Bennett's upstream
+  `fcp-server` / `alsa-scarlett-gui`, so use the forks with the Clarett patches applied. The
+  kernel module provides only the transport; the controls live in userspace.
 
-## Build
+## Thunderbolt 2 setup (getting the device onto the PCI bus)
+
+The driver binds a PCI device, so the Clarett must be visible on the host's PCI bus before it
+can work at all:
 
 ```sh
-make                       # against the running kernel
-sudo insmod snd-clarett.ko
+lspci -d 1cb5:0002        # the interface has to show up here first
 ```
 
-`make KDIR=/path/to/kernel` to build against another tree.
+The whole Clarett line is **Thunderbolt 2**, which takes a little setup to reach a modern
+(Thunderbolt 3+) host:
 
-## Controls: the userspace FCP model
+- **Disable Thunderbolt security in the UEFI/BIOS.** TB2 devices are not enumerated by
+  `boltctl`, so they cannot be user-approved while Thunderbolt security is enabled — with
+  security on, the Clarett never reaches the PCI bus at all. Set the firmware's Thunderbolt
+  security level to none/legacy (the exact wording varies by board).
 
-This driver follows the in-kernel FCP model used by the 4th-gen Scarlett
-(`sound/usb/fcp.c`): **a minimal kernel driver that exposes a hwdep interface**, with
-Geoffrey Bennett's userspace **`fcp-server`** implementing the controls. There is no
-in-kernel mixer — the control layer and its `in_kernel_controls` toggle were removed
-once the hwdep path was working on hardware (see git history if you need the old
-control set; the encodings it carried live on in the device maps).
+- **Bridge TB2 to the host with an Apple Thunderbolt 2 → Thunderbolt 3 adapter.** It is an
+  active cable that appears to the host as a PCI bridge, with the Clarett sitting behind it.
+  Many boards' default firmware does not reserve enough PCI bus numbers for a second device
+  behind that bridge, so the interface fails to enumerate even though the bridge itself shows
+  up. If `lspci` lists the bridge but not `1cb5:0002`, add these kernel boot parameters
+  (through GRUB, or whatever bootloader you use) and reboot:
+
+  ```
+  pci=assign-busses,realloc,hpbussize=0x10
+  ```
+
+  Confirmed on an ASRock X570 Creator; the exact remedy can differ with other board firmware.
+
+## Build & install
 
 ```sh
-sudo insmod snd-clarett.ko
-cd ../fcp-server-data && sudo fcp-server <card>
+make                        # builds snd-clarett.ko against the running kernel
+sudo insmod snd-clarett.ko  # auto-binds PCI 1cb5:0002
 ```
 
-The hwdep ABI is complete: `PVERSION`, `CMD`, `INIT`, `SET_METER_MAP`/`SET_METER_LABELS`,
-and the notification `read()`/`poll()` relay.
+Build against another tree with `make KDIR=/path/to/kernel`.
 
-- `CMD` maps straight onto the mailbox — the FCP wire packet *is* our mailbox packet
-  and the opcodes are ours.
-- `INIT` runs `INIT_1`/`INIT_2` with the opcodes `fcp-server` passes and returns the
-  firmware-info block in `step2[]`. `step0` is zero-filled (its USB `STEP0` class
-  request has no mailbox equivalent; `fcp-server` ignores it), and `c->seq` is *not*
-  reset — the in-kernel `GET_METER` heartbeat shares it, and the device only echoes seq.
-- `SET_METER_MAP`/`SET_METER_LABELS` let `fcp-server` create and drive `Level Meter`:
-  it installs a channel→raw-slot map (the control's `.get` polls `GET_METER` and
-  projects through it) plus an optional `FCP_CHANNEL_LABELS` TLV.
-- The notification relay blocks until the device signals a change (the `0x400` cause).
-  **Adaptation:** the USB FCP device carries a precise notification bitmask in its
-  interrupt message; this TB device only signals *that* something changed, so we
-  deliver an all-categories event (`~0`) and `fcp-server` re-reads every notifiable
-  control — broad but correct, and the device gives us nothing narrower: the `0x400`
-  signal is a **periodic heartbeat at ~13.4 Hz**, not a change event (measured — the rate
-  is identical idle, under load, and while a front-panel control is being turned). So it
-  says "re-read me" on a fixed cadence and never says what changed, which caps
-  front-panel tracking at one update per ~75 ms. Wakes are **rate-limited** to one per
-  `notify_ms` (default 50, runtime-writable) so a burst collapses into one re-read.
-  It must be a rate limit (`schedule_delayed_work`, fire one interval after the *first*
-  of a burst) and not a debounce (`mod_delayed_work`, one interval after the *last*):
-  against a source that never goes idle a debounce never fires at all. It was previously a
-  debounce, so userspace saw exactly one notification per session and no
-  front-panel change — knob, mute, dim — ever reached `fcp-server`.
+## Using it
 
-**Device maps.** This device does not self-describe — `DEVMAP_INFO` returns size 0, so
-`fcp-server`'s device-provided map path yields nothing. The maps in `../fcp-server-data/`
-are authored instead, keyed on the model slug the driver publishes at
-`/proc/asound/cardN/clarett` (the whole line shares PCI id `1cb5:0002`, so the id cannot
-select a model). They currently require local `fcp-server` patches — model-slug keying,
-inverted-value support, and chunked `MUX_READ` — see `../fcp-server-data/README.md`.
+### Controls — mixer, routing, preamps, metering
 
-The in-kernel `GET_METER` heartbeat still runs, since the device appears to need it to
-apply control writes; its response is discarded (`fcp-server` polls the meter itself).
-That "heartbeat needed to apply writes" hypothesis predates the wall crossing and is
-still pending re-audit.
-
-## Model selection (auto-detected; `model=` overrides)
-
-The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` and presents a
-byte-identical **pre-mailbox** surface — every MMIO register, config-space read, the
-fw-info header, and even the dummy serial are the same across models (verified on real
-2Pre/4Pre/8PreX hardware). But once armed, the device reports its own stream geometry:
-`GET_7.1{band 0}` answers `{u16 playback_channels, u16 capture_channels}`, a pair unique
-per model (live-confirmed `(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). The bring-up
-itself is model-agnostic (the same blob armed all three bench units), so the driver arms
-first, asks second:
+The module exposes a minimal FCP *hwdep* transport; the actual controls are created by
+**`fcp-server`** in userspace (the same model the mainline 4th-gen Scarlett driver uses):
 
 ```sh
-sudo insmod snd-clarett.ko                # auto-detects the model from the armed device
-sudo insmod snd-clarett.ko model=2pre     # or force: model=4pre / model=8pre / model=8prex
+sudo fcp-server <card>      # <card> = the ALSA card number or id
 ```
 
-Because the PCI id is shared line-wide, the detected model is published for userspace at
-**`/proc/asound/card<N>/clarett`** as a stable, greppable slug — the key a device-map
-consumer (`fcp-server`) uses to select its per-model control map, since the PCI id cannot:
+Then use `alsamixer -c <card>`, or **alsa-scarlett-gui** for the full mixer and router.
+`fcp-server` can also be auto-started per interface through its udev/systemd integration.
 
+### Model selection
+
+The whole Clarett Thunderbolt line shares one PCI id, so the model is detected from the
+armed device. Override it if detection is ever wrong:
+
+```sh
+sudo insmod snd-clarett.ko                # auto-detect
+sudo insmod snd-clarett.ko model=2pre     # force: model=2pre / 4pre / 8pre / 8prex
 ```
-model: Clarett 8PreX
-slug: clarett-8prex
-```
 
-Slugs: `clarett-2pre` / `clarett-4pre` / `clarett-8pre` / `clarett-8prex`. Unlike
-`card->id`, the slug is never mangled for uniqueness, so it is a reliable contract.
-
-The **4Pre** descriptor is built from the device XML and cross-checked against a live capture:
-the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-only, 5-8 none;
-six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the
-bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
-
-The **8Pre** (distinct from the 8PreX) gained a bring-up capture, so it now arms like
-the other models: `clarett_arm_8pre.h` is replayed at probe (hardware-verified via `model=8pre`),
-arming config access and carrying its own captured default routing. Its input/output layout is from
-the XML: combo XLR/TRS jacks (Mic is auto-detected by the jack, so the software mode is Line/Inst only,
-on inputs 1-2; 3-8 are air-only) unlike the 8PreX's separate ports, outputs matching the 8PreX
-(10 gains), and `(20, 20)` streams for detection. Its stream-routing ids are derived from the
-model-independent source-id enumeration (equal to the 4Pre's, whose input layout is identical), not
-captured.
-
-What is **not** yet verified is PCM streaming on real 8Pre hardware: the channel counts are XML-derived
-rather than traced, and no capture or playback has been run end-to-end on an 8Pre (unlike the confirmed
-2Pre/4Pre/8PreX).
-
-The 8Pre's routing sources and meter `peak-index` values are **predicted** — the routing from the 4Pre's
-identical input geometry, the meters from the measured packing rule — rather than measured. First contact
-with real hardware should check both: that `MUX_READ` reads the routing back as pushed, and that one
-excited input at a time lights the predicted meter slot (a meter-watch bench tool).
-
-There is no auto-detect of any kind. The model name *does* live in the Thunderbolt
-DROM, but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3
-model), and TB2 units are firmware-tunnelled rather than enumerated as kernel-managed
-TB routers — so they never expose a `device_name` on `/sys/bus/thunderbolt`, and there
-is nothing for userspace to key on either. Set the model explicitly; to make it
-persistent:
+Make an override persistent:
 
 ```sh
 echo 'options snd_clarett model=2pre' | sudo tee /etc/modprobe.d/snd-clarett.conf
 ```
 
-## ⚠️ The device must NOT be bound to vfio-pci
+### PCM (recording and playback)
 
-During RE the Clarett is passed through to the Windows VM via `vfio-pci`. To test
-this driver on the **host**, the device must be free for `snd-clarett` to claim:
+Capture and playback are available as standard ALSA PCM devices. **There is no default
+route** — playback is silent until you wire a PCM source to a physical output in the router
+(alsa-scarlett-gui). That is a mixer-config step, not a bug.
 
-1. Shut down the Windows VM.
-2. Unbind from vfio-pci and let snd-clarett bind, e.g.:
-   ```sh
-   echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind
-   sudo insmod snd-clarett.ko
-   echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/snd-clarett/bind   # if not auto-bound
-   ```
-   (Also remove any `vfio-pci.ids=`/driver_override or modprobe binding that
-   re-grabs the device at boot.)
-3. Verify: `amixer -c <n> contents`, and test a control:
-   ```sh
-   amixer -c <n> sset 'Mute' toggle      # also 'Dim', input Air/Mode, etc.
-   ```
-   (These take physical effect on the hardware — see the note at the top.)
+### MIDI
 
-Never load this while the VM is using the device.
+If the interface has DIN MIDI, it appears as a standard ALSA rawmidi device.
 
-## Known limitations / TODO
+## Settings persistence
 
-- **Routing writes take effect; the mixer-gain matrix is less exercised.** Control writes now
-  manifest physically (Mode/Air, Mute/Dim, and SW/HW gain are hardware-confirmed). Routing lives
-  in the device maps (`../fcp-server-data/`) where `fcp-server` builds the patchbay enums and the
-  mixer matrix; reads decode correctly against the device's own tables (`PCM 01 Capture Enum` reads
-  `Analogue 1` for `400 600`), and re-routing a source to a PCM capture is reflected in that
-  channel's meter — but the full mixer-gain matrix has had less systematic testing. Also pending:
-  for the captured models the source list is only the pins the factory-default matrix routes, not
-  the device's full source inventory (the 8Pre map, not table-derived, lists all of them).
-- **PCM works, with caveats.** Full-duplex capture and playback over one shared engine,
-  hardware-confirmed on the 2Pre, 4Pre, and 8PreX. The long-standing one-ring-pass stall turned out to be the
-  descriptor-table format (a missing periodic RX IRQ marker — the flag that advances the counted
-  `0x300` period), not a wall. On by default (`enable_pcm`; set 0 for a mixer-only card). There is
-  no default route, so playback is silent until a PCM source is wired to a physical output in the
-  router. Remaining caveats: 8Pre streaming is untested (no 8Pre stream capture yet), and
-  low-latency streaming can suffer periodic audible skips traced to a Thunderbolt-triggered
-  platform SMI — a firmware/BIOS issue, not the driver (autonomous DMA rides through it; the click
-  is PipeWire re-preparing).
-- **The config shadow is write-through.** `clarett_set_data()` keeps a shadow of the config space so
-  the probe-time monitor-enable write can do a correct read-modify-write. It is seeded from the
-  device at probe (`GET_DATA(24,92)`); bytes the device never reports back stay at their written
-  value. Nothing reads it for display any more — `fcp-server` reads the device directly.
-- **Mailbox completion is polled**, not MSI-driven. MSI *is* enabled, but only
-  for **async notifications** (vec0 / cause `0x400`): a front-panel button raises
-  the dim-mute/monitor mask, and the ISR → workqueue re-reads the monitor
-  region and `snd_ctl_notify()`s the monitor controls. The GET-response layout is
-  decoded (16-byte echoed FCP header + requested bytes at +16), so the handler
-  updates the monitor shadow to reflect physical button changes.
-- The GET-response DMA buffer address is programmed at `0x410` (low32) / `0x414`
-  (high32) — `0x414` = address-high confirmed (hardcoding the trace's `0x2` faulted
-  the IOMMU; the driver uses `upper_32_bits(resp_dma)`).
-  A/B lever `resp_prefill=` (-1/0..255): fill the response buffer with a byte before
-  every command submit — `0` mirrors FC's freshly-zeroed common buffer, `170` (0xAA)
-  restores the emptiness marker, `-1` (default) leaves it untouched between
-  commands (baseline). Probes whether the device reads/reacts to this buffer's
-  contents (the only host address it knows at init).
-- **`premailbox_reads=` (default 1)**: replay the vendor driver's exact pre-mailbox
-  BAR0 **read** sequence at attach (caps, `0x4/0x8`, serial, `0x514`, `0x58c`, all
-  four cause blocks, the full `0x8000–0x801c` fw-info header) before the first FCP
-  command. The cold gdb ladder showed the working device answers
-  `error=0` from mailbox command #0, so the accept-vs-refuse gate is set *before* the
-  mailbox opens; pre-mailbox writes already match FC, so this read set is the sole
-  remaining host-visible pre-mailbox difference. Set `0` for the old read-minimal
-  probe to A/B whether the reads flip `GET_DATA` to `error=0`.
-- **`early_msi=` (default 1)**: enable MSI in the device's **config space** before any
-  BAR access, matching the vendor's attach order. The cold trace shows Windows programs
-  the MSI capability and sets the enable bit (`@0x4a=0xa5`: enabled, 4 vectors) *before*
-  its first pre-mailbox BAR write; our old probe order left MSI disabled through the
-  entire 232-command arm + seed — a device-visible pre-command-#0 config-state
-  difference present in every walled run (including the Fedora-guest control), invisible
-  to the BAR-only pre-mailbox replay. Set `0` for the old late enable (A/B).
-- ~~**Control changes don't physically manifest — a proven below-driver boundary.**~~
-  **RESOLVED.** Kept here as a marker, because this was the headline gap for
-  most of the project and the eliminations behind it were all real: the vendor's MMIO,
-  config space, DMA footprint and cold-boot behaviour genuinely did match ours on every
-  host-visible surface, confirmed by four independent methods. What was wrong was the
-  conclusion drawn from them — that the difference must therefore be off-wire. It was a
-  race we had introduced: the trailing doorbell ack (`0x408=2`) was sent as soon as the
-  command completed, before the device's response DMA had landed, which the device answers
-  by refusing the session outright. Every vendor trace was captured under MMIO trapping at
-  ~20 µs per access, under which the response had always landed long before the ack — so
-  the traces could not show a precondition they always satisfied. Gating the ack on the
-  response actually arriving fixed it.
-- **Packed bitfield controls** (per-output hardware gain/dim/mute enables). The gain
-  enables (byte 52 + 4·(out/2), bit out%2) are exposed by the device maps as the SW/HW
-  volume-control selector — hardware-confirmed: an output set to HW follows the
-  front-panel knob. The Monitor Out 1-2 mute+dim enables are force-set at probe so the
-  global `Mute`/`Dim` act on the monitors by default; the rest of the mute enables
-  (byte 72/73) are **not** exposed, and neither are the dim enables. Note these are
-  *enables* — whether the master section reaches an output — not per-output mute: this
-  hardware has no per-output mute at all (one `<mute>` in every model's descriptor).
-## Settings persistence & `alsactl` (device-owns-the-state)
+The device **owns its settings** — they live in its own NVRAM and survive power cycles,
+reboots, and moving to another host. The driver auto-persists your changes (debounced).
 
-This driver follows the same policy as the in-kernel scarlett2 / 4th-gen Scarlett
-driver: **the device owns its settings.** They live in the interface's own NVRAM
-and survive power cycles, reboots, and moving to another host — the driver does
-not need to re-apply them.
+Because the device already restores its own state, **disable `alsactl` restore for this
+card** so it doesn't overwrite that state on every load:
 
-- **The driver auto-persists changes, debounced.** Each control commits live
-  (`DATA_CMD{activate}`) and then, ~2 s after the last change, a single
-  `DATA_CMD{FCP_ACTIVATE_PERSIST}` (command 5) writes the config to NVRAM
-  (`clarett_save_work` / `CLARETT_SAVE_DELAY_MS`). The debounce coalesces a burst
-  (e.g. a volume drag) into one flash write, matching scarlett2's 2 s save and
-  FC's own traced behaviour. A pending save is flushed at unload/reboot.
-- **Disable `alsactl` restore for this card**, or it will overwrite the device's
-  own stored state on every load. The `alsa-state`/`alsa-restore` services save
-  ALSA control state to `/var/lib/alsa/asound.state` and replay it on card add —
-  and since the device already restored the true state from its own NVRAM, a
-  replayed snapshot just fights the hardware (worse: preamp Mode/Air don't read
-  back reliably across a cold boot — see the limitation below — so the snapshot
-  can be stale). This is the same issue the scarlett2 FAQ documents. If no other
-  card needs the service:
-  ```sh
-  sudo systemctl mask alsa-state alsa-restore
-  sudo systemctl stop alsa-state alsa-restore
-  sudo rm /var/lib/alsa/asound.state
-  ```
-  To verify: toggle the `Inst`/`Air` of an input, power-cycle the unit, reload —
-  the setting should stay as the device had it, not snap back to a saved state.
-- **Known limitation: preamp Mode/Air display can be wrong after a cold boot.**
-  The preamp config bytes (Mode `166+i`, Air `174+i`) *are* `GET_DATA`-readable and
-  read back correctly at their write offset **within a powered session** — so the
-  display is accurate after any control change, and across a warm `rmmod`/`insmod`.
-  But on a **cold boot** the device restores the Mode/Air state to the *hardware*
-  from NVRAM (front-panel LEDs are correct) while bringing the host-readable
-  appspace up at a fixed default that does **not** mirror it. So right after a
-  power cycle `alsamixer` may show a default (both Inst+Air) that disagrees with
-  the LEDs, until you touch a control — from then on it tracks correctly. This is
-  the device's *host-authored appspace* behaviour (the same reason `alsactl`
-  restore fights it, above), not a driver bug; there is no reliable read of the
-  true preamp state on a fresh boot from this region. The hardware is always
-  correct regardless — the mismatch is display-only and self-heals on first touch.
-  Diagnostic levers for any future dig: `seed_dump=1` (one-shot full `[0,256)`
-  shadow dump at probe) and `put_trace=1` (log each control write's offset/value).
-- Single-card only; no module params for index/id (but see `model=` above).
+```sh
+sudo systemctl mask alsa-state alsa-restore
+sudo systemctl stop alsa-state alsa-restore
+sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
+```
+
+## Known limitations
+
+- **Low-latency streaming can glitch on some platforms** — periodic audible skips traced to a
+  Thunderbolt-triggered firmware SMI, not the driver (the DMA rides through it; the click is
+  the audio server re-preparing). A BIOS/firmware issue.
+- **Preamp Mode/Air can read wrong right after a cold boot** — the hardware is correct (the
+  LEDs are right); only the on-screen value can lag until you touch a control, after which it
+  tracks correctly.
+- **No per-output mute** — the hardware has none (only master Mute/Dim, reaching the outputs
+  that opt in).
+
+## How it works / contributing
+
+The design, the FCP protocol, model detection, the module parameters, and the
+reverse-engineering history are documented in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
