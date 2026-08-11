@@ -3,7 +3,7 @@
  * Focusrite Clarett (Thunderbolt) — DIN MIDI (ALSA rawmidi).
  *
  * The MIDI transport is register PIO through a single memory-mapped MIDI UART at BAR0 REG_MIDI_DATA
- * (0x58c) — NOT the FCP mailbox, NOT the audio DMA ring. Reverse-engineered Aug 4 2026 from three 2Pre
+ * (0x58c) — NOT the FCP mailbox, NOT the audio DMA ring. Reverse-engineered from three 2Pre
  * MMIO captures; the framing is:
  *
  *   TX  write (count << 24) | (b2 << 16) | (b1 << 8) | b0  to REG_MIDI_DATA, where count = the number of

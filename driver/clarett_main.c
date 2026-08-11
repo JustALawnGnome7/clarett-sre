@@ -119,7 +119,7 @@ MODULE_PARM_DESC(base_hi,
  * has shown what the VM actually seeds the ring with.
  */
 /*
- * Skip the vendor bring-up at probe. Default off — probe ALWAYS arms (July 23 2026).
+ * Skip the vendor bring-up at probe. Default off — probe ALWAYS arms.
  *
  * Probe used to detect an already-armed device and skip the re-init, because re-arming one was held to
  * wedge GET_DATA. Both halves of that fell over on hardware the same evening:
@@ -223,7 +223,7 @@ static bool premailbox_reads = true;
 module_param(premailbox_reads, bool, 0444);
 MODULE_PARM_DESC(premailbox_reads,
 		 "Replay the vendor's exact pre-mailbox BAR0 READ sequence at attach (caps/serial/fw-header/"
-		 "cause-blocks/0x514/0x58c) before the first FCP command. Motivated by the July-10 2026 cold gdb "
+		 "cause-blocks/0x514/0x58c) before the first FCP command. Motivated by the cold gdb "
 		 "ladder: the working device answers error=0 from mailbox command #0, so the accept-vs-refuse gate "
 		 "is set PRE-mailbox. Pre-mailbox WRITES already match FC byte-for-byte; "
 		 "this read set is the sole remaining host-visible pre-mailbox difference. Default true; set 0 for "
@@ -245,7 +245,7 @@ static bool premailbox_causes = true;
 module_param(premailbox_causes, bool, 0444);
 MODULE_PARM_DESC(premailbox_causes,
 		 "Within premailbox_reads, gate the four READ-TO-CLEAR cause-block reads (0x100/0x200/0x300/"
-		 "0x400). Bisection lever for the 2026-07-10 finding that premailbox_reads=1 makes the Analogue-2 "
+		 "0x400). Bisection lever for the finding that premailbox_reads=1 makes the Analogue-2 "
 		 "gain LED flash red at probe (first-ever physical response). The info/version reads are "
 		 "side-effect-free; the cause-block reads are read-to-clear, so they are the prime suspect. Set 0 "
 		 "(with premailbox_reads=1) to drop just the cause reads and see if the LED flash stops — isolating "
@@ -270,7 +270,7 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
  * the line is entirely Thunderbolt 2, firmware-tunneled rather than enumerated as kernel-managed
  * TB routers, so no DROM device_name appears in sysfs. But an ARMED device reports its own stream
  * geometry: GET_7.1{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model —
- * live-confirmed (4,14) 2Pre and (8,20) 4Pre, July 17 2026 — and the bring-up itself is
+ * live-confirmed (4,14) 2Pre and (8,20) 4Pre — and the bring-up itself is
  * model-agnostic (the same blob arms all three bench units). So the model is auto-detected after
  * the arm (clarett_detect_model); model= forces it instead.
  */
@@ -400,7 +400,7 @@ static void clarett_hw_init(struct clarett *c)
 	/*
 	 * The pre-mailbox writes below (0x510/0x500 device-enable, DMA-response address, 0x104 cause latch)
 	 * match FC's cold attach byte-for-byte. What did NOT match, until premailbox_reads, is the vendor's
-	 * READ set at attach: the cold gdb ladder (2026-07-10) proved the working
+	 * READ set at attach: the cold gdb ladder proved the working
 	 * device already answers FCP error=0 from mailbox command #0, so the accept/refuse gate is decided
 	 * BEFORE the first command — and the only host-visible pre-mailbox difference is that the vendor
 	 * reads caps/0x4/0x8/0x514/0x58c, all four cause blocks, and the full fw-info header, which our
@@ -548,7 +548,7 @@ static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geo
  * the GET_DATA/SET_DATA config read/writeback (that re-init wedges GET_DATA, so fcp-server can't read the
  * control map), re-declaring geometry (+routing per preserve) without touching the appspace config.
  *
- * NOTE (July 30 2026): this was built to test the hypothesis that the 8PreX 28ch->4 playback FOLD was a
+ * NOTE: this was built to test the hypothesis that the 8PreX 28ch->4 playback FOLD was a
  * stale-2Pre-geometry declaration. That hypothesis was WRONG — the fold was TX-fragment page-alignment
  * (0x700 straddles the 4 KB page), fixed by tx_slot page-safe slotting. Re-declaring
  * geometry does NOT fix the fold (hardware-confirmed). Kept as a harmless off-by-default diagnostic lever.
@@ -617,7 +617,7 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 }
 
 /*
- * The collapsed-session state (observed July 23 2026, 2Pre, after a run of PCM arm/stop churn): the
+ * The collapsed-session state (observed on the 2Pre, after a run of PCM arm/stop churn): the
  * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says
  * no category is supported even for DATA, while a DATA-category GET_DATA is what just answered. A module
  * reload clears it, so it is host/session state, not the device losing its arm; power-cycling is not
@@ -812,7 +812,7 @@ static void clarett_error_probe(struct clarett *c)
 		u8 data[8];
 		u16 len;
 	} cmds[] = {
-		/* Discrimination set — resp+8 status byte across session states (8PreX, July 30 2026;
+		/* Discrimination set — resp+8 status byte across session states (8PreX;
 		 * legacy_mbox_cycle=1 reproducibly forces the premature-ack wall):
 		 *   WORKING session: per-command validation, distinct status per failure stage —
 		 *     valid → err=0; bad param (offset out of range / oversized length) → err=1;
@@ -824,7 +824,7 @@ static void clarett_error_probe(struct clarett *c)
 		 *     return an identical canned refusal (err=3, size=0, seq=0 [request seq NOT echoed],
 		 *     opcode echoed, response landed). Per-command validation is fully suppressed; err=3
 		 *     is a session-level refusal that overrides it.
-		 *   (An earlier 2Pre run, July 10, saw malformed commands DROPPED with no response rather
+		 *   (An earlier 2Pre run saw malformed commands DROPPED with no response rather
 		 *     than a landed err=3 — a 2Pre/8PreX or condition difference.) Kept as controls. */
 		{ "GET_DATA{24,4} valid",     FCP_GET_DATA, { 24,0,0,0,  4,0,0,0 }, 8 },
 		{ "GET_DATA bad-offset",      FCP_GET_DATA, { 0,0,0xff,0xff, 4,0,0,0 }, 8 },
@@ -838,7 +838,7 @@ static void clarett_error_probe(struct clarett *c)
 		{ "GET_6.2",                  0x006002,     { 0 }, 0 },
 		{ "CONFIG_PUSH{0x1e}",        0x005000,     { 0x1e, 0 }, 2 },
 		{ "GET_DATA{0xc8,8}",         FCP_GET_DATA, { 0xc8,0,0,0, 8,0,0,0 }, 8 },
-		/* Status-vocabulary probes (July 30): error conditions at DIFFERENT validation stages than
+		/* Status-vocabulary probes: error conditions at DIFFERENT validation stages than
 		 * bad-offset/unknown-opcode, run on a WORKING session (a walled one flattens all to 3):
 		 * length errors, an unknown sub-op inside a SUPPORTED category, and a command in an
 		 * UNSUPPORTED category (CAP_READ reports 0x009 ESP_DFU disabled — the probe that surfaced
@@ -867,7 +867,7 @@ static void clarett_error_probe(struct clarett *c)
 		 * The device DMAs its response ASYNCHRONOUSLY, a little after the BAR done bit clarett_fcp
 		 * polls — so reading resp_buf immediately races and catches the PREVIOUS command's late
 		 * response. Wait for THIS command's response by matching the echoed opcode (unique per command
-		 * after the memset). NOTE (July 10): on a refusal the device writes err=3 and does NOT echo the
+		 * after the memset). NOTE: on a refusal the device writes err=3 and does NOT echo the
 		 * request seq (it writes seq=0), so we match echo ONLY; a timeout is a genuine no-response.
 		 * Requires meter_poll_ms=0 (else the meter worker steals resp_buf / bumps seq).
 		 */
@@ -1072,7 +1072,7 @@ static int clarett_stream_service(void *data)
 	bool seen = false;
 	bool gone = false;	/* set when the device leaves the bus: park the loop, never return early (kthread_stop UAF) */
 	/*
-	 * Tick-lateness telemetry (audible-skip diagnosis, July 24 2026). The period counters cannot show
+	 * Tick-lateness telemetry (audible-skip diagnosis). The period counters cannot show
 	 * this: they accumulate the HARDWARE ctr delta, so a late servicer catches up on the next tick and
 	 * the totals stay perfectly smooth while the audio glitches. What matters is the wall-clock gap
 	 * between period events — nominal is CLARETT_CTR_FRAMES*step/48000 (~5.3 ms on the 2Pre). A gap far
@@ -1145,7 +1145,7 @@ static int clarett_stream_service(void *data)
 		 *
 		 * Two cases. The device really left the bus (cable pulled, unit switched off) — stop. Or the
 		 * link is TRANSIENTLY unreachable while the device is still attached: measured on the 2Pre
-		 * (July 24 2026), ~46 ms windows in which every MMIO read returns ~0, the servicer's "late
+		 * — ~46 ms windows in which every MMIO read returns ~0, the servicer's "late
 		 * tick" and its 0x7fffffff counter being the same event. Drop the sample and let the next
 		 * good read's modular difference recover the whole advance.
 		 */
@@ -1195,7 +1195,7 @@ static int clarett_stream_service(void *data)
 			 *
 			 * The old test — forward difference, capped at 4 periods, else "reuse the last step" —
 			 * could not tell a wrap from a genuinely large delta and substituted ONE period for
-			 * both. Measured cost (2Pre, July 24 2026): a 47 ms servicer stall clocked 7 periods in
+			 * both. Measured cost (2Pre): a 47 ms servicer stall clocked 7 periods in
 			 * hardware and advanced pcm_frames by 1, discarding 1536 frames. That error is permanent
 			 * and cumulative — it puts pcm_frames behind the engine's real read position, so the TX
 			 * guard window no longer covers where the engine is reading and we overwrite it, and
@@ -1603,8 +1603,8 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 
 		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
 		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Skipping the notify path
-		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware July 6
-		 * 2026): this is minor — the bulk of the "notification retried indefinitely" storm is the
+		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware-confirmed):
+		 * this is minor — the bulk of the "notification retried indefinitely" storm is the
 		 * DEVICE genuinely re-asserting 0x3 (us-scale bursts, inflight=0) because our GET is empty;
 		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps.
 		 * ctl_ready gates snd_ctl_notify: with the handlers now hooked BEFORE the controls
@@ -1707,7 +1707,7 @@ MODULE_PARM_DESC(monitor_poll,
  *
  * The device applies the knob in its own signal path and never writes it back: turning it moves byte
  * 112 only, while the per-output gains (out_gains[].offset) stay wherever software last left them
- * (hardware-confirmed on the 2Pre, July 24 2026). Two visible consequences, both of which the USB
+ * (hardware-confirmed on the 2Pre). Two visible consequences, both of which the USB
  * siblings avoid because the in-kernel scarlett2 driver synthesises the link: the GUI's per-output
  * fader does not follow the knob, and toggling an output HW -> SW makes its volume JUMP to whatever
  * stale software value was stored.
@@ -2102,9 +2102,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled.
 	 *
 	 * The bring-up is model-agnostic: arm as the id_table default, detect below, then hand the
-	 * detected model's routing back. All four models carry a captured blob (the 8Pre gained one
-	 * Aug 6 2026), so this always arms with a real bring-up. Forcing model=<x> arms with THAT
-	 * model's own full blob.
+	 * detected model's routing back. All four models carry a captured blob, so this always arms
+	 * with a real bring-up. Forcing model=<x> arms with THAT model's own full blob.
 	 */
 	armed_with = c->model;
 	if (!armed_with->arm_seq) {
@@ -2529,7 +2528,7 @@ static const struct clarett_model clarett_2pre = {
 /*
  * Clarett 4Pre (Thunderbolt). Control plane from Focusrite's Clarett 4Pre device XML [XML],
  * cross-checked against a live FC boot-to-stream capture [TRACE]. Auto-detected after the
- * arm by its (8,20) geometry, live-confirmed July 17 2026 (clarett_detect_model); model=4pre forces it.
+ * arm by its (8,20) geometry, live-confirmed (clarett_detect_model); model=4pre forces it.
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
@@ -2590,7 +2589,7 @@ static const struct clarett_model clarett_4pre = {
 
 /*
  * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
- * Focusrite's Clarett 8Pre device XML [XML]. A bring-up capture (Aug 6 2026, clarett_arm_8pre.h) and
+ * Focusrite's Clarett 8Pre device XML [XML]. A bring-up capture (clarett_arm_8pre.h) and
  * the derived stream-routing ids are both in place, so this descriptor arms config access (GET_DATA
  * works — hardware-verified via model=8pre) and registers the full mixer. What remains UNVERIFIED is
  * PCM streaming on real 8Pre hardware: the channel counts are [XML]-derived rather than traced, and no
@@ -2658,7 +2657,7 @@ static const struct clarett_model clarett_8pre = {
 	.stream_rx_ids = clarett_8pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
 	/*
-	 * Bring-up captured Aug 6 2026 — the 8Pre now arms with its
+	 * Bring-up captured from a vendor boot trace — the 8Pre now arms with its
 	 * OWN blob rather than falling back to the id_table default. Structure matches the 8PreX arm
 	 * (INIT_2x6, 8 KB config read/writeback, SET_MIXx16, SET_MUXx3); see clarett_arm_8pre.h.
 	 */

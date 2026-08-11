@@ -52,7 +52,7 @@ MODULE_PARM_DESC(legacy_mbox_cycle,
 	"pre-command-#0 point where the session gate decides.");
 
 /*
- * THE WALL CROSSING (July 16 2026) — why the trailing ack is gated on the
+ * THE WALL CROSSING — why the trailing ack is gated on the
  * response landing. The trailing doorbell ack (0x408=2) means "response consumed, buffer
  * free", NOT "completion observed": the device DMAs its response asynchronously AFTER the
  * BAR DONE bit, and acking before it lands is a protocol violation the device answers with

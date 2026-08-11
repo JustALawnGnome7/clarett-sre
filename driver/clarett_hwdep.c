@@ -152,7 +152,7 @@ out:
  * heartbeat uses) and projects the raw levels through the map. SET_METER_LABELS attaches an
  * FCP_CHANNEL_LABELS TLV naming each channel. Mirrors sound/usb/fcp.c's meter control.
  *
- * A LEVEL IS 16-BIT, REPLICATED INTO A 32-BIT SLOT `[HW — 4Pre, July 20 2026]`. The slot stride is
+ * A LEVEL IS 16-BIT, REPLICATED INTO A 32-BIT SLOT `[HW — 4Pre]`. The slot stride is
  * 4 bytes (48 u32 words), but only the low 16 bits carry the level, so the old code's plain u32 read
  * yielded values ~8000x over full scale and clamped every channel to CLARETT_METER_MAX. Observed
  * words: 0x020a020a, 0x020e020e, and on a later run 0x01cf01cf, 0x01ca01ca — i.e. {522,522},
@@ -445,7 +445,7 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
  * trips on a 2Pre (the routing and mixer controls are not notifiable, so they cost nothing), so
  * 20 Hz would be roughly 160 round trips a second.
  *
- * 50 ms rather than something smaller because MEASURED (2Pre, July 21 2026): the 0x400 config-change
+ * 50 ms rather than something smaller because MEASURED (2Pre): the 0x400 config-change
  * signal is a PERIODIC HEARTBEAT at ~13.4 Hz, not a change event. Counting notifications reaching
  * fcp-server over 10 s gave ~135 at every limiter setting from 50 ms down to 0, ~135 after halving
  * the re-read work per wake, and ~133 while the monitor knob was turned continuously for the whole

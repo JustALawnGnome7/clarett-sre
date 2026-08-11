@@ -65,7 +65,7 @@ MODULE_PARM_DESC(tx_tone,
  * descriptor ring at a finer marker cadence; both directions are locked to one period (option a: DAWs use a
  * single duplex buffer size anyway).
  *
- * HARDWARE-VERIFIED (8Pre, Aug 6 2026): the 0x300 counter free-runs in 16-frame units regardless of marker
+ * HARDWARE-VERIFIED (8Pre): the 0x300 counter free-runs in 16-frame units regardless of marker
  * spacing — its per-event step scaled proportionally with the cadence across a 64x range (+0x01/+0x04/+0x08/
  * +0x10/+0x40 at cadence 1/4/8/16/64), so the servicer's step*CLARETT_CTR_FRAMES advance stays correct with no
  * change, and a 1 kHz reference captured at 1000.0 Hz (no drift) at every one. Cadence 1 (EVERY descriptor

@@ -90,8 +90,8 @@ and the notification `read()`/`poll()` relay.
   `notify_ms` (default 50, runtime-writable) so a burst collapses into one re-read.
   It must be a rate limit (`schedule_delayed_work`, fire one interval after the *first*
   of a burst) and not a debounce (`mod_delayed_work`, one interval after the *last*):
-  against a source that never goes idle a debounce never fires at all. It was a debounce until
-  July 21 2026, so userspace saw exactly one notification per session and no
+  against a source that never goes idle a debounce never fires at all. It was previously a
+  debounce, so userspace saw exactly one notification per session and no
   front-panel change — knob, mute, dim — ever reached `fcp-server`.
 
 **Device maps.** This device does not self-describe — `DEVMAP_INFO` returns size 0, so
@@ -139,7 +139,7 @@ the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-o
 six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the
 bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
 
-The **8Pre** (distinct from the 8PreX) gained a bring-up capture on Aug 6 2026, so it now arms like
+The **8Pre** (distinct from the 8PreX) gained a bring-up capture, so it now arms like
 the other models: `clarett_arm_8pre.h` is replayed at probe (hardware-verified via `model=8pre`),
 arming config access and carrying its own captured default routing. Its input/output layout is from
 the XML: combo XLR/TRS jacks (Mic is auto-detected by the jack, so the software mode is Line/Inst only,
@@ -226,7 +226,7 @@ Never load this while the VM is using the device.
 - **`premailbox_reads=` (default 1)**: replay the vendor driver's exact pre-mailbox
   BAR0 **read** sequence at attach (caps, `0x4/0x8`, serial, `0x514`, `0x58c`, all
   four cause blocks, the full `0x8000–0x801c` fw-info header) before the first FCP
-  command. The cold gdb ladder (2026-07-10) showed the working device answers
+  command. The cold gdb ladder showed the working device answers
   `error=0` from mailbox command #0, so the accept-vs-refuse gate is set *before* the
   mailbox opens; pre-mailbox writes already match FC, so this read set is the sole
   remaining host-visible pre-mailbox difference. Set `0` for the old read-minimal
@@ -239,7 +239,7 @@ Never load this while the VM is using the device.
   difference present in every walled run (including the Fedora-guest control), invisible
   to the BAR-only pre-mailbox replay. Set `0` for the old late enable (A/B).
 - ~~**Control changes don't physically manifest — a proven below-driver boundary.**~~
-  **RESOLVED July 16 2026.** Kept here as a marker, because this was the headline gap for
+  **RESOLVED.** Kept here as a marker, because this was the headline gap for
   most of the project and the eliminations behind it were all real: the vendor's MMIO,
   config space, DMA footprint and cold-boot behaviour genuinely did match ours on every
   host-visible surface, confirmed by four independent methods. What was wrong was the

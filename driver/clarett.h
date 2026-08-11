@@ -42,8 +42,8 @@ struct snd_rawmidi_substream;
 #define REG_MBOX                 0x8020  /* FCP request mailbox                         */
 
 /*
- * DIN MIDI UART (rawmidi) — register PIO, NOT the FCP mailbox / audio DMA (reverse-engineered Aug 4
- * 2026). REG_MIDI_DATA is bidirectional: a TX write packs up to 3 MIDI
+ * DIN MIDI UART (rawmidi) — register PIO, NOT the FCP mailbox / audio DMA (reverse-engineered from
+ * MMIO captures). REG_MIDI_DATA is bidirectional: a TX write packs up to 3 MIDI
  * bytes with a byte-count in the top byte; an RX read returns one byte with bit24 (MIDI_RX_VALID) set, or
  * 0 when the RX FIFO is empty. RX is interrupt-driven — the shared IRQ summary REG_MIDI_STATUS low byte
  * carries a MIDI-RX-pending code (observed 0x0a); the driver drains REG_MIDI_DATA, then writes
@@ -129,7 +129,7 @@ struct snd_rawmidi_substream;
  *
  * Consequence for our ISR: vec0 fires on mailbox-DONE too, and at completion 0x400 reads its idle
  * 0x3 (== NOTIFY_MON_PRIMARY), so a completion MSI can be misread as a monitor event; the cmd_inflight
- * guard suppresses that self-reflection. But hardware (July 6 2026, response-logging on the 2Pre) shows
+ * guard suppresses that self-reflection. But hardware (response-logging on the 2Pre) shows
  * the guard is only a minor cleanup: the dominant "notification retried indefinitely" storm is the
  * DEVICE genuinely re-asserting 0x3 in us-scale bursts (8 in 234us, far faster than our ~30ms command
  * rate, inflight=0) because our GET returns empty (size=0) and never satisfies it — where FC's returns
@@ -239,7 +239,7 @@ struct snd_rawmidi_substream;
 #define CLARETT_DEFAULT_RATE     48000
 
 /*
- * CLOCK/SYNC category (0x006xxx) — these are QUERIES, not commands `[HW — 4Pre, July 20 2026]`.
+ * CLOCK/SYNC category (0x006xxx) — these are QUERIES, not commands `[HW — 4Pre]`.
  *
  * They were named FCP_STREAM_ENABLE/FCP_STREAM_COMMIT from watching the vendor issue them in-session
  * immediately before arming the engine, and that inference was WRONG: the category number is the
@@ -411,9 +411,9 @@ struct clarett_model {
  * copies stale buffer bytes.
  *
  * resp[8..11] is the FCP ERROR word: 0 = OK. A working session's responses carry 0
- * with real payload sizes (pmemsave of FC's live buffer, July 9 2026). Our sessions
+ * with real payload sizes (pmemsave of FC's live buffer). Our sessions
  * get 0x3 on every response — a refusal code, NOT "success" (the
- * pre-July-9 reading, calibrated only on walled responses, had this backwards).
+ * earlier reading, calibrated only on walled responses, had this backwards).
  */
 #define FCP_RESP_ECHO_OFF        0
 #define FCP_RESP_SIZE_OFF        4
@@ -493,7 +493,7 @@ struct clarett {
 	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1
 	 * = 0x3) at completion, so a completion MSI can be misread as a monitor event. This guard makes
 	 * the ISR skip 0x400 while our own command is in flight, suppressing that self-reflection.
-	 * NOTE (hardware-confirmed July 6 2026): this is only a MINOR contributor. On a walled device the
+	 * NOTE (hardware-confirmed): this is only a MINOR contributor. On a walled device the
 	 * dominant "notification retried indefinitely" storm is the DEVICE genuinely re-asserting 0x3 in
 	 * us-scale bursts because our GET returns empty (size=0) and never satisfies it — the guard cannot
 	 * stop that (the device fires in the idle gaps where inflight=0). See clarett_irq() and the
@@ -737,7 +737,7 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  */
 #define CLARETT_CTR_FRAMES	16
 /*
- * Modulus of the 0x300 period counter. MEASURED on the 2Pre (July 24 2026) from the servicer's own
+ * Modulus of the 0x300 period counter. MEASURED on the 2Pre from the servicer's own
  * 2-second telemetry: the counter steps 0x10 per period and the sampled value advances by exactly
  * (events * 0x10) mod 0x100 across every window, wrapping every 16 events. Knowing it is what lets a
  * wrap and a LATE POLL be the same arithmetic — a modular difference — so the frames a delayed tick
