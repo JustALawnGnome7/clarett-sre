@@ -1,10 +1,10 @@
 # snd-clarett — Focusrite Clarett (Thunderbolt) ALSA driver
 
-Supported: **Clarett 8PreX**, **Clarett 8Pre**, **Clarett 4Pre**, and **Clarett 2Pre** (one module,
+Supported: **Clarett 2Pre**, **Clarett 4Pre**, **Clarett 8Pre**, and **Clarett 8PreX** (one module,
 per-model descriptor).
 
-Status: **control plane works** (mixer-only sound card — no working PCM yet).
-Built from clean-room reverse-engineering notes.
+Status: **working** — mixer control plane (via `fcp-server`), PCM capture and playback, and
+DIN MIDI, all confirmed on hardware. Built from clean-room reverse-engineering notes.
 
 > **Control changes take physical effect.** Confirmed on hardware: preamp Mode and Air
 > move a 2Pre's relays and front-panel LEDs, monitor Mute/Dim act on the outputs, the
@@ -21,8 +21,9 @@ Built from clean-room reverse-engineering notes.
 > every "known-good" vendor trace had been captured under MMIO trapping slow enough to
 > hide it.
 >
-> Still true: the device-arming init replay only works on a **freshly power-cycled**
-> device.
+> The device-arming init replay is only *needed* on a virgin/unarmed unit; a
+> previously-armed device self-arms across a power cycle (arm state is flash-persisted),
+> so the probe-time replay is a harmless no-op on any used device.
 
 ## What works
 
@@ -32,16 +33,23 @@ Built from clean-room reverse-engineering notes.
   driver (`sound/usb/fcp.c`), so Geoffrey Bennett's userspace **`fcp-server`** drives
   this device unmodified: mixer, routing patchbay, per-output levels, preamp air/mode,
   mute/dim and metering are all implemented in userspace. See *Controls* below.
-- **Device session bring-up** at probe (`clarett_arm_device`): replays the 232-command
-  vendor init from the de-blobbed typed table `clarett_arm_8prex.h` (`CONFIG_PUSH`×122,
-  subsystem enables, 8 KB config sync, `SET_MIX`×16 + `SET_MUX`×3). Required on a genuinely
-  **virgin/unarmed** device — a self-booted 8PreX rejects `GET_DATA` until armed; note a
-  *previously-armed* unit self-arms across a power cycle (arm state is flash-persisted), so the
-  bring-up is a no-op there.
+- **Device session bring-up** at probe (`clarett_arm_device`): replays a de-blobbed typed
+  init table (per-model `clarett_arm_<model>.h`: a `CONFIG_PUSH` burst, subsystem enables,
+  8 KB config sync, `SET_MIX` + `SET_MUX`). The probe always arms (with the id_table default,
+  then re-applies the detected model's routing — while preserving any live routing a configured
+  device already holds). Only a genuinely **virgin/unarmed** unit actually needs it (a self-booted
+  virgin device rejects `GET_DATA` until armed); a *previously-armed* unit self-arms across a power
+  cycle (arm state is flash-persisted), so the replay is a harmless no-op there.
 - At probe the driver seeds its config shadow from the device (`GET_DATA(24,92)`)
   and **force-enables hardware Mute/Dim for Monitor Out 1-2** (bytes 72/73, command 3)
   so the global `Mute`/`Dim` actually act on those outputs — the master flag alone
   (offset 24/28) does nothing unless an output opts in via its enable bit.
+- **PCM streaming** (`clarett_pcm.c`, on by default): full-duplex capture and playback over one
+  shared descriptor-ring engine, driven by the `0x300` period servicer. Hardware-confirmed on the
+  2Pre, 4Pre, and 8PreX. See *Known limitations* for the caveats.
+- **DIN MIDI** (`clarett_midi.c`): ALSA rawmidi over the memory-mapped MIDI UART at BAR0 `0x58c`
+  (interrupt-driven RX, packed TX) — independent of the FCP control session, so it works regardless
+  of control-plane state.
 
 ## Build
 
@@ -119,7 +127,7 @@ first, asks second:
 
 ```sh
 sudo insmod snd-clarett.ko                # auto-detects the model from the armed device
-sudo insmod snd-clarett.ko model=8prex    # or force: model=2pre / model=4pre / model=8pre
+sudo insmod snd-clarett.ko model=2pre     # or force: model=4pre / model=8pre / model=8prex
 ```
 
 Because the PCI id is shared line-wide, the detected model is published for userspace at
@@ -186,25 +194,29 @@ this driver on the **host**, the device must be free for `snd-clarett` to claim:
    ```sh
    amixer -c <n> sset 'Mute' toggle      # also 'Dim', input Air/Mode, etc.
    ```
-   (Note: writes complete but won't change the hardware yet — see the ⚠️ at the top.)
+   (These take physical effect on the hardware — see the note at the top.)
 
 Never load this while the VM is using the device.
 
 ## Known limitations / TODO
 
-- **Routing and mixer-gain writes are not hardware-verified.** They now live in the device maps
-  (`../fcp-server-data/`) rather than in-kernel: `fcp-server` creates the patchbay enums and the
-  mixer matrix, and reads decode correctly against the device's own tables (`PCM 01 Capture Enum`
-  reads `Analogue 1` for the table's `400 600`), but no write has been exercised. Also pending: for
-  the three captured models the source list is only the pins the factory-default matrix routes, not
-  the device's full source inventory (the 8Pre, whose map is not table-derived, lists all of them).
-- **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
-  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass. It used
-  to be attributed to the same wall as the
-  control plane; that attribution died with the wall and the stall is **unexplained**.
-  Our post-arm state is byte-identical to the vendor's, whose own arms stall the same way
-  several times before streaming, so the engine setup is exonerated and the next lead is
-  the TX ring's contents. The PCM devices are on by default (`enable_pcm`, set 0 for mixer-only).
+- **Routing writes take effect; the mixer-gain matrix is less exercised.** Control writes now
+  manifest physically (Mode/Air, Mute/Dim, and SW/HW gain are hardware-confirmed). Routing lives
+  in the device maps (`../fcp-server-data/`) where `fcp-server` builds the patchbay enums and the
+  mixer matrix; reads decode correctly against the device's own tables (`PCM 01 Capture Enum` reads
+  `Analogue 1` for `400 600`), and re-routing a source to a PCM capture is reflected in that
+  channel's meter — but the full mixer-gain matrix has had less systematic testing. Also pending:
+  for the captured models the source list is only the pins the factory-default matrix routes, not
+  the device's full source inventory (the 8Pre map, not table-derived, lists all of them).
+- **PCM works, with caveats.** Full-duplex capture and playback over one shared engine,
+  hardware-confirmed on the 2Pre, 4Pre, and 8PreX. The long-standing one-ring-pass stall turned out to be the
+  descriptor-table format (a missing periodic RX IRQ marker — the flag that advances the counted
+  `0x300` period), not a wall. On by default (`enable_pcm`; set 0 for a mixer-only card). There is
+  no default route, so playback is silent until a PCM source is wired to a physical output in the
+  router. Remaining caveats: 8Pre streaming is untested (no 8Pre stream capture yet), and
+  low-latency streaming can suffer periodic audible skips traced to a Thunderbolt-triggered
+  platform SMI — a firmware/BIOS issue, not the driver (autonomous DMA rides through it; the click
+  is PipeWire re-preparing).
 - **The config shadow is write-through.** `clarett_set_data()` keeps a shadow of the config space so
   the probe-time monitor-enable write can do a correct read-modify-write. It is seeded from the
   device at probe (`GET_DATA(24,92)`); bytes the device never reports back stay at their written
@@ -250,9 +262,6 @@ Never load this while the VM is using the device.
   ~20 µs per access, under which the response had always landed long before the ack — so
   the traces could not show a precondition they always satisfied. Gating the ack on the
   response actually arriving fixed it.
-- **Device bring-up replay is fresh-device-only.** `clarett_arm_device` arms a
-  power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
-  (double-init). TODO: probe with a `GET` and skip the replay when already armed.
 - **Packed bitfield controls** (per-output hardware gain/dim/mute enables). The gain
   enables (byte 52 + 4·(out/2), bit out%2) are exposed by the device maps as the SW/HW
   volume-control selector — hardware-confirmed: an output set to HW follows the
@@ -305,10 +314,3 @@ not need to re-apply them.
   Diagnostic levers for any future dig: `seed_dump=1` (one-shot full `[0,256)`
   shadow dump at probe) and `put_trace=1` (log each control write's offset/value).
 - Single-card only; no module params for index/id (but see `model=` above).
-- **2Pre: experimental flat-buffer capture PCM** (`enable_pcm=1`). A RAM dump of the live
-  2Pre stream showed it streams a **flat contiguous sample ring** at `0x210`/`0x310` with no
-  descriptor table (unlike the 8PreX's scatter-gather list), with asymmetric TX 4ch / RX 14ch
-  periods (`0x40` / `0xe0`). The driver uses a separate flat-buffer engine path (`flat_buffer`
-  model flag) sharing the 8PreX's register arm + servicer. The ring/wrap length
-  (`CLARETT_FLAT_FRAMES`, currently 1024 frames = the VM's observed 16 KB TX area) is a
-  hypothesis pending hardware confirmation — capture may not yet clock or may wrap elsewhere.
