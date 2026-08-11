@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Focusrite Clarett 8PreX (Thunderbolt) ALSA driver — PCI bring-up.
+ * Focusrite Clarett (Thunderbolt) ALSA driver — PCI bring-up and data-plane engine.
  *
- * Status: control plane only. Creates a mixer-only sound card. PCM/streaming
- * (the data plane) is not implemented yet — see TODO at the end.
+ * Supports the Clarett Thunderbolt line (2Pre / 4Pre / 8Pre / 8PreX), auto-detected
+ * at probe. Provides the mixer control plane (through the FCP hwdep + fcp-server),
+ * PCM capture and playback, and DIN MIDI.
  *
  * Reverse-engineering provenance: clean-room notes from MMIO traces and
  * Focusrite's own device XML; no vendor driver code was used.
@@ -2681,6 +2682,6 @@ static struct pci_driver clarett_driver = {
 };
 module_pci_driver(clarett_driver);
 
-MODULE_DESCRIPTION("Focusrite Clarett 8PreX (Thunderbolt) — control plane");
-MODULE_AUTHOR("Clarett RE project");
+MODULE_DESCRIPTION("Focusrite Clarett (Thunderbolt) audio interface driver");
+MODULE_AUTHOR("Miles Ramage <miles.ramage@yahoo.com>");
 MODULE_LICENSE("GPL");

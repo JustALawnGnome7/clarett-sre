@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Clarett 8PreX — FCP mailbox transport.
+ * Clarett (Thunderbolt) — FCP mailbox transport.
  *
  * One transaction (confirmed from trace): ack the previous completion via the
  * doorbell, fill the request mailbox (cmd/size+seq/error/pad/data), ring the
- * doorbell, then wait for the DONE bit in the IRQ-0 cause register. We poll the
- * cause register rather than taking MSIs — the data-plane work will add proper
- * MSI handling; for the (infrequent) control plane, polling is simplest and
- * avoids racing the read-to-clear cause register against an ISR.
+ * doorbell, then wait for the DONE bit in the IRQ-0 cause register. Mailbox
+ * completion is polled by design: MSI is used for async notifications and stream
+ * period events, but polling the DONE bit keeps the mailbox from racing the
+ * read-to-clear cause register against the ISR.
  */
 #include <linux/io.h>
 #include <linux/jiffies.h>

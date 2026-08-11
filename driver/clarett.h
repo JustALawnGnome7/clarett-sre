@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Focusrite Clarett 8PreX (Thunderbolt) ALSA driver — shared definitions.
+ * Focusrite Clarett (Thunderbolt) ALSA driver — shared definitions.
  *
  * Register map and FCP framing are from clean-room reverse-engineering of the
  * device (confirmed against MMIO traces). Control offsets/commands likewise.
