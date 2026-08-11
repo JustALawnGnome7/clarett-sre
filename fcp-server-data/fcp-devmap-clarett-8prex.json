@@ -116,6 +116,20 @@
           "notify-device": 8,
           "notify-client": 0,
           "_note": "front-panel meter-bridge source @ 184; commit activate 8; enum Analogue=1/S/PDIF=2/ADAT 1=4/ADAT 2=8 [XML]"
+        },
+        "spdifSourceInput": {
+          "offset": 132,
+          "type": "uint8",
+          "notify-device": 4,
+          "notify-client": 0,
+          "_note": "S/PDIF input connector @ 132; commit activate 4; enum None=0/Optical=1/RCA=2 (scarlett2 SCARLETT2_CONFIG_SPDIF_MODE input offset)"
+        },
+        "spdifSourceOutput": {
+          "offset": 124,
+          "type": "uint8",
+          "notify-device": 4,
+          "notify-client": 0,
+          "_note": "S/PDIF output connector @ 124; commit activate 4; enum None=0/Optical=1/RCA=2 (XML <spdif-mode><output>; scarlett2 does not expose this)"
         }
       }
     }

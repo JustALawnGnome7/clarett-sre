@@ -71,6 +71,42 @@
     "dimSwitch": {
       "name": "Dim Playback Switch",
       "type": "bool"
+    },
+    "spdifSourceInput": {
+      "name": "S/PDIF Source Capture Enum",
+      "type": "enum",
+      "values": [
+        {
+          "name": "None",
+          "value": 0
+        },
+        {
+          "name": "Optical",
+          "value": 1
+        },
+        {
+          "name": "RCA",
+          "value": 2
+        }
+      ]
+    },
+    "spdifSourceOutput": {
+      "name": "S/PDIF Source Playback Enum",
+      "type": "enum",
+      "values": [
+        {
+          "name": "None",
+          "value": 0
+        },
+        {
+          "name": "Optical",
+          "value": 1
+        },
+        {
+          "name": "RCA",
+          "value": 2
+        }
+      ]
     }
   },
   "sources": [

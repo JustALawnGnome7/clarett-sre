@@ -374,6 +374,26 @@ METER_SOURCE = {
                       OD([("name", "ADAT 2"),   ("value", 8)])],
 }
 
+# <spdif-mode> [XML]: which physical connector S/PDIF uses. The XML models it as one control backed by
+# two 2-bit fields, both activate 4: <input> @132 (connector captured) and <output> @124 (connector
+# driven). The in-kernel scarlett2 driver (ALSA, no fcp-server) handles the sibling USB Clarett/Clarett+
+# line and exposes only ONE control ("S/PDIF Source Capture Enum") writing only the input offset
+# (SCARLETT2_CONFIG_SPDIF_MODE, 0x9e on the USB map); it never touches the output offset and cannot set
+# the two connectors independently. We deliberately go further and expose BOTH as independent enums —
+# input as scarlett2's "S/PDIF Source Capture Enum" (so alsa-scarlett-gui still recognises it) and
+# output as "S/PDIF Source Playback Enum". That second name required two companion changes, both in
+# alsa-scarlett-gui (fcp-server creates either enum generically, no change): its routing-sink parser
+# (alsa.c is_elem_routing_snk) had to stop treating an "S/PDIF ... Playback Enum" whose name carries no
+# channel number as a router sink (it aborted the GUI), and its Device Settings tab
+# (config-device-settings.c) now renders both dropdowns. Enum values are scarlett2's exactly:
+# None=0 / Optical=1 / RCA=2 (contiguous, index == device byte). The 2Pre is optical-only (its
+# <spdif-mode> offers Optical alone), so it gets neither control, matching scarlett2, which omits it
+# there. [mixer_scarlett2.c, driver/clarett.h, spec/clarett-interface.md]
+SPDIF_SOURCE_ENUM = [OD([("name", "None"),    ("value", 0)]),
+                     OD([("name", "Optical"), ("value", 1)]),
+                     OD([("name", "RCA"),     ("value", 2)])]
+SPDIF_SOURCE = {"clarett-4pre", "clarett-8pre", "clarett-8prex"}
+
 
 # --- Clarett 8Pre band-0 router table (no capture exists for this model) -------------------------
 #
@@ -493,6 +513,19 @@ for slug, spec in MODELS.items():
             184, "uint8", nd=8, nc=0,
             note="front-panel meter-bridge source @ 184; commit activate 8; "
                  "enum Analogue=1/S/PDIF=2/ADAT 1=4/ADAT 2=8 [XML]")
+
+    # <spdif-mode> [XML]: S/PDIF connector select, exposed as two independent enums (input @132,
+    # output @124), both commit activate 4. Host-owned (nc=0): nothing changes them behind us. See the
+    # SPDIF_SOURCE comment above for the scarlett2 relationship and the alsa-scarlett-gui companions.
+    if slug in SPDIF_SOURCE:
+        members["spdifSourceInput"] = member(
+            132, "uint8", nd=4, nc=0,
+            note="S/PDIF input connector @ 132; commit activate 4; enum None=0/Optical=1/RCA=2 "
+                 "(scarlett2 SCARLETT2_CONFIG_SPDIF_MODE input offset)")
+        members["spdifSourceOutput"] = member(
+            124, "uint8", nd=4, nc=0,
+            note="S/PDIF output connector @ 124; commit activate 4; enum None=0/Optical=1/RCA=2 "
+                 "(XML <spdif-mode><output>; scarlett2 does not expose this)")
 
     phys_in = []
     for i in range(na):
@@ -731,6 +764,19 @@ for slug, spec in MODELS.items():
         alsamap["global-controls"]["meterSource"] = OD([
             ("name", "Meter Source Enum"), ("type", "enum"),
             ("values", METER_SOURCE[slug]),
+        ])
+    # S/PDIF connector select (4Pre/8Pre/8PreX): two independent enums bound to the spdifSourceInput/
+    # Output devmap members (offsets 132/124, both commit activate 4). "S/PDIF Source Capture Enum" is
+    # scarlett2's name; "S/PDIF Source Playback Enum" is the output partner. alsa-scarlett-gui renders
+    # both in its Device Settings tab (config-device-settings.c).
+    if slug in SPDIF_SOURCE:
+        alsamap["global-controls"]["spdifSourceInput"] = OD([
+            ("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
+            ("values", SPDIF_SOURCE_ENUM),
+        ])
+        alsamap["global-controls"]["spdifSourceOutput"] = OD([
+            ("name", "S/PDIF Source Playback Enum"), ("type", "enum"),
+            ("values", SPDIF_SOURCE_ENUM),
         ])
 
     if alsa_sources:

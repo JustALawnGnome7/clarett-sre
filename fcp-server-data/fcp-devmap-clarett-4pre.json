@@ -95,6 +95,20 @@
           "notify-device": 3,
           "notify-client": 0,
           "_note": "enable-hardware-gain bits for outputs 5/6 @ 60, bit 0/1; commit activate 3"
+        },
+        "spdifSourceInput": {
+          "offset": 132,
+          "type": "uint8",
+          "notify-device": 4,
+          "notify-client": 0,
+          "_note": "S/PDIF input connector @ 132; commit activate 4; enum None=0/Optical=1/RCA=2 (scarlett2 SCARLETT2_CONFIG_SPDIF_MODE input offset)"
+        },
+        "spdifSourceOutput": {
+          "offset": 124,
+          "type": "uint8",
+          "notify-device": 4,
+          "notify-client": 0,
+          "_note": "S/PDIF output connector @ 124; commit activate 4; enum None=0/Optical=1/RCA=2 (XML <spdif-mode><output>; scarlett2 does not expose this)"
         }
       }
     }
