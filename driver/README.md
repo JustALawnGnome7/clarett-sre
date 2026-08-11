@@ -4,22 +4,22 @@ Supported: **Clarett 8PreX**, **Clarett 8Pre**, **Clarett 4Pre**, and **Clarett 
 per-model descriptor).
 
 Status: **control plane works** (mixer-only sound card — no working PCM yet).
-Built from the clean-room notes in `../spec/`.
+Built from clean-room reverse-engineering notes.
 
 > **Control changes take physical effect.** Confirmed on hardware: preamp Mode and Air
 > move a 2Pre's relays and front-panel LEDs, monitor Mute/Dim act on the outputs, the
 > SW/HW selector hands an output to the front-panel knob, and `GET_DATA` returns real
 > data — including the knob's own position, live. Encodings are verified by reading the
-> device's bytes back (`../tools/fcp_cfg_read.c`), not by watching the hardware, since a
+> device's bytes back (a config-read bench tool), not by watching the hardware, since a
 > relay clicks the same for a right and a wrong value.
 >
 > This was not always so: for most of this project's life every write completed and
 > nothing happened, a wall attributed to an "off-wire / below-driver" boundary after
-> four independent methods agreed. That attribution was **wrong**, and the record of how
-> it fell is worth reading before trusting any negative result here —
-> `../spec/provenance/clarett-manifestation-wall.md` §8. The cause was a trailing doorbell ack sent
-> before the device's response DMA had landed; every "known-good" vendor trace had been
-> captured under MMIO trapping slow enough to hide it.
+> four independent methods agreed. That attribution was **wrong**, and the negative
+> results it produced are worth distrusting before you trust any negative result here.
+> The cause was a trailing doorbell ack sent before the device's response DMA had landed;
+> every "known-good" vendor trace had been captured under MMIO trapping slow enough to
+> hide it.
 >
 > Still true: the device-arming init replay only works on a **freshly power-cycled**
 > device.
@@ -59,7 +59,7 @@ This driver follows the in-kernel FCP model used by the 4th-gen Scarlett
 Geoffrey Bennett's userspace **`fcp-server`** implementing the controls. There is no
 in-kernel mixer — the control layer and its `in_kernel_controls` toggle were removed
 once the hwdep path was working on hardware (see git history if you need the old
-control set; the encodings it carried live on in `../spec/` and in the device maps).
+control set; the encodings it carried live on in the device maps).
 
 ```sh
 sudo insmod snd-clarett.ko
@@ -139,24 +139,23 @@ the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-o
 six output gains @ 32/33/36/37/40/41), and the channel counts (8 playback / 20 record), the
 bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
 
-The **8Pre** (distinct from the 8PreX) is the one model **no capture exists for**, and nothing about
-it has run against the hardware. It is built from the XML: combo XLR/TRS jacks (Mic is auto-detected
-by the jack, so the software mode is Line/Inst only, on inputs 1-2; 3-8 are air-only) unlike the
-8PreX's separate ports, outputs matching the 8PreX (10 gains), and `(20, 20)` streams for detection.
+The **8Pre** (distinct from the 8PreX) gained a bring-up capture on Aug 6 2026, so it now arms like
+the other models: `clarett_arm_8pre.h` is replayed at probe (hardware-verified via `model=8pre`),
+arming config access and carrying its own captured default routing. Its input/output layout is from
+the XML: combo XLR/TRS jacks (Mic is auto-detected by the jack, so the software mode is Line/Inst only,
+on inputs 1-2; 3-8 are air-only) unlike the 8PreX's separate ports, outputs matching the 8PreX
+(10 gains), and `(20, 20)` streams for detection. Its stream-routing ids are derived from the
+model-independent source-id enumeration (equal to the 4Pre's, whose input layout is identical), not
+captured.
 
-It has no bring-up replay and no stream ids — both need an 8Pre boot capture — but it does **not**
-need them to be usable, because the bring-up is model-agnostic: it arms on whichever model's blob
-the probe replayed. What it does need is its own **routing table**, since the arm otherwise leaves it
-holding the 2Pre's, whose destination pins are the wrong ones (fcp-server then refuses to create any
-routing control at all). So the driver pushes a constructed band-0 table once detection identifies
-the device — `clarett_mux_8pre.h`, emitted by `tools/gen_fcp_maps.py` alongside the matching device
-map, its capture half taken from the 4Pre's captured table (identical input geometry) and its output
-half authored. Nothing is fed into the mixer, so the device starts silent.
+What is **not** yet verified is PCM streaming on real 8Pre hardware: the channel counts are XML-derived
+rather than traced, and no capture or playback has been run end-to-end on an 8Pre (unlike the confirmed
+2Pre/4Pre/8PreX).
 
-Its meter `peak-index` values are likewise **predicted** from the measured packing rule rather than
-measured. First contact with real hardware should check both: that `MUX_READ` reads the table back
-as pushed, and that one excited input at a time lights the predicted meter slot
-(`tools/fcp_meter_watch.c`).
+The 8Pre's routing sources and meter `peak-index` values are **predicted** — the routing from the 4Pre's
+identical input geometry, the meters from the measured packing rule — rather than measured. First contact
+with real hardware should check both: that `MUX_READ` reads the routing back as pushed, and that one
+excited input at a time lights the predicted meter slot (a meter-watch bench tool).
 
 There is no auto-detect of any kind. The model name *does* live in the Thunderbolt
 DROM, but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3
@@ -200,8 +199,8 @@ Never load this while the VM is using the device.
   the three captured models the source list is only the pins the factory-default matrix routes, not
   the device's full source inventory (the 8Pre, whose map is not table-derived, lists all of them).
 - **No sustained PCM** — the data-plane engine *is* reverse-engineered and clocks (arms,
-  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass
-  (`../spec/provenance/clarett-data-plane.md`). It used to be attributed to the same wall as the
+  DMAs a burst, descriptors correct, PTR advances) but stalls after one ring pass. It used
+  to be attributed to the same wall as the
   control plane; that attribution died with the wall and the stall is **unexplained**.
   Our post-arm state is byte-identical to the vendor's, whose own arms stall the same way
   several times before streaming, so the engine setup is exonerated and the next lead is
@@ -212,7 +211,7 @@ Never load this while the VM is using the device.
   value. Nothing reads it for display any more — `fcp-server` reads the device directly.
 - **Mailbox completion is polled**, not MSI-driven. MSI *is* enabled, but only
   for **async notifications** (vec0 / cause `0x400`): a front-panel button raises
-  the §11 dim-mute/monitor mask, and the ISR → workqueue re-reads the monitor
+  the dim-mute/monitor mask, and the ISR → workqueue re-reads the monitor
   region and `snd_ctl_notify()`s the monitor controls. The GET-response layout is
   decoded (16-byte echoed FCP header + requested bytes at +16), so the handler
   updates the monitor shadow to reflect physical button changes.
@@ -221,7 +220,7 @@ Never load this while the VM is using the device.
   the IOMMU; the driver uses `upper_32_bits(resp_dma)`).
   A/B lever `resp_prefill=` (-1/0..255): fill the response buffer with a byte before
   every command submit — `0` mirrors FC's freshly-zeroed common buffer, `170` (0xAA)
-  restores the §5a emptiness marker, `-1` (default) leaves it untouched between
+  restores the emptiness marker, `-1` (default) leaves it untouched between
   commands (baseline). Probes whether the device reads/reacts to this buffer's
   contents (the only host address it knows at init).
 - **`premailbox_reads=` (default 1)**: replay the vendor driver's exact pre-mailbox
@@ -250,7 +249,7 @@ Never load this while the VM is using the device.
   by refusing the session outright. Every vendor trace was captured under MMIO trapping at
   ~20 µs per access, under which the response had always landed long before the ack — so
   the traces could not show a precondition they always satisfied. Gating the ack on the
-  response actually arriving fixed it. Full account: `../spec/provenance/clarett-manifestation-wall.md` §8.
+  response actually arriving fixed it.
 - **Device bring-up replay is fresh-device-only.** `clarett_arm_device` arms a
   power-cycled device; re-running it on an already-armed device wedges `GET_DATA`
   (double-init). TODO: probe with a `GET` and skip the replay when already armed.

@@ -45,12 +45,12 @@ required keys and an in-range index. Per model this yields Line In air + mode
 | `clarett-8pre`  | 1-8 | 1-2 (Line/Inst, no Mic)             | 10 |
 | `clarett-8prex` | 1-8 | 1-2 (Mic/Line/Inst), 3-8 (Mic/Line) | 10 |
 
-**The `clarett-8pre` pair is the one built without a capture**, and none of it has met the
-hardware. Its routing comes from a constructed band-0 table (`driver/clarett_mux_8pre.h`,
-emitted by the same script, pushed by the driver after model detection); its source list
-is the hardware's full inventory from the XML rather than the routed-pins subset the other
-three get; and its meter `peak-index` values are predicted from the packing rule, marked
-`"_peak-index-provenance": "predicted"`. See the file's `_todo`.
+**The `clarett-8pre` pair is the one built without a capture of its own control session.** Its map's
+routing comes from a band-0 table this script constructs (the capture half is the 4Pre's, whose input
+geometry is identical; the output half is authored) — the driver itself arms the 8Pre's own captured
+routing from `clarett_arm_8pre.h`. Its source list is the hardware's full inventory from the XML rather
+than the routed-pins subset the other three get; and its meter `peak-index` values are predicted from
+the packing rule, marked `"_peak-index-provenance": "predicted"`. See the file's `_todo`.
 
 The device byte is `0=Mic/1=Line/2=Inst` line-wide, but **only the 8PreX can select Mic
 in software** — it has separate XLR and ¼″ jacks per input, so something must choose the

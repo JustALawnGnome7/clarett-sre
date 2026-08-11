@@ -19,12 +19,12 @@
 
 /*
  * Manifestation-wall A/B — per-command response-buffer hygiene. The device provably reacts
- * to host DMA-buffer *contents* (data-plane §9: the 0xAA RX pre-fill was the lone difference
+ * to host DMA-buffer *contents* (the 0xAA RX pre-fill was the lone difference
  * that made the engine clock), and this buffer is the only host address the device knows at
  * init. FC's 4 KB common buffer arrives zeroed from Windows; ours is zeroed at alloc but then
  * holds the previous response between commands. -1 = leave it alone (baseline); 0..255 = fill
  * the whole buffer with that byte before every submit (0 mirrors FC's fresh common buffer;
- * 170/0xAA restores the §5a emptiness instrument — any byte still 0xAA after completion was
+ * 170/0xAA restores the emptiness instrument — any byte still 0xAA after completion was
  * not written by the device).
  */
 static int resp_prefill = -1;
@@ -38,7 +38,7 @@ MODULE_PARM_DESC(mbox_err_read,
 	"Read MBOX_ERROR (0x8028) after each command completion. The vendor driver NEVER reads any "
 	"mailbox register (cold trace: zero mailbox reads across the whole bring-up), and our read "
 	"lands while the device is still DMAing its async response — the sole per-command BAR-surface "
-	"difference from the vendor (wall spec 7). Default 0 = vendor-faithful (no read); 1 restores "
+	"difference from the vendor. Default 0 = vendor-faithful (no read); 1 restores "
 	"the old readback for A/B.");
 
 static bool legacy_mbox_cycle;
@@ -49,10 +49,10 @@ MODULE_PARM_DESC(legacy_mbox_cycle,
 	"0x100,0x300,0x200,0x400,0x500 until DONE -> one confirming sweep -> TRAILING ack. The old "
 	"cycle's leading ACK made our first-ever doorbell write to a fresh device an ack to a mailbox "
 	"that never carried a command — an out-of-protocol token the vendor never sends, at the exact "
-	"pre-command-#0 point where the session gate decides (wall spec 7).");
+	"pre-command-#0 point where the session gate decides.");
 
 /*
- * THE WALL CROSSING (wall spec §8, July 16 2026) — why the trailing ack is gated on the
+ * THE WALL CROSSING (July 16 2026) — why the trailing ack is gated on the
  * response landing. The trailing doorbell ack (0x408=2) means "response consumed, buffer
  * free", NOT "completion observed": the device DMAs its response asynchronously AFTER the
  * BAR DONE bit, and acking before it lands is a protocol violation the device answers with

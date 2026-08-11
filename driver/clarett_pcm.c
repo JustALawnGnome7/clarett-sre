@@ -15,8 +15,8 @@
  * with r1 = r0 + ring (proven by the engine-start probe), which is why TX is always armed even for
  * capture-only (it plays silence until a playback stream fills it).
  *
- * Calibration caveat (clarett.h): frames-per-0x300-event uses CLARETT_CTR_FRAMES; verified on the 2Pre
- * (spec §14). Clocking and period flow are independent of that constant.
+ * Calibration caveat (clarett.h): frames-per-0x300-event uses CLARETT_CTR_FRAMES; verified on the 2Pre.
+ * Clocking and period flow are independent of that constant.
  */
 #include <linux/dma-mapping.h>
 #include <linux/math64.h>
@@ -44,7 +44,7 @@ MODULE_PARM_DESC(stream_batch,
 		 "queries, 0x004001 x6) before arming the stream engine (default off; no effect on a 4Pre).");
 
 /*
- * TX-ring contents (data-plane spec §12, the other half of the arm-ritual question). The vendor's four
+ * TX-ring contents (the other half of the arm-ritual question). The vendor's four
  * failing arms and its one working arm program byte-identical registers, so what differs is elapsed time
  * or host-RAM contents. Windows was playing audio in every capture, so its TX ring held real samples by
  * the time the working arm went in; our dummy TX ring holds silence. This lever fills it with a 1 kHz
@@ -236,7 +236,7 @@ static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos
 /*
  * Called from the servicer kthread on every 0x300 period event with the number of frames the engine
  * advanced since the last event (the 0x300 counter delta * CLARETT_CTR_FRAMES — self-calibrating to the
- * real hardware period, spec §14). One engine clock drives BOTH directions of the full-duplex ring:
+ * real hardware period). One engine clock drives BOTH directions of the full-duplex ring:
  *
  *   capture  — copy the add_frames the engine just WROTE from the RX ring into the capture ALSA buffer
  *              (behind the engine's write pointer).
@@ -446,7 +446,7 @@ static int clarett_pcm_hw_free(struct snd_pcm_substream *ss)
 }
 
 /*
- * Stage-1 stream-config handshake (spec §9 step 5; dataplane memory). The VM re-issues SET_CLOCK + the
+ * Stage-1 stream-config handshake. The VM re-issues SET_CLOCK + the
  * no-arg session lifecycle (0x6004 ×2 / 0x6005) in-session, immediately before every engine arm. The device
  * resets its stream config when idle, so the byte-identical handshake we already run once in clarett_arm_device()
  * at probe does not persist to PCM-arm time. Re-run the re-run-safe SUBSET here (NOT the full bring-up, which
@@ -454,7 +454,7 @@ static int clarett_pcm_hw_free(struct snd_pcm_substream *ss)
  *
  * Stage 2: the per-channel CONFIG_PUSH burst (model->stream_tx_ids / stream_rx_ids) re-declares which physical
  * inputs feed which DMA stream channels — without it the engine arms cleanly but no samples are routed in and
- * 0x300 never ticks (periods=0). Wire order (from 2pre_streamstart.log): SET_CLOCK, GET_6.2, GET_7.2, push tx
+ * 0x300 never ticks (periods=0). Wire order (from a 2Pre stream-start capture): SET_CLOCK, GET_6.2, GET_7.2, push tx
  * ids, GET_7.3, push rx ids, then the lifecycle commands. Non-fatal: log and proceed even if a command errors.
  */
 static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
@@ -488,7 +488,7 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	}
 
 	/*
-	 * The vendor's pre-arm RE-INIT batch (4pre_boot_to_stream_end.log @21:58:18.5). Our engine
+	 * The vendor's pre-arm RE-INIT batch (from a 4Pre boot-to-stream capture). Our engine
 	 * state at arm is byte-identical to the vendor's — its failing arms read 0x218=0xe
 	 * 0x21c=0xd->0xe 0x318=0x3 0x31c=0x3 and so do we — and it arms and stalls exactly as we do
 	 * four times over. What it does differently is issue this batch, then re-arm once, after
@@ -516,7 +516,7 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 
 	/*
 	 * The pre-arm triple, in the vendor's order: 0x6004, 0x6002, 0x6005 — NOT 0x6004 twice.
-	 * Every occurrence of these opcodes in 4pre_boot_to_stream_end.log is that triple (sometimes
+	 * Every occurrence of these opcodes in the 4Pre boot-to-stream capture is that triple (sometimes
 	 * doubled for full duplex, which is where the old "VM issues twice" note came from), and the
 	 * triple at 21:58:18.70 is what immediately precedes the one arm that streams: the vendor
 	 * arms and fails exactly as we do — 0x110=7, one period event, 0x110=0 + 0x100=0xf, retry —
@@ -710,7 +710,7 @@ static void clarett_build_rings(struct clarett *c)
 	/*
 	 * Flat mode: no descriptor table at all — the engine reads/writes the contiguous sample ring directly
 	 * at 0x210/0x310. dma_alloc_coherent already zeroed the buffer (TX = silence, RX = clean write target),
-	 * so there is nothing to build. NO prefill: the §9 "0xAA prefill" was a descriptor-mode artifact (the
+	 * so there is nothing to build. NO prefill: the "0xAA prefill" was a descriptor-mode artifact (the
 	 * engine dereferencing sample bytes as pointers); in a true flat ring the bytes are samples, not pointers.
 	 */
 	if (c->flat_buffer) {
@@ -733,7 +733,7 @@ static void clarett_build_rings(struct clarett *c)
 	for (i = 0; i < CLARETT_STREAM_NDESC; i++) {
 		tx_tbl[i] = cpu_to_le64(tx_smp + (u64)i * tx_slot);	/* slotted: non-contiguous when padded */
 		rx_tbl[i] = cpu_to_le64(rx_smp + (u64)i * rx_slot);	/* slotted: fragments non-contiguous when padded */
-		/* Periodic RX IRQ marker (spec §14): the engine raises a counted 0x300 period when it
+		/* Periodic RX IRQ marker: the engine raises a counted 0x300 period when it
 		 * consumes an IRQ-flagged descriptor. Every clarett_irq_descs(c)-th one (default 16, matching
 		 * the vendor's ~14-descriptor cadence; dyn_period tightens it to the chosen ALSA period).
 		 * TX carries no periodic marker (vendor TX flags only the last). */

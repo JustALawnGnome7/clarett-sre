@@ -5,8 +5,8 @@
  * Status: control plane only. Creates a mixer-only sound card. PCM/streaming
  * (the data plane) is not implemented yet — see TODO at the end.
  *
- * Reverse-engineering provenance: the spec notes under ../spec (clean-room, from
- * MMIO traces and Focusrite's own device XML; no vendor driver code was used).
+ * Reverse-engineering provenance: clean-room notes from MMIO traces and
+ * Focusrite's own device XML; no vendor driver code was used.
  */
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -31,7 +31,7 @@
 static bool stream_probe;
 module_param(stream_probe, bool, 0444);
 MODULE_PARM_DESC(stream_probe,
-		 "Data-plane experiment: after bring-up, program the §3b ring registers with a driver "
+		 "Data-plane experiment: after bring-up, program the ring registers with a driver "
 		 "buffer and watch for vec1/vec2 IRQs + DMA-pointer movement (off by default).");
 
 static bool blk1_only;
@@ -68,7 +68,7 @@ MODULE_PARM_DESC(tx_trace,
 		 "rate/tearing hypothesis). Writable at runtime via /sys/module/snd_clarett/parameters.");
 
 /*
- * The vendor's arm ritual (data-plane spec §12). EVERY vendor stream capture — 2Pre, 4Pre, 8PreX —
+ * The vendor's arm ritual. EVERY vendor stream capture — 2Pre, 4Pre, 8PreX —
  * opens with exactly FOUR throwaway arms ~13 ms apart, each held ~2 ms then torn down without ever
  * raising a period, followed by a MULTI-SECOND window in which the host touches the BAR not at all,
  * followed by one more arm, byte-identical to the four, which streams. Same bases, same geometry,
@@ -91,7 +91,7 @@ module_param(arm_gap_ms, int, 0644);
 MODULE_PARM_DESC(arm_gap_ms, "Gap between arm_pre throwaway arms (vendor: 12-25 ms).");
 
 /*
- * The BASE_HI question (data-plane spec §13). EVERY vendor arm, on all three models, in all five
+ * The BASE_HI question. EVERY vendor arm, on all three models, in all five
  * captures, writes 0x214 = 2 AND 0x314 = 2. We write upper_32_bits() of our own bus address, which
  * with the default 32-bit mask is always 0. Two readings, never separated:
  *   (a) a genuine address high word — the VM's rings really did live above 8 GB; or
@@ -111,12 +111,12 @@ MODULE_PARM_DESC(base_hi,
 		 "capture writes). Discriminates address-high-word from flags-field.");
 
 /*
- * Buffer-mode override (data-plane spec §13). The engine dereferences the ring contents at 0x210/0x310
+ * Buffer-mode override. The engine dereferences the ring contents at 0x210/0x310
  * as DMA pointers — a flat sample ring handed to it is read as a descriptor table (a zeroed ring faults
  * writing a 16-frame capture fragment to GPA 0: address 0/0x80/.../0x300 = 0x380 = 14ch*4*16, exactly
- * the §9 decode). So NO current model uses flat mode; every model defaults to a descriptor table. This
+ * the decode). So NO current model uses flat mode; every model defaults to a descriptor table. This
  * lever forces flat on regardless, only to re-test the flat hypothesis once the pre-arm pmemsave capture
- * (spec §13) has shown what the VM actually seeds the ring with.
+ * has shown what the VM actually seeds the ring with.
  */
 /*
  * Skip the vendor bring-up at probe. Default off — probe ALWAYS arms (July 23 2026).
@@ -145,10 +145,10 @@ static int force_flat = -1;
 module_param(force_flat, int, 0444);
 MODULE_PARM_DESC(force_flat,
 		 "Override buffer mode: -1 = model default (descriptor for all current models), 0 = force "
-		 "descriptor table, 1 = force flat sample ring (faults on a zeroed ring — see spec §13).");
+		 "descriptor table, 1 = force flat sample ring (faults on a zeroed ring).");
 
 /*
- * RX fragment slot stride (even-channel capture drift, spec §15 — FIXED). The capture drifted its channel
+ * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
  * alignment by 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our
  * RX buffer was ONE contiguous coherent region, so the engine streamed across fragment boundaries and the
  * page drift accumulated. Giving each RX fragment its own page-safe SLOT (a power of two, so it divides the
@@ -200,7 +200,7 @@ MODULE_PARM_DESC(early_msi,
 		 "Enable MSI in the device's config space BEFORE any BAR access, matching the vendor's "
 		 "attach order (cold trace: MSI enable precedes the first pre-mailbox BAR write). The old "
 		 "order left MSI off through the whole arm + seed — a device-visible pre-command-#0 "
-		 "difference (wall spec §7). Default 1; set 0 for the old late enable (A/B).");
+		 "difference. Default 1; set 0 for the old late enable (A/B).");
 
 static bool monitor_enables = true;
 module_param(monitor_enables, bool, 0444);
@@ -225,14 +225,14 @@ MODULE_PARM_DESC(premailbox_reads,
 		 "Replay the vendor's exact pre-mailbox BAR0 READ sequence at attach (caps/serial/fw-header/"
 		 "cause-blocks/0x514/0x58c) before the first FCP command. Motivated by the July-10 2026 cold gdb "
 		 "ladder: the working device answers error=0 from mailbox command #0, so the accept-vs-refuse gate "
-		 "is set PRE-mailbox (manifestation-wall §7). Pre-mailbox WRITES already match FC byte-for-byte; "
+		 "is set PRE-mailbox. Pre-mailbox WRITES already match FC byte-for-byte; "
 		 "this read set is the sole remaining host-visible pre-mailbox difference. Default true; set 0 for "
 		 "the old (walled) read-minimal probe to A/B whether the reads flip GET_DATA to error=0.");
 
 static bool error_probe;
 module_param(error_probe, bool, 0444);
 MODULE_PARM_DESC(error_probe,
-		 "Diagnostic (manifestation-wall §7): after bring-up, send a few deliberately MALFORMED FCP "
+		 "Diagnostic: after bring-up, send a few deliberately MALFORMED FCP "
 		 "commands (bad offset, zero length, unknown opcode) alongside a valid GET_DATA and log each "
 		 "response's DMA error word (resp+8) + size. If the malformed commands return a DIFFERENT code "
 		 "than the valid one's error=3, the device parses per-command (error=3 = a specific semantic "
@@ -362,7 +362,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 }
 
 /*
- * Timing exercise (wall spec §7): every "known-good" vendor trace was captured under
+ * Timing exercise: every "known-good" vendor trace was captured under
  * x-no-mmap MMIO trapping, which dilates every BAR access to ~20 us; our replay issues
  * the same byte sequence at native speed (~100 ns/access). The trace records the byte
  * order, not which host actions were semantically conditioned on asynchronous device
@@ -400,12 +400,12 @@ static void clarett_hw_init(struct clarett *c)
 	/*
 	 * The pre-mailbox writes below (0x510/0x500 device-enable, DMA-response address, 0x104 cause latch)
 	 * match FC's cold attach byte-for-byte. What did NOT match, until premailbox_reads, is the vendor's
-	 * READ set at attach: the cold gdb ladder (2026-07-10; manifestation-wall §7) proved the working
+	 * READ set at attach: the cold gdb ladder (2026-07-10) proved the working
 	 * device already answers FCP error=0 from mailbox command #0, so the accept/refuse gate is decided
 	 * BEFORE the first command — and the only host-visible pre-mailbox difference is that the vendor
 	 * reads caps/0x4/0x8/0x514/0x58c, all four cause blocks, and the full fw-info header, which our
 	 * read-minimal probe never issued. This branch replays the vendor's EXACT pre-mailbox read+write
-	 * order (from /tmp/ladder_trace.log) in case a status/version/read-to-clear-cause read is part of an
+	 * order (from the cold gdb ladder trace) in case a status/version/read-to-clear-cause read is part of an
 	 * attach handshake. readl() returns are discarded except serial/fw (kept for dev_info).
 	 *
 	 * INTER-ACCESS TIMING is matched to the vendor too. The cold-ladder trace shows the vendor spaces
@@ -414,7 +414,7 @@ static void clarett_hw_init(struct clarett *c)
 	 * in the trace is x-no-mmap trap overhead — a VM measurement artifact (~100 ns on native hardware) —
 	 * so those accesses are left back-to-back. Gaps vary boot-to-boot with scheduling; these are the
 	 * measured cold-boot representatives. Tests whether the pre-mailbox gate is timing-sensitive (the read
-	 * set alone, issued back-to-back, did not flip it — §7).
+	 * set alone, issued back-to-back, did not flip it).
 	 */
 	if (premailbox_reads) {
 		u32 r000, r004, r008, r514, r58c_a, r58c_b;
@@ -502,20 +502,15 @@ static void clarett_hw_init(struct clarett *c)
 }
 
 /* De-blobbed per-model bring-up (clarett_arm_<model>[] typed step lists; the builder is
- * clarett_arm_emit() in clarett_arm.h). Generated by fcp_decode.py --emit-deblob from the
- * capture-derived clarett_init_<model>.h intermediates; payloads verified byte-identical to the
- * vendor capture by --deblob-check + tools/test_deblob.c. */
+ * clarett_arm_emit() in clarett_arm.h). Generated from the vendor MMIO bring-up captures;
+ * payloads verified byte-identical to the vendor capture offline. */
 #include "clarett_arm_8prex.h"
 #include "clarett_arm_2pre.h"
 #include "clarett_arm_4pre.h"
 #include "clarett_arm_8pre.h"
-/* clarett_mux_band0_8pre[]: constructed from XML; the captured routing (SET_MUX bands 0/1/2) is
- * available in 8pre_boot_to_stream.log for verification against this table. */
-#include "clarett_mux_8pre.h"
 
 /*
- * Replay the vendor device bring-up captured at attach from a freshly power-cycled device
- * (8prex_full_init_mute.log), regenerated into clarett_init_8prex.h by `fcp_decode.py --emit-init`:
+ * Replay the vendor device bring-up captured at attach from a freshly power-cycled device:
  * every non-meter command up to the monitor-mute write. Self-boot does NOT arm config access
  * (GET_DATA fails); this host init arms it. Must run against a device in its fresh power-on state —
  * re-initializing an already-armed device wedges it instead.
@@ -543,39 +538,6 @@ static void clarett_hw_init(struct clarett *c)
  * runtime routing or mixer edit issues, so this is an ordinary operation on an armed session —
  * unlike a full re-init, which is documented to wedge GET_DATA on an already-armed device.
  */
-/*
- * Push a model's band-0 router table for a model with no captured bring-up blob. Same command a
- * runtime routing edit issues: SET_MUX{u32 band, u32 entry[]}, entry = (src << 12) | dst, one per
- * destination. Without it the device keeps the arming model's routing, whose destination pins are
- * the wrong ones for this hardware, and fcp-server then declines to create any routing control.
- */
-static int clarett_push_mux_band0(struct clarett *c)
-{
-	const struct clarett_model *m = c->model;
-	size_t len = 4 + (size_t)m->n_mux_band0 * 4;
-	u8 *buf;
-	int i, err;
-
-	if (WARN_ON(len > CLARETT_MBOX_DATA_MAX))
-		return -EINVAL;
-
-	buf = kzalloc(len, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	clarett_put_le32(buf, 0);		/* band 0 */
-	for (i = 0; i < m->n_mux_band0; i++)
-		clarett_put_le32(buf + 4 + i * 4,
-				 (u32)m->mux_band0[i].src << 12 | m->mux_band0[i].dst);
-
-	err = clarett_fcp(c, FCP_SET_MUX, buf, len);
-	kfree(buf);
-
-	dev_info(&c->pci->dev, "%s: pushed constructed band-0 routing (%d entries) -> %d\n",
-		 m->name, m->n_mux_band0, err);
-	return err;
-}
-
 static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geometry_only);
 
 /*
@@ -588,7 +550,7 @@ static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geo
  *
  * NOTE (July 30 2026): this was built to test the hypothesis that the 8PreX 28ch->4 playback FOLD was a
  * stale-2Pre-geometry declaration. That hypothesis was WRONG — the fold was TX-fragment page-alignment
- * (0x700 straddles the 4 KB page), fixed by tx_slot page-safe slotting (spec data-plane §16). Re-declaring
+ * (0x700 straddles the 4 KB page), fixed by tx_slot page-safe slotting. Re-declaring
  * geometry does NOT fix the fold (hardware-confirmed). Kept as a harmless off-by-default diagnostic lever.
  */
 static bool rearm_geometry;
@@ -596,7 +558,7 @@ module_param(rearm_geometry, bool, 0644);
 MODULE_PARM_DESC(rearm_geometry,
 		 "Diagnostic (default off): after detection, re-declare the detected model's stream geometry "
 		 "(re-run its bring-up minus the GET_DATA/SET_DATA config read/writeback). Does NOT fix the "
-		 "8PreX playback fold (that was TX fragment page-alignment; see tx_frag_pad / spec §16).");
+		 "8PreX playback fold (that was TX fragment page-alignment; see tx_frag_pad).");
 
 static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with,
 					bool preserve_routing)
@@ -609,7 +571,7 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 
 	/*
 	 * Geometry re-declare (opt-in diagnostic; does NOT fix the 8PreX playback fold — that was TX fragment
-	 * page-alignment, see rearm_geometry note above / spec §16). clarett_arm_device threads preserve_routing
+	 * page-alignment, see rearm_geometry note above). clarett_arm_device threads preserve_routing
 	 * through (skips SET_MUX/SET_MIX when set) and geometry_only skips the config read/writeback that would
 	 * wedge GET_DATA. Only models with a captured blob can re-arm (all four now have one).
 	 */
@@ -632,12 +594,6 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
 		dev_info(&c->pci->dev,
 			 "kept live routing after detect (%s default tables not applied; armed as %s)\n",
 			 m->name, armed_with->name);
-		return;
-	}
-
-	if (!m->arm_seq) {			/* no captured bring-up (guard for a future XML-only model) */
-		if (m->mux_band0)
-			clarett_push_mux_band0(c);
 		return;
 	}
 
@@ -665,7 +621,7 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
  * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says
  * no category is supported even for DATA, while a DATA-category GET_DATA is what just answered. A module
  * reload clears it, so it is host/session state, not the device losing its arm; power-cycling is not
- * needed. Trigger not yet isolated. tools/fcp_cap_read.c is the one-command check.
+ * needed. Trigger not yet isolated. A CAP_READ bench tool is the one-command check.
  *
  * There is deliberately no "is it already armed?" probe here any more: nothing host-visible distinguishes
  * a fresh device from an armed one (see the skip_arm comment), and guessing wrong silently costs the
@@ -839,7 +795,7 @@ static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geo
 }
 
 /*
- * Error-code discrimination probe (manifestation-wall §7). Send a valid GET_DATA plus three
+ * Error-code discrimination probe. Send a valid GET_DATA plus three
  * deliberately malformed commands and log each response's DMA error word (resp+8) and size.
  * Our walled device returns error=3/size=0 to valid commands; if the malformed ones return the
  * SAME (error=3/size=0) the device blanket-refuses the session out-of-band (not parsing our
@@ -983,7 +939,7 @@ static int clarett_seed_shadow(struct clarett *c)
 /*
  * Make the two monitor outputs follow the monitor section's Mute/Dim. Without these command-3
  * enable bits, writing the global Mute (24) / Dim (28) flips the master flag but no output obeys
- * it (control-plane §5). RMW from the seeded shadow so the other outputs' enable bits are kept;
+ * it. RMW from the seeded shadow so the other outputs' enable bits are kept;
  * idempotent — clarett_write_bits() no-ops if the bits are already set.
  */
 static int clarett_enable_monitor_hw_controls(struct clarett *c)
@@ -1220,7 +1176,7 @@ static int clarett_stream_service(void *data)
 			u32 step;
 
 			/* First events of a session at info: raw counter values (2Pre steps +0xd/event,
-			 * wraps at a small modulus — the frame advance is ctr-delta driven, spec §14). */
+			 * wraps at a small modulus — the frame advance is ctr-delta driven). */
 			if (atomic_read(&c->stream_periods) < 8)
 				dev_info(&c->pci->dev, "stream-ev[%d]: 0x300=0x%08x\n",
 					 atomic_read(&c->stream_periods), c2);
@@ -1330,7 +1286,7 @@ static int clarett_stream_service(void *data)
 }
 
 /*
- * Arm the data-plane engine over caller-provided descriptor-table bases (data-plane spec §3b/§9).
+ * Arm the data-plane engine over caller-provided descriptor-table bases.
  * r0 = block-0 (TX/playback) table base, r1 = block-1 (RX/capture) table base; pass 0 to skip a block
  * (capture-only uses r0=0, the proven blk1_only config). Replays SET_CLOCK, the 12-register stream
  * arm (base-before-enable), and the DATA_CMD{5} commit. Sleeps (mailbox FCP) — call from prepare or
@@ -1343,7 +1299,7 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 
 	/*
 	 * Faithful replica of the VM's register-only arm — the exact 14-write sequence that brings 0x300 alive
-	 * (2pre_streamstart.log @line 29158: 0x110=0 stop, then 0x100=0xf, 0x108, 0x20c=1, per-block geometry,
+	 * (from a 2Pre stream-start capture: 0x110=0 stop, then 0x100=0xf, 0x108, 0x20c=1, per-block geometry,
 	 * 0x10c, 0x110=7, and 0x300 immediately reads 0x8000000c, ticking +0xc/period). Two corrections vs the
 	 * old order: (1) ack the cause block (0x100=0xf) first — we previously only READ 0x100, never wrote it;
 	 * (2) the global enable (0x20c=1) comes BEFORE the geometry/base writes, as the VM does (DMA only starts
@@ -1480,8 +1436,8 @@ void clarett_engine_run(struct clarett *c)
 }
 
 /*
- * Data-plane engine-start probe (data-plane spec §9, opt-in via stream_probe). Replays the captured
- * §3b stream-start register sequence, but now with a valid descriptor table per §3c: 0x210/0x214 point
+ * Data-plane engine-start probe (opt-in via stream_probe). Replays the captured
+ * stream-start register sequence, but now with a valid descriptor table: 0x210/0x214 point
  * at a zeroed-terminated array of 8-byte bus addresses, each naming one STREAM_SIZE_VAL fragment of our
  * coherent buffer. Then watches whether the engine runs (vec1/vec2 IRQs, advancing pointer, the device
  * writing the capture buffer). NOT a PCM implementation. The point is to test whether starting the
@@ -1502,7 +1458,7 @@ int clarett_engine_start(struct clarett *c)
 	if (!c->stream_buf)
 		return -ENOMEM;
 
-	/* Block 0 (vec1) = playback/TX, block 1 (vec2) = capture/RX (spec §3c). */
+	/* Block 0 (vec1) = playback/TX, block 1 (vec2) = capture/RX. */
 	tx_tbl = (__le64 *)c->stream_buf;
 	rx_tbl = (__le64 *)((u8 *)c->stream_buf + ring);
 	tx_smp = c->stream_dma + tbl;
@@ -1944,7 +1900,7 @@ static void clarett_meter_work(struct work_struct *work)
  * vendor-observed 0x406+MSI-on state. The vendor enables MSI BEFORE its first BAR access
  * (cold trace: MSI enable @.068, first pre-mailbox BAR write @.082, doorbell after) — our
  * old order left MSI off for the whole arm + seed, a device-visible pre-command-#0
- * difference (wall spec §7). Handlers hook later (clarett_setup_irq); the mailbox is
+ * difference. Handlers hook later (clarett_setup_irq); the mailbox is
  * polled, so unhandled-but-enabled MSI in between is harmless (edge-triggered). */
 static void clarett_enable_msi(struct clarett *c)
 {
@@ -1963,7 +1919,7 @@ static void clarett_enable_msi(struct clarett *c)
 		return;
 	}
 	c->n_vec = nvec;
-	/* Always record the achieved count: 4/4 matches FC (session_notes.log: Enable+ Count=4/4);
+	/* Always record the achieved count: 4/4 matches FC (Enable+ Count=4/4);
 	 * fewer means the platform (typically vfio passthrough) collapsed them and causes funnel to
 	 * the allocated vectors. Logged unconditionally so every run pins down what it actually got. */
 	dev_info(&pci->dev, "MSI: got %d/%d vectors%s\n", nvec, CLARETT_NUM_VECTORS,
@@ -2125,7 +2081,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		err = -ENOMEM;
 		goto err_free;
 	}
-	/* The §7 >4G lead: every working FC capture programs 0x414 != 0 (buffer above
+	/* The >4G lead: every working FC capture programs 0x414 != 0 (buffer above
 	 * 4 GiB); log our address so the A/B is visible without trace_regs. */
 	dev_info(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
 		 &c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
@@ -2146,10 +2102,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled.
 	 *
 	 * The bring-up is model-agnostic: arm as the id_table default, detect below, then hand the
-	 * detected model's routing back. All four models now carry a captured blob (the 8Pre gained
-	 * one Aug 6 2026), so the fallback below no longer fires for any shipping model — it stays as
-	 * a guard for a future XML-only model that would otherwise replay an empty sequence and arm
-	 * nothing. Forcing model=<x> arms with THAT model's own full blob.
+	 * detected model's routing back. All four models carry a captured blob (the 8Pre gained one
+	 * Aug 6 2026), so this always arms with a real bring-up. Forcing model=<x> arms with THAT
+	 * model's own full blob.
 	 */
 	armed_with = c->model;
 	if (!armed_with->arm_seq) {
@@ -2212,7 +2167,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
 	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
-	/* RX fragment slot stride (spec §15): default = page-safe pow2 (fixes the even-channel drift);
+	/* RX fragment slot stride: default = page-safe pow2 (fixes the even-channel drift);
 	 * 0 = contiguous (old); >0 = audio + manual padding. */
 	{
 		u32 frag = clarett_frag_bytes(c->model->capture_channels);
@@ -2452,7 +2407,7 @@ static const struct clarett_preamp clarett_8prex_preamps[] = {
 
 /*
  * Per-channel stream-routing CONFIG_PUSH ids, DERIVED (not captured) from the global source-id
- * enumeration proven byte-for-byte on the 2Pre AND 4Pre captures (2pre_streamstart.log): the id space
+ * enumeration proven byte-for-byte on the 2Pre AND 4Pre captures: the id space
  * is model-independent with per-category reserved blocks —
  *   Analogue N -> 0x0d + (N-1)   (block reserves 8: 0x0d..0x14)
  *   S/PDIF   N -> 0x15 + (N-1)   (0x15..0x16)
@@ -2502,7 +2457,7 @@ static const struct clarett_model clarett_8prex = {
 
 /*
  * Clarett 2Pre (Thunderbolt). Control-plane values from the XML diff against the 8PreX
- * (vendor-reference/Devices/Clarett 2Pre.xml): shared offsets/commands, the first 4 of the 8PreX output
+ * (Focusrite's Clarett 2Pre device XML): shared offsets/commands, the first 4 of the 8PreX output
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
  * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
@@ -2515,7 +2470,7 @@ static const struct clarett_model clarett_8prex = {
  * the ring base as a descriptor table (the 0xAA flat-buffer attempt faulted at 0xaaaa.. — descriptor mode
  * is the engine's default and is not flipped by the stream-config FCP handshake we can replay). Asymmetric
  * TX 4ch / RX 14ch: periods 0x40 / 0xe0, descriptor fragments 0x100 / 0x700 (clarett_frag_bytes). The 2Pre's
- * descriptor geometry is INFERRED (the VM uses flat mode for it); see clarett.h / spec §9 step 5.
+ * descriptor geometry is INFERRED (the VM uses flat mode for it); see clarett.h.
  */
 /* Names mirror scarlett2's Clarett 2Pre USB line_out_descrs (Monitor L/R, Headphones L/R);
  * the "Line NN" number is 1-based output index, matching scarlett2's "Line %02d (%s)". */
@@ -2539,8 +2494,8 @@ static const struct clarett_preamp clarett_2pre_preamps[] = {
 	{ clarett_mode_li, clarett_mode_li_vals, 2 },
 };
 
-/* Per-channel stream-routing CONFIG_PUSH ids, captured verbatim from the 2Pre rate-change handshake
- * (2pre_streamstart.log): 4 TX (playback) + 14 RX (record) channels, re-pushed at PCM prepare. */
+/* Per-channel stream-routing CONFIG_PUSH ids, captured verbatim from the 2Pre rate-change handshake:
+ * 4 TX (playback) + 14 RX (record) channels, re-pushed at PCM prepare. */
 static const u8 clarett_2pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e };
 static const u8 clarett_2pre_stream_rx[] = {
 	0x0d, 0x0e, 0x15, 0x16, 0x27, 0x28, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
@@ -2559,7 +2514,7 @@ static const struct clarett_model clarett_2pre = {
 	.playback_channels = 4,			/* playback pin count */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
-	/* Descriptor mode (spec §13): the "2Pre wants flat" hypothesis was falsified on hardware — the engine
+	/* Descriptor mode: the "2Pre wants flat" hypothesis was falsified on hardware — the engine
 	 * dereferences the ring as a table, so a flat ring faults writing a 16-frame fragment to GPA 0. The
 	 * 2Pre "flat audio" RAM dump was the fragment buffers, not the table. flat_buffer stays false; re-test
 	 * only via force_flat=1 after the pre-arm pmemsave shows the real seed. */
@@ -2572,10 +2527,9 @@ static const struct clarett_model clarett_2pre = {
 };
 
 /*
- * Clarett 4Pre (Thunderbolt). Control plane from vendor-reference/Devices/Clarett 4Pre.xml [XML],
- * cross-checked against a live FC capture (4pre_boot_to_stream_end.log) [TRACE]. Auto-detected after the
+ * Clarett 4Pre (Thunderbolt). Control plane from Focusrite's Clarett 4Pre device XML [XML],
+ * cross-checked against a live FC boot-to-stream capture [TRACE]. Auto-detected after the
  * arm by its (8,20) geometry, live-confirmed July 17 2026 (clarett_detect_model); model=4pre forces it.
- * See spec/provenance/clarett-control-plane.md §4 and -data-plane.md §3b.
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
@@ -2605,8 +2559,8 @@ static const struct clarett_preamp clarett_4pre_preamps[] = {
 	{ NULL, NULL, 0 },
 };
 
-/* [TRACE] per-channel stream-routing CONFIG_PUSH ids, captured from the 4Pre rate handshake
- * (4pre_boot_to_stream_end.log #674-#702): 8 TX (playback) + 20 RX (record), re-pushed at PCM prepare. */
+/* [TRACE] per-channel stream-routing CONFIG_PUSH ids, captured from the 4Pre rate handshake:
+ * 8 TX (playback) + 20 RX (record), re-pushed at PCM prepare. */
 static const u8 clarett_4pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32 };
 static const u8 clarett_4pre_stream_rx[] = {
 	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
@@ -2636,10 +2590,11 @@ static const struct clarett_model clarett_4pre = {
 
 /*
  * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
- * vendor-reference/Devices/Clarett 8Pre.xml [XML]. We have no 8Pre trace capture, so this descriptor
- * is control-plane only: it registers the mixer but has no bring-up replay or stream-routing ids, so it
- * will NOT arm config access (GET_DATA wedged) or stream PCM until an 8Pre boot/stream is captured (then
- * emit clarett_init_8pre.h via fcp_decode.py --emit-init --init-model 8pre and fill the stream id tables).
+ * Focusrite's Clarett 8Pre device XML [XML]. A bring-up capture (Aug 6 2026, clarett_arm_8pre.h) and
+ * the derived stream-routing ids are both in place, so this descriptor arms config access (GET_DATA
+ * works — hardware-verified via model=8pre) and registers the full mixer. What remains UNVERIFIED is
+ * PCM streaming on real 8Pre hardware: the channel counts are [XML]-derived rather than traced, and no
+ * capture/playback has been run end-to-end on an 8Pre (unlike the confirmed 2Pre/4Pre/8PreX).
  *
  * Differences from the 8PreX [XML] — these are physical: the 8Pre uses combo XLR/TRS jacks (the jack
  * auto-detects Mic when an XLR is inserted), whereas the 8PreX has SEPARATE XLR + 1/4" ports per input
@@ -2703,18 +2658,12 @@ static const struct clarett_model clarett_8pre = {
 	.stream_rx_ids = clarett_8pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
 	/*
-	 * Bring-up captured Aug 6 2026 (captures/8pre_boot_to_stream.log) — the 8Pre now arms with its
+	 * Bring-up captured Aug 6 2026 — the 8Pre now arms with its
 	 * OWN blob rather than falling back to the id_table default. Structure matches the 8PreX arm
 	 * (INIT_2x6, 8 KB config read/writeback, SET_MIXx16, SET_MUXx3); see clarett_arm_8pre.h.
 	 */
 	.arm_seq = clarett_arm_8pre,
 	.n_arm_steps = ARRAY_SIZE(clarett_arm_8pre),
-	/*
-	 * Routing table is constructed from XML (clarett_mux_8pre.h); the captured SET_MUX bands in the
-	 * boot trace are available to verify it against live hardware.
-	 */
-	.mux_band0 = clarett_mux_band0_8pre,
-	.n_mux_band0 = ARRAY_SIZE(clarett_mux_band0_8pre),
 };
 
 static const struct pci_device_id clarett_ids[] = {
