@@ -75,6 +75,16 @@ static int clarett_hwdep_cmd(struct clarett *c, struct fcp_cmd __user *arg)
 	    clarett_get_le32((const u8 *)data + 4) == 1)
 		clarett_meter_source_follow(c, ((const u8 *)data)[8]);
 
+	/* Persist fcp-server's config changes to flash. A control change arrives as SET_DATA (stage the
+	 * bytes) + DATA_CMD{activate} (commit live). The device auto-persists only some of its config
+	 * (routing survives a power cycle) and not the rest (output gains, S/PDIF input source revert to
+	 * the flash default), and this relay does not otherwise flush flash — so schedule the driver's
+	 * debounced NVRAM save on the commit, mirroring the in-kernel write path. The DATA_CMD is that
+	 * commit step; skip the persist opcode itself so a relayed save can't reschedule endlessly. */
+	if (cmd.opcode == FCP_DATA_CMD && cmd.req_size >= 4 &&
+	    clarett_get_le32(data) != FCP_ACTIVATE_PERSIST)
+		clarett_schedule_persist(c);
+
 	if (cmd.resp_size && copy_to_user(arg->data, data, cmd.resp_size))
 		err = -EFAULT;
 out:

@@ -106,7 +106,9 @@ The interface's DIN MIDI ports appear as a standard ALSA rawmidi device.
 ## Settings persistence
 
 The device **owns its settings** — they live in its own NVRAM and survive power cycles,
-reboots, and moving to another host. The driver auto-persists your changes (debounced).
+reboots, and moving to another host. Every control change you make — mixer, routing, preamp,
+output gain, S/PDIF source — is committed to that NVRAM by the driver on a short debounce, so it
+sticks across a power cycle without the host having to re-apply it.
 
 Because the device already restores its own state, **disable `alsactl` restore for this
 card** so it doesn't overwrite that state on every load:

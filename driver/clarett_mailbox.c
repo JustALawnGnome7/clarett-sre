@@ -407,9 +407,26 @@ int clarett_data_cmd(struct clarett *c, u32 activate)
 	return clarett_fcp(c, FCP_DATA_CMD, buf, 4);
 }
 
+/*
+ * Schedule the debounced NVRAM commit (a single DATA_CMD{FCP_ACTIVATE_PERSIST}) so a config change
+ * survives a power cycle — the device owns its state (upstream scarlett2 policy). mod_delayed_work
+ * coalesces a burst (e.g. a slider drag) into one save CLARETT_SAVE_DELAY_MS after the LAST change.
+ * Gated on ctl_ready: the arm replay and the probe-time monitor-enable RMW run before the card is up
+ * and must NOT commit flash on every load. Called both from the in-kernel write path below and from
+ * the hwdep relay when fcp-server commits a config change (clarett_hwdep_cmd) — the device
+ * auto-persists only some config (routing) and not the rest (output gains, S/PDIF source), so
+ * without this the latter revert to the flash default on a power cycle.
+ */
+void clarett_schedule_persist(struct clarett *c)
+{
+	if (READ_ONCE(c->ctl_ready))
+		mod_delayed_work(system_wq, &c->save_work,
+				 msecs_to_jiffies(CLARETT_SAVE_DELAY_MS));
+}
+
 /* Convenience: write a single config byte and commit it. The commit (DATA_CMD{activate})
  * applies the change live but RAM-only — it is NOT persisted across a power cycle. Persistence
- * is a separate DATA_CMD{FCP_ACTIVATE_PERSIST} (command 5), intentionally not issued here. */
+ * is a separate DATA_CMD{FCP_ACTIVATE_PERSIST} (command 5), scheduled here on a debounce. */
 static int __clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activate, bool save)
 {
 	int err;
@@ -427,13 +444,10 @@ static int __clarett_write_u8(struct clarett *c, u32 offset, u8 val, u32 activat
 	c->shadow[offset] = val;
 	set_bit(offset, c->shadow_known);	/* write-through: the shadow now matches hardware */
 
-	/* Persist to the device's NVRAM on a debounce so the change survives a power cycle (device
-	 * owns the state). Gated on ctl_ready: the arm replay and the probe-time monitor-enable RMW
-	 * run before the card is up and must NOT trigger a flash write on every load. mod_delayed_work
-	 * pushes the single save out to CLARETT_SAVE_DELAY_MS after the LAST change, coalescing bursts. */
-	if (save && READ_ONCE(c->ctl_ready))
-		mod_delayed_work(system_wq, &c->save_work,
-				 msecs_to_jiffies(CLARETT_SAVE_DELAY_MS));
+	/* Persist to the device's NVRAM on a debounce so the change survives a power cycle (device owns
+	 * the state); nosave writes are mirrors, not user intent, and skip it. See the helper. */
+	if (save)
+		clarett_schedule_persist(c);
 	return 0;
 }
 
