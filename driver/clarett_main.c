@@ -2479,6 +2479,9 @@ static const struct clarett_model clarett_8prex = {
 	.n_meter_sources = ARRAY_SIZE(clarett_8prex_meter_sources),
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
+	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
+						 * correct pitch at 96k and 192k, full 28ch width, no glitches. Rate-
+						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
 	.stream_frag = STREAM_SIZE_VAL,
 	.stream_tx_ids = clarett_8prex_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_8prex_stream_tx),
@@ -2615,6 +2618,9 @@ static const struct clarett_model clarett_4pre = {
 	.has_spdif_source = true,
 	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
 	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
+	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
+						 * correct pitch at 96k and 192k, full 20ch width, no glitches. Rate-
+						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
 	.stream_frag = 0,			/* PCM uses clarett_frag_bytes() per direction (asymmetric) */
 	.stream_tx_ids = clarett_4pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_4pre_stream_tx),
