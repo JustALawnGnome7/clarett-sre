@@ -2686,8 +2686,13 @@ static const struct clarett_model clarett_8pre = {
 	.in_prefix = "Line In",			/* match scarlett2 Clarett 8Pre USB */
 	.mode_label = "Level",
 	.has_spdif_source = true,
-	.capture_channels = 20,			/* [XML] 18 record + 2 loopback (untraced; no 8Pre capture) */
+	.capture_channels = 20,			/* 18 record + 2 loopback. Width HW-confirmed: capture clocks at
+						 * full 20ch with analogue-1 on ch0; per-channel map beyond analogue [XML]. */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
+	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
+						 * the correct pitch at 96k and 192k, full 20ch width, no glitches.
+						 * Rate-independent geometry (no SMUX shrink), as on the 2Pre. Playback at
+						 * high speed follows the shared engine but is not separately verified here. */
 	.stream_frag = 0,
 	.stream_tx_ids = clarett_8pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_8pre_stream_tx),
