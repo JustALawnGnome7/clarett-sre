@@ -33,16 +33,24 @@ acknowledgement, and characterize failures by their onset, not their endpoint.**
 
 ## Bring-up and probe
 
-`clarett_arm_device()` replays a de-blobbed typed init table at probe (per-model
-`clarett_arm_<model>.h`: a `CONFIG_PUSH` burst, subsystem enables, an 8 KB config sync, and
-`SET_MIX` + `SET_MUX`). The probe **always** arms — with the id_table default — then detects
-the real model and re-applies its routing, while **preserving any live routing** a configured
-device already holds (`clarett_band0_routed()` reads band-0 first; if it is populated, the
-`SET_MUX`/`SET_MIX` steps are skipped).
+By default the probe **does not arm** the device. A previously-armed unit self-arms across a
+power cycle — its config reads, input metering, and control writes all work with no host bring-up
+(the arm state is flash-persisted). So probe waits for that flash-persisted session to answer
+(`clarett_detect_model()` polls `GET_7.1` for up to `wait_ready_ms`), detects the model from it,
+and leaves the device's own routing untouched.
 
-The replay is only *needed* on a genuinely virgin/unarmed unit — a self-booted virgin device
-rejects `GET_DATA` until armed. A previously-armed unit self-arms across a power cycle (arm
-state is flash-persisted), so on any used device the replay is a harmless no-op.
+If the device never answers within the settle budget — a cold Thunderbolt attach can race device
+readiness (command #0's response may not land) — probe **fails loudly** (`-ENODEV`, no card)
+rather than registering a placeholder, so the condition gets attention. A used device usually
+just needs a reload; a genuinely virgin/never-armed unit (which rejects `GET_DATA` until armed)
+must opt in with **`force_arm=1`**.
+
+Only under `force_arm=1` does `clarett_arm_device()` replay the de-blobbed typed init table
+(per-model `clarett_arm_<model>.h`: a `CONFIG_PUSH` burst, subsystem enables, an 8 KB config sync,
+and `SET_MIX` + `SET_MUX`). It arms with the id_table default, detects the real model, and
+re-applies its routing — while **preserving any live routing** a configured device already holds
+(`clarett_band0_routed()` reads band-0 first; if it is populated, the `SET_MUX`/`SET_MIX` steps
+are skipped).
 
 At probe the driver also seeds its config shadow from the device (`GET_DATA(24,92)`) and
 **force-enables hardware Mute/Dim for Monitor Out 1-2** (bytes 72/73, command 3) so the global
@@ -101,10 +109,11 @@ re-audit.
 The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` and presents a byte-identical
 **pre-mailbox** surface — every MMIO register, config-space read, the fw-info header, and even
 the dummy serial are identical across models (verified on real 2Pre/4Pre/8PreX hardware). But
-once armed, the device reports its own stream geometry: `GET_7.1{band 0}` answers
-`{u16 playback_channels, u16 capture_channels}`, a pair unique per model (live-confirmed
-`(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). The bring-up itself is model-agnostic (the
-same blob armed all the bench units), so the driver arms first and asks second.
+from its flash-persisted (self-armed) state the device reports its own stream geometry:
+`GET_7.1{band 0}` answers `{u16 playback_channels, u16 capture_channels}`, a pair unique per
+model (live-confirmed `(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). Probe reads this directly
+to detect the model — no host bring-up needed, since a used device self-arms from flash. (Under
+`force_arm=1` the model-agnostic bring-up runs first and detection follows.)
 
 Because the PCI id is shared line-wide, the detected model is published for userspace at
 `/proc/asound/card<N>/clarett` as a stable, greppable slug — the key `fcp-server` uses to
@@ -131,9 +140,9 @@ the input/output control map is `[XML]` (Analogue 1-2 Line/Inst + Air, 3-4 Air-o
 six output gains @ 32/33/36/37/40/41), while the channel counts (8 playback / 20 record), the
 bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
 
-The **8Pre** (distinct from the 8PreX) gained a bring-up capture, so it arms like the other
-models: `clarett_arm_8pre.h` is replayed at probe (hardware-verified via `model=8pre`), arming
-config access and carrying its own captured default routing. Its input/output layout is from
+The **8Pre** (distinct from the 8PreX) gained a bring-up capture, so it can arm like the other
+models under `force_arm=1`: `clarett_arm_8pre.h` carries its bring-up (hardware-verified via
+`model=8pre`), arming config access and its own captured default routing. Its input/output layout is from
 the XML: combo XLR/TRS jacks (Mic is auto-detected by the jack, so the software mode is
 Line/Inst only, on inputs 1-2; 3-8 are air-only) unlike the 8PreX's separate ports, outputs
 matching the 8PreX (10 gains), and `(20, 20)` streams for detection. Its stream-routing ids are
@@ -225,6 +234,11 @@ The operationally relevant ones:
 - `enable_pcm` (default on) — register the PCM devices; `0` for a mixer-only card.
 - `enable_midi` — register the DIN MIDI rawmidi.
 - `notify_ms` — rate limit for the front-panel notification relay.
+- `force_arm` (default off) — run the vendor bring-up at probe. Only needed for a
+  virgin/never-armed unit; used devices self-arm from flash. With it off, probe waits for the
+  flash-persisted session and fails loudly if the device never becomes ready, rather than arming.
+- `wait_ready_ms` (default 2000) — settle budget to wait for the flash-persisted session to
+  answer at probe before giving up. A cold Thunderbolt attach can race device readiness.
 
 Several parameters are A/B levers retained from localizing the control-plane crossing (e.g.
 `resp_prefill`, `premailbox_reads`, `early_msi`, `mmio_dilate_us`) and from the data-plane

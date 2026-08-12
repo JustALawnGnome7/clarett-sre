@@ -303,42 +303,33 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     on the 2Pre: no front-panel Mode/Air on the Clarett TB units; the 8PreX front panel is unenumerated).
     **Method note:** `cat /proc/asound/card*/pcm*/sub*/status` is the one-line check for "is something
     holding a stream open" — this whole symptom was one `RUNNING` on `pcm0p`.
-- **Session bring-up IS required on a fresh device** (corrects an earlier note). Firmware *code*
-  self-boots from flash, but a virgin/unarmed device rejects `GET_DATA` until the host replays
-  the 232-command vendor init — now a **de-blobbed typed step list** (`driver/clarett_arm_8prex.h`,
-  built by `clarett_arm.h`'s `clarett_arm_emit()`; generated `fcp_decode.py --emit-init | --emit-deblob`
-  from `8prex_full_init_mute.log`, byte-identical to the capture): `CONFIG_PUSH`×122, subsystem enables
-  `0x000001`, count queries, 8 KB config read/writeback, `SET_MIX`×16 + `SET_MUX`×3. `clarett_arm_device()`
-  replays it at probe. **Aug 7 2026 caveat:** a *previously-armed* unit self-arms across a genuine power
-  cycle (arm state is flash-persisted — both 2Pre and 8PreX, `skip_arm=1` cold still reads config +
-  meters), so the bring-up is a no-op on any used device and only a truly virgin/unarmed one needs it.
-  Must run on a **fresh** device — re-initializing an already-armed one wedges `GET_DATA` (garbage config
-  reads → fcp-server "value 87 out of range"). **RESOLVED (July 23 2026): probe now ALWAYS arms, and the
-  armed-detection is deleted.** Both halves of the old design failed on hardware the same evening:
-  - **The detection could not work.** Every host-visible surface tried — `CAP_READ`, a `GET_DATA` echo,
-    the pre-mailbox register block — reads *identically* on a fresh device and an armed one, so probe
-    skipped the bring-up on exactly the devices that needed it. **Quiet casualty: meter slots 0-11 (the
-    physical inputs) read a flat 0**, because input metering is programmed by the bring-up — while the
-    router, mixer and output meters all worked, disguising it as a metering bug. A forced bring-up
-    brought slot 0 straight back.
-  - **The wedge is stale.** Re-arming an already-armed 2Pre twice over, no power cycle, left `GET_DATA`
-    reading correctly — another walled-era rule that did not survive the crossing.
-
-  So arming is unconditional (cost: one ~232-command replay per probe). `skip_arm=1` restores the old
-  skip for A/B testing. `tools/fcp_cap_read.c` dumps the capability bytes. Transport §8.
-  - **But re-arming is NOT side-effect-free — it resets ROUTING/MIXER (July 23 2026).** The bring-up's
-    `SET_MUX`×3 + `SET_MIX`×16 carry the vendor **default** routing, so replaying them on a reload wiped
-    the user's GUI routing back to default ("re-arming is safe" meant only "doesn't wedge `GET_DATA`",
-    not "no side effects"). **HANDLED:** probe reads live band-0 routing first (`clarett_band0_routed`,
-    `MUX_READ` opcode `0x003001`); if any destination is already patched, `clarett_arm_device(preserve=1)`
-    skips **only** the `SET_MUX`/`SET_MIX` steps and keeps everything else. This is a **content**
-    discriminator (routing present) where no *liveness* one exists: a fresh device reads empty and gets
-    the full default-routing arm; a configured one keeps its routes and still gets metering/subsystem
-    setup. Log line: `arm: preserved live routing/mixer (N ... steps skipped)`. Survives reloads; a power
-    cycle still returns to the device's own retained state. **Both halves hardware-confirmed on the 2Pre
-    (July 24 2026):** routing survives a reload, *and* input metering still works on a preserved load
-    (Analogue 1 → PCM 1 drove the PCM 01 meter to 1359, all other channels 0) — so metering really does
-    come from a non-routing bring-up step and the skip costs nothing.
+- **Bring-up ("arm") is OPT-IN, not automatic (Aug 12 2026 — supersedes the July 23 "probe ALWAYS
+  arms" design).** Firmware *code* self-boots from flash, and — the decisive finding — a
+  *previously-armed* unit fully self-arms across a genuine power cycle: config reads, input metering,
+  **and control writes** all work with **no host bring-up** (hardware-confirmed device-wide — 2Pre + 8Pre
+  loaded with no arm: model auto-detected, meters live, Inst/Line relay switching). So the ~232-command
+  replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
+  routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
+  (GET_7.1, quietly) for up to `wait_ready_ms` (2000) until the flash-persisted session answers, detects
+  the model from it, and leaves routing untouched. A cold Thunderbolt attach can race device readiness
+  (command #0's response may not land — see [[clarett-session-collapse-recovery]]); the poll absorbs it.
+  If the device never answers, probe **fails loudly (`-ENODEV`, no card registered)** instead of the old
+  fake-2Pre placeholder — a used device just needs a reload; a truly *virgin/never-armed* unit must opt in
+  with `force_arm=1` to run the bring-up. `wait_ready_ms` tunes the settle budget.
+  - The bring-up (used only under `force_arm=1`) is the de-blobbed typed step list
+    (`driver/clarett_arm_<model>.h`, built by `clarett_arm.h`'s `clarett_arm_emit()`; regenerate via
+    `fcp_decode.py --emit-init | --emit-deblob`): `CONFIG_PUSH`×N, subsystem enables `0x000001`, count
+    queries, 8 KB config read/writeback, `SET_MIX`×N + `SET_MUX`×N. `clarett_arm_device()` replays it and
+    still preserves live routing — it reads band-0 first (`clarett_band0_routed`, `MUX_READ` `0x003001`)
+    and, if any destination is already patched, skips only the `SET_MUX`/`SET_MIX` steps (so a re-arm
+    can't clobber a user's routing). `tools/fcp_cap_read.c` dumps the capability bytes. Transport §8.
+  - History: probe used to ALWAYS arm (July 23), after an "is it already armed?" detection proved
+    unworkable — every host-visible surface (`CAP_READ`, a `GET_DATA` echo, the pre-mailbox block) reads
+    *identically* fresh-vs-armed, so probe skipped the bring-up on exactly the devices that needed it
+    (quiet casualty then: input meter slots read flat 0). Aug 7 showed the arm is a no-op on used devices;
+    Aug 12 confirmed it covers writes too, and that "unarmed"-looking devices are the cold-readiness-race
+    collapse (which arming does **not** rescue — only waiting does). So the unconditional arm was inverted
+    to opt-in. The old `skip_arm` lever is **removed** — the default now *is* "don't arm".
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported

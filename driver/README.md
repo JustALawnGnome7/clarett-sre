@@ -80,7 +80,7 @@ Then use `alsamixer -c <card>`, or **alsa-scarlett-gui** for the full mixer and 
 ### Model selection
 
 The whole Clarett Thunderbolt line shares one PCI id, so the model is detected from the
-armed device. Override it if detection is ever wrong:
+device itself. Override it if detection is ever wrong:
 
 ```sh
 sudo insmod snd-clarett.ko                # auto-detect
@@ -127,6 +127,11 @@ sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
   tracks correctly.
 - **No per-output mute** — the hardware has none (only master Mute/Dim, reaching the outputs
   that opt in).
+- **Rarely, no card appears right after a cold Thunderbolt attach** — if the driver loads before
+  the interface has finished coming up, it waits briefly and, if the device still isn't
+  responding, refuses to register rather than come up half-working (it logs *"device did not
+  become ready"*). Just reload the module (`rmmod snd_clarett; insmod snd-clarett.ko`) — the
+  device settles within a moment. A brand-new, never-configured unit may need `force_arm=1` once.
 
 ## How it works / contributing
 

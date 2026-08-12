@@ -120,27 +120,32 @@ MODULE_PARM_DESC(base_hi,
  * has shown what the VM actually seeds the ring with.
  */
 /*
- * Skip the vendor bring-up at probe. Default off — probe ALWAYS arms.
+ * Host bring-up ("arm") policy at probe. Default: DO NOT arm.
  *
- * Probe used to detect an already-armed device and skip the re-init, because re-arming one was held to
- * wedge GET_DATA. Both halves of that fell over on hardware the same evening:
+ * A device that has ever been armed self-arms from flash across a power cycle: reads, input metering, AND
+ * control writes all work with no host bring-up (hardware-confirmed device-wide — 2Pre and 8Pre, no arm:
+ * model auto-detected, meters live, Inst/Line relay switching). So on any used device the ~232-command
+ * replay is redundant, and its SET_MUX/SET_MIX steps would reset the user's routing to the vendor default.
+ * Probe therefore waits for the flash-persisted session to answer (clarett_detect_model) and detects the
+ * model from it, arming nothing.
  *
- *   - the detection could not work. Every host-visible surface tried (CAP_READ, a GET_DATA echo, the
- *     pre-mailbox register block) reads identically on a fresh device and an armed one, so probe skipped
- *     the bring-up on exactly the devices that needed it. The quiet casualty was meter slots 0-11, the
- *     physical inputs, reading a flat 0 forever — input metering is programmed by the bring-up.
- *
- *   - the wedge is stale. Re-arming an armed 2Pre twice over, with no power cycle, left GET_DATA reading
- *     correctly. Like several other "rules" from the walled era it did not survive the crossing.
- *
- * So: arm unconditionally, which is right for the device and costs one ~232-command replay per probe.
- * This lever restores the old skip for anyone who hits a wedge and wants to A/B it.
+ * If the device never answers within wait_ready_ms, probe does NOT fall back to arming as a 2Pre
+ * placeholder — that masked a not-ready / collapsed device as a working card. It fails the probe loudly so
+ * the condition gets attention: a used device usually just needs a moment (reload to retry), and a
+ * genuinely virgin / never-armed unit must opt in with force_arm=1 to run the bring-up.
  */
-static bool skip_arm;
-module_param(skip_arm, bool, 0444);
-MODULE_PARM_DESC(skip_arm,
-		 "Skip the vendor bring-up at probe (default off; probe always arms). Only for A/B testing "
-		 "— a device that misses the bring-up loses its input meters.");
+static bool force_arm;
+module_param(force_arm, bool, 0444);
+MODULE_PARM_DESC(force_arm,
+		 "Opt in to the vendor bring-up at probe (default off). Needed only for a virgin/never-armed "
+		 "device — used devices self-arm from flash. With it off, probe waits for the flash-persisted "
+		 "session and fails loudly if the device never becomes ready, instead of arming.");
+
+static unsigned int wait_ready_ms = 2000;
+module_param(wait_ready_ms, uint, 0444);
+MODULE_PARM_DESC(wait_ready_ms,
+		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
+		 "up (default 2000). A cold Thunderbolt attach can race device readiness. Ignored with force_arm=1.");
 
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
@@ -311,7 +316,8 @@ static const struct clarett_model *clarett_pick_model(void)
  * fallback can paper over; false = either a clean match (return non-NULL) or a VALID reply whose
  * geometry we don't recognize (genuinely new hardware — the fallback is a reasonable guess).
  */
-static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed)
+static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed,
+							bool quiet)
 {
 	static const struct clarett_model *const models[] = {
 		&clarett_2pre, &clarett_4pre, &clarett_8pre, &clarett_8prex,
@@ -333,8 +339,9 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 	 */
 	err = clarett_fcp(c, FCP_GET_71, &band0, 1);
 	if (err) {
-		dev_warn(&c->pci->dev,
-			 "model auto-detect: GET_7.1 transport failed (%d)\n", err);
+		if (!quiet)
+			dev_warn(&c->pci->dev,
+				 "model auto-detect: GET_7.1 transport failed (%d)\n", err);
 		*collapsed = true;	/* GET didn't complete at all — the path is dead */
 		return NULL;
 	}
@@ -344,9 +351,10 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 	pb  = r[FCP_RESP_DATA_OFF]     | r[FCP_RESP_DATA_OFF + 1] << 8;
 	cap = r[FCP_RESP_DATA_OFF + 2] | r[FCP_RESP_DATA_OFF + 3] << 8;
 	if (status != FCP_RESP_ERR_OK || size < 4) {
-		dev_warn(&c->pci->dev,
-			 "model auto-detect: GET_7.1 bad response (status=%u size=%u raw playback=%u capture=%u)\n",
-			 status, size, pb, cap);
+		if (!quiet)
+			dev_warn(&c->pci->dev,
+				 "model auto-detect: GET_7.1 bad response (status=%u size=%u raw playback=%u capture=%u)\n",
+				 status, size, pb, cap);
 		*collapsed = true;	/* GET refused (status=3/size=0) while SETs pass — collapse */
 		return NULL;
 	}
@@ -356,9 +364,10 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 		    models[i]->capture_channels == cap)
 			return models[i];
 
-	dev_warn(&c->pci->dev,
-		 "model auto-detect: unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
-		 pb, cap);
+	if (!quiet)
+		dev_warn(&c->pci->dev,
+			 "model auto-detect: unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
+			 pb, cap);
 	return NULL;
 }
 
@@ -624,9 +633,10 @@ static void clarett_apply_model_routing(struct clarett *c, const struct clarett_
  * reload clears it, so it is host/session state, not the device losing its arm; power-cycling is not
  * needed. Trigger not yet isolated. A CAP_READ bench tool is the one-command check.
  *
- * There is deliberately no "is it already armed?" probe here any more: nothing host-visible distinguishes
- * a fresh device from an armed one (see the skip_arm comment), and guessing wrong silently costs the
- * input meters. Probe arms unconditionally instead.
+ * There is deliberately no "is it already armed?" probe here: nothing host-visible distinguishes a fresh
+ * device from an armed one (see the force_arm comment). Probe does not arm at all by default — it waits
+ * for the flash-persisted session and detects the model from it; force_arm=1 opts into the bring-up for a
+ * virgin device.
  */
 
 /*
@@ -2099,71 +2109,94 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_hw_init(c);
 
 	/*
-	 * Arm the device (full vendor bring-up). Required on a freshly power-cycled device:
-	 * self-boot alone leaves config access (GET_DATA) and config-apply disabled.
+	 * Establish the session. A used device self-arms from flash — reads, input metering, and control
+	 * writes all work with no host bring-up (see the force_arm comment). So the default path arms
+	 * NOTHING: wait for the flash-persisted session to answer, detect the model from it, and leave the
+	 * device's own routing in place. force_arm=1 opts into the full vendor bring-up for a virgin device.
 	 *
-	 * The bring-up is model-agnostic: arm as the id_table default, detect below, then hand the
-	 * detected model's routing back. All four models carry a captured blob, so this always arms
-	 * with a real bring-up. Forcing model=<x> arms with THAT model's own full blob.
+	 * armed_with is the model whose bring-up force_arm replays: the selected model if it carries a
+	 * captured blob, else the id_table default (all four have one, so this is belt-and-braces).
 	 */
 	armed_with = c->model;
 	if (!armed_with->arm_seq) {
 		armed_with = (const struct clarett_model *)ent->driver_data;
 		c->model = armed_with;
 	}
-	/*
-	 * Always arm — nothing host-visible tells a fresh device from an armed one, and missing the
-	 * bring-up costs the input meters silently. But re-arming is NOT side-effect-free: the bring-up's
-	 * SET_MUX/SET_MIX steps carry the vendor DEFAULT routing, so replaying them on a device that
-	 * already holds a user's routing resets it. Read the live band-0 routing first; if it is already
-	 * populated, arm while preserving it (skip only those two step kinds). A fresh/unconfigured device
-	 * reads empty (or refuses the read) and gets the full arm, default routing included.
-	 */
-	/* Did we leave the device's live routing in place? True when the arm preserved it (device already
-	 * configured) or was skipped — either way armed_with's default routing was NOT applied, which
-	 * clarett_apply_model_routing() below must know so it doesn't clobber that routing with the
-	 * detected model's defaults. skip_arm counts as preserving: it leaves the device untouched. */
-	bool preserve_routing = skip_arm;
-
-	if (skip_arm) {
-		dev_info(&pci->dev, "skip_arm=1: not replaying the vendor bring-up\n");
-	} else {
-		int routed = clarett_band0_routed(c);
-
-		preserve_routing = routed > 0;
-		clarett_arm_device(c, preserve_routing, false);
-	}
 	c->model = forced ? forced : armed_with;
 
-	/* The armed device can say who it is; everything model-dependent (PCM geometry, card
-	 * names) comes after this point. Must precede the meter heartbeat: detection parses
-	 * resp_buf after its command returns, and the meter worker shares that buffer. */
-	if (!forced) {
+	{
 		bool collapsed = false;
-		const struct clarett_model *det = clarett_detect_model(c, &collapsed);
+		const struct clarett_model *det = NULL;
 
-		if (det)
-			c->model = det;
-		else if (collapsed)
-			/* Not "assuming 2Pre" — the session is collapsed (GETs refused, SETs OK),
-			 * so no model fallback works: metering and config readback are dead until
-			 * it is recovered. Stop the userspace that re-collapses it, then reload. */
-			dev_err(&pci->dev,
-				"session collapsed: GET_7.1 refused (GETs dead / SETs OK) — cannot detect model; "
-				"stop fcp-server + PipeWire, then reload the module to recover. Registering as %s "
-				"geometry as a placeholder; metering/config will not work until recovered.\n",
-				c->model->name);
-		else
-			dev_warn(&pci->dev,
-				 "model auto-detect failed; assuming %s (override with model=)\n",
-				 c->model->name);
-		dev_info(&pci->dev, "model: %s%s\n", c->model->name,
-			 det ? " (auto-detected)" : "");
+		if (force_arm) {
+			/*
+			 * Opt-in bring-up for a virgin/never-armed device. Model-agnostic: arm as armed_with,
+			 * detect below, then apply the detected model's routing. Preserve any live routing the
+			 * device already holds (a configured device reads it back; a virgin one reads empty) so
+			 * the SET_MUX/SET_MIX default tables do not clobber a user's patch.
+			 */
+			int routed = clarett_band0_routed(c);
+			bool preserve_routing = routed > 0;
+
+			clarett_arm_device(c, preserve_routing, false);
+			if (!forced) {
+				det = clarett_detect_model(c, &collapsed, false);
+				if (det)
+					c->model = det;
+				else
+					dev_warn(&pci->dev,
+						 "force_arm: auto-detect failed after bring-up (%s); override with model=. Assuming %s\n",
+						 collapsed ? "session refused" : "unrecognized geometry",
+						 c->model->name);
+			}
+			clarett_apply_model_routing(c, armed_with, preserve_routing);
+		} else {
+			/*
+			 * Default: no arm. A cold Thunderbolt attach can race device readiness (command #0's
+			 * response may not land), so poll clarett_detect_model (quietly, to avoid a warn per
+			 * attempt) until the flash-persisted session answers or the settle budget expires.
+			 */
+			unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
+
+			for (;;) {
+				det = clarett_detect_model(c, &collapsed, true);
+				if (det || !collapsed || time_after(jiffies, deadline))
+					break;
+				msleep(50);
+			}
+			/* One non-quiet pass to log the refusal detail (status/size) before deciding. */
+			if (collapsed)
+				det = clarett_detect_model(c, &collapsed, false);
+
+			if (collapsed) {
+				/*
+				 * Never became ready. Do NOT arm-as-2Pre-placeholder (that masked a not-ready or
+				 * collapsed device as a working card) — fail the probe loudly so it gets attention.
+				 */
+				dev_err(&pci->dev,
+					"device did not become ready within %u ms (GET_7.1 refused / no response) — refusing to register. "
+					"A used device self-arms from flash: reload the module to retry (a cold attach can need a moment). "
+					"For a virgin/never-armed unit, load with force_arm=1 to run the bring-up.\n",
+					wait_ready_ms);
+				err = -ENODEV;
+				goto err_free;
+			}
+
+			if (!forced) {
+				if (det)
+					c->model = det;
+				else
+					dev_warn(&pci->dev,
+						 "model auto-detect: unrecognized stream geometry; override with model=. Assuming %s\n",
+						 c->model->name);
+			}
+			/* No arm ran: the device's flash-persisted routing stands; nothing to apply. */
+		}
+
+		if (!forced)
+			dev_info(&pci->dev, "model: %s%s\n", c->model->name,
+				 det ? " (auto-detected)" : "");
 	}
-
-	/* The arm used armed_with's tables; give the selected model its own — unless we preserved the
-	 * device's live routing (or skipped the arm), in which case leave that routing untouched. */
-	clarett_apply_model_routing(c, armed_with, preserve_routing);
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
 	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
