@@ -2545,6 +2545,9 @@ static const struct clarett_model clarett_2pre = {
 	.mode_label = "Level",
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
+	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed: analogue capture on ch0 reads
+						 * the correct pitch at 96k and 192k, full 14ch width preserved, no drift
+						 * or glitches. Width is rate-independent (no SMUX shrink). */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
 	/* Descriptor mode: the "2Pre wants flat" hypothesis was falsified on hardware — the engine

@@ -369,6 +369,11 @@ struct clarett_model {
 	/* data plane / PCM geometry */
 	u8 capture_channels;			/* block-1 RX stream width */
 	u8 playback_channels;			/* block-0 TX stream width */
+	u32 max_rate;				/* highest HARDWARE-CONFIRMED sample rate; 0 = single speed (48k)
+						 * only. The stream width is rate-independent (no SMUX shrink observed),
+						 * so raising this just advertises the higher SET_CLOCK rates. Gate per
+						 * model: bump only after a hardware pitch-check confirms the data plane
+						 * (see the max_rate module param, which overrides this for testing). */
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
 						 * the PCM path derives per-direction fragments from channel counts */
 	/*

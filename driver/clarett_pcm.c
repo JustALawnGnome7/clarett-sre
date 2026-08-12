@@ -88,6 +88,20 @@ MODULE_PARM_DESC(dyn_period,
 		 "256 to 16 frames (default on; verified drift-free at cadence 1-64). 0 = fixed 256-frame cadence. "
 		 "A DAW controls the period only once PipeWire has released the card.");
 
+/*
+ * Override the highest sample rate the PCM advertises. Default 0 = use the per-model confirmed cap
+ * (clarett_model.max_rate): single speed (44.1/48) everywhere, plus double/quad on models where the
+ * high-rate data plane is hardware-confirmed (the 2Pre, to 192 kHz). Set this to opt a NOT-yet-confirmed
+ * model into the higher rates for testing: the transport already sends SET_CLOCK{rate,Internal} for any
+ * rate and the stream width is rate-independent, but confirm with a known tone (correct pitch on the
+ * analogue channel) before trusting a rate on an ADAT model, where double/quad speed is unverified.
+ */
+static unsigned int max_rate;
+module_param(max_rate, uint, 0444);
+MODULE_PARM_DESC(max_rate,
+		 "Override the highest advertised sample rate for ALL models: 48000, 96000, or 192000. "
+		 "0 (default) uses each model's hardware-confirmed cap. 44.1 and 48 kHz are always offered.");
+
 
 
 /* One cycle of 1 kHz at 48 kHz, 24-bit signed; shifted left 8 for S32_LE MSB-justified. */
@@ -111,15 +125,13 @@ static const s32 clarett_sine48[48] = {
 
 /*
  * Constant capability template; the per-model geometry fields (channels, buffer/period bytes,
- * periods_max) are filled in clarett_pcm_open() from c->model.
+ * periods_max) and the rate set (rates/rate_min/rate_max, per the max_rate cap) are filled in
+ * clarett_pcm_open().
  */
 static const struct snd_pcm_hardware clarett_pcm_hw = {
 	.info             = SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 			    SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats          = SNDRV_PCM_FMTBIT_S32_LE,	/* interleaved, 24-bit MSB-justified */
-	.rates            = SNDRV_PCM_RATE_48000,
-	.rate_min         = CLARETT_PCM_RATE,
-	.rate_max         = CLARETT_PCM_RATE,
 	.periods_min      = 2,
 };
 
@@ -342,6 +354,29 @@ static int clarett_rule_lock_period(struct snd_pcm_hw_params *params, struct snd
 	return snd_interval_refine(ps, &t);
 }
 
+/*
+ * Advertised rate set. 44.1 and 48 kHz (single speed) are always offered; 88.2/96 (double) and 176.4/192
+ * (quad) are added up to the effective cap — the max_rate module override if set, else the model's
+ * hardware-confirmed clarett_model.max_rate. All six are SET_CLOCK enums the device lists.
+ */
+static unsigned int clarett_rate_caps(struct clarett *c, unsigned int *rmin, unsigned int *rmax)
+{
+	unsigned int cap = max_rate ? max_rate : c->model->max_rate;
+	unsigned int rates = SNDRV_PCM_RATE_44100 | SNDRV_PCM_RATE_48000;
+
+	*rmin = 44100;
+	*rmax = 48000;
+	if (cap >= 88200) {
+		rates |= SNDRV_PCM_RATE_88200 | SNDRV_PCM_RATE_96000;
+		*rmax = 96000;
+	}
+	if (cap >= 176400) {
+		rates |= SNDRV_PCM_RATE_176400 | SNDRV_PCM_RATE_192000;
+		*rmax = 192000;
+	}
+	return rates;
+}
+
 static int clarett_pcm_open(struct snd_pcm_substream *ss)
 {
 	struct clarett *c = snd_pcm_substream_chip(ss);
@@ -363,6 +398,7 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	int err;
 
 	runtime->hw = clarett_pcm_hw;
+	runtime->hw.rates            = clarett_rate_caps(c, &runtime->hw.rate_min, &runtime->hw.rate_max);
 	runtime->hw.channels_min     = chans;
 	runtime->hw.channels_max     = chans;
 	runtime->hw.buffer_bytes_max = buf;

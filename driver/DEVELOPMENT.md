@@ -234,6 +234,11 @@ The operationally relevant ones:
 - `enable_pcm` (default on) — register the PCM devices; `0` for a mixer-only card.
 - `enable_midi` — register the DIN MIDI rawmidi.
 - `notify_ms` — rate limit for the front-panel notification relay.
+- `max_rate` — override the highest advertised sample rate for all models (`48000`/`96000`/`192000`).
+  `0` (default) uses each model's hardware-confirmed cap: single speed (44.1/48) everywhere, plus
+  double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to
+  test double/quad speed on a not-yet-confirmed model — the stream width is rate-independent, so verify
+  with a known tone (correct pitch on the analogue channel) before trusting a rate on an ADAT model.
 - `force_arm` (default off) — run the vendor bring-up at probe. Only needed for a
   virgin/never-armed unit; used devices self-arm from flash. With it off, probe waits for the
   flash-persisted session and fails loudly if the device never becomes ready, rather than arming.
