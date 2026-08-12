@@ -277,9 +277,17 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     `pin`/`pin-m`/`pin-h` = the value at single/double(mid)/quad(high) speed, `0x0` = channel gone, giving
     textbook **8→4→2 channels per ADAT port** at 1x/2x/4x (analogue/S-PDIF have no override, present at all
     rates). Because SMUX'd-away channels go silent rather than shrinking the stream, this needs **no driver
-    change**. Still untested (not blockers): HS *playback* re-verified only on the 2Pre (clean 96k tone;
-    8Pre TX untested at any rate), and the narrow "a source into ADAT 1 lands on its normal capture channel
-    at 2x, ADAT 5 silent" spot-check (only analogue-in was fed).
+    change**. Still untested (not blockers, none affect the audio path): (a) HS *playback* re-verified only
+    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate); (b) the narrow "a source into ADAT 1 lands
+    on its normal capture channel at 2x, ADAT 5 silent" spot-check (only analogue-in was fed); (c) **the
+    LEVEL METERS are rate-dependent too** — the vendor XML `<hardware-meters>` `meters-l/m/h` at
+    `@136/146/156` (`METER_TABLE_[LMH]_OFFSET`) carry a per-speed channel-index table whose post-ADAT slots
+    walk with the SMUX shift (8Pre S/PDIF: 18/19 -> 14/15 -> 12/13 at 1x/2x/4x). The driver writes all three
+    tables only on the 8PreX (`clarett_meter_source_follow`, Meter Source control); 2Pre/4Pre/8Pre rely on
+    the flash-persisted tables, and fcp-server's peak-index meter map is a single layout measured at single
+    speed. Analogue meters (fixed slots 0-7) are correct at every rate; whether the S/PDIF/ADAT meters stay
+    aligned at 2x/4x depends on whether GET_METER is served through the rate-matched table (untraced at HS)
+    — a metering-display caveat only.
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
     (commit `5f4bbcb`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`
