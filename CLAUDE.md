@@ -214,7 +214,8 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
 ## Driver limitations / TODO
 
 - **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (on by
-  default, `enable_pcm`) registers a 28ch S32_LE @48k capture device, driven by the persistent `0x300` servicer
+  default, `enable_pcm`) registers a per-model S32_LE capture + playback device (up to 28ch; 44.1–192 kHz,
+  see the sample-rate bullet below), driven by the persistent `0x300` servicer
   (`clarett_pcm_tick` → `snd_pcm_period_elapsed`). Hardware-confirmed this session:
   - The engine clocks via the PCM path (248-period burst, `ctr=0x1b3`) — requires (a) one **contiguous**
     buffer for both rings, (b) **full-duplex** arming (silent dummy TX on block 0; block-1-only won't
@@ -262,6 +263,23 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     the LOGICAL contiguous size. Lever `tx_frag_pad` mirrors `rx_frag_pad`. No change for 2Pre/4Pre
     (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
     Not yet tested: 8Pre playback (derived, no init blob), simultaneous duplex stress.
+  - **Sample rates 44.1/48/88.2/96/176.4/192 kHz — CAPTURE hardware-confirmed on ALL FOUR models (Aug 12
+    2026).** A tone into Analogue 1 reads the correct, stable pitch at 96k and 192k with the full stream
+    width and no glitches on 2Pre/4Pre/8Pre/8PreX (this was also the first 8Pre capture confirmation) —
+    **no SMUX shrink**, so the fixed per-model channel count stays correct at every rate. Nearly free: the
+    transport was already rate-agnostic (PCM prepare sends `SET_CLOCK{rate, Internal}` with the negotiated
+    rate) and the whole data-plane geometry is in frames, with the servicer self-calibrating off the
+    measured `0x300` counter delta — so `CLARETT_CTR_FRAMES=16` and the descriptor layout are unchanged at
+    any rate; only the ALSA advertisement had pinned 48k. Per-model `clarett_model.max_rate` (all four =
+    192000) gates the advertised `.rates` mask (`clarett_rate_caps` in `clarett_pcm.c`: 44.1/48 always,
+    +88.2/96 double, +176.4/192 quad); the `max_rate` module param overrides it for testing an unconfirmed
+    model. **ADAT S/MUX at double/quad speed is DOCUMENTED in the vendor XML** — `<adat>`
+    `pin`/`pin-m`/`pin-h` = the value at single/double(mid)/quad(high) speed, `0x0` = channel gone, giving
+    textbook **8→4→2 channels per ADAT port** at 1x/2x/4x (analogue/S-PDIF have no override, present at all
+    rates). Because SMUX'd-away channels go silent rather than shrinking the stream, this needs **no driver
+    change**. Still untested (not blockers): HS *playback* re-verified only on the 2Pre (clean 96k tone;
+    8Pre TX untested at any rate), and the narrow "a source into ADAT 1 lands on its normal capture channel
+    at 2x, ADAT 5 silent" spot-check (only analogue-in was fed).
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
     (commit `5f4bbcb`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`
