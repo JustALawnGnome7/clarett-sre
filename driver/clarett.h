@@ -600,6 +600,11 @@ struct clarett {
 	u32 tx_slot;			/* TX descriptor fragment SLOT stride, mirror of rx_slot (the working
 					 * RX path is non-contiguous; the contiguous TX ring folded 28ch->4 on the
 					 * 8PreX). = audio bytes when contiguous (tx_frag_pad=0); page-safe pow2 default. */
+	u32 cur_rate;			/* sample rate last programmed with SET_CLOCK, published at
+					 * /proc/asound/cardN/clarett. Seeded at probe from the device so it
+					 * is truthful before anything streams; lets userspace read the rate
+					 * with NO device traffic (fcp-server needs it to pick the per-rate
+					 * meter layout, and polling the mailbox for it would be gratuitous). */
 	u32 rx_live_bytes;		/* leading bytes of each capture frame the device fills at the negotiated
 					 * rate, and the S/MUX-removed tail after them. Latched at prepare from
 					 * clarett_model.rx_live_{mid,high}; the drain blanks the tail because the

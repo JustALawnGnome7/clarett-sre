@@ -339,6 +339,14 @@ static int clarett_hwdep_set_meter_map(struct clarett *c, struct fcp_meter_map _
 			goto out_unlock;
 		}
 		c->hwdep_meter_ctl = kctl;
+	} else if (map.map_size != c->hwdep_meter_channels ||
+		   map.meter_slots != c->hwdep_n_meter_slots) {
+		/* Re-mapping an existing control is supported (fcp-server re-pushes when the device
+		 * changes speed band, because the meter slot array compacts under ADAT S/MUX), but only
+		 * with the SAME geometry: the map and level buffers were sized on the first call, and the
+		 * control's channel count is already published. A larger map here would overrun both. */
+		err = -EINVAL;
+		goto out_unlock;
 	}
 	memcpy(c->hwdep_meter_map, tmp, map.map_size * sizeof(s16));
 out_unlock:

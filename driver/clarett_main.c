@@ -2026,6 +2026,7 @@ static void clarett_proc_read(struct snd_info_entry *entry, struct snd_info_buff
 
 	snd_iprintf(buf, "model: %s\n", c->model->name);
 	snd_iprintf(buf, "slug: %s\n", c->model->slug);
+	snd_iprintf(buf, "rate: %u\n", READ_ONCE(c->cur_rate));
 }
 
 static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
@@ -2263,6 +2264,21 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		if (err)
 			dev_warn(&pci->dev,
 				 "could not enable monitor hardware mute/dim (%d)\n", err);
+	}
+
+	/*
+	 * Seed the published sample rate from the device, ONCE. The device keeps its rate across driver
+	 * reloads, so without this /proc/asound/cardN/clarett would claim the default until something
+	 * streams. Userspace (fcp-server, picking the per-rate meter layout) then reads the rate for free
+	 * instead of polling the mailbox for it.
+	 */
+	{
+		u8 r[4];
+
+		if (!clarett_fcp_cmd(c, FCP_SYNC_RATE, NULL, 0, r, sizeof(r)))
+			WRITE_ONCE(c->cur_rate, clarett_get_le32(r));
+		if (!READ_ONCE(c->cur_rate))
+			WRITE_ONCE(c->cur_rate, CLARETT_DEFAULT_RATE);
 	}
 
 	/* Controls live in userspace: expose the FCP hwdep for fcp-server. */

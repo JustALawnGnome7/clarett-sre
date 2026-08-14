@@ -697,6 +697,7 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 
 	if (!rate)
 		rate = CLARETT_DEFAULT_RATE;
+	WRITE_ONCE(c->cur_rate, rate);		/* published at /proc/asound/cardN/clarett */
 	clarett_put_le32(clk,     rate);
 	clarett_put_le32(clk + 4, clk_src);
 
