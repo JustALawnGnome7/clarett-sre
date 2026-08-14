@@ -217,7 +217,16 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
   old blanket claim came from — so disabling security is the FALLBACK for such boards, not the
   starting advice. Confirmed line-wide, not per model. Consequence for detection: a DROM `device_name`
   under `/sys/bus/thunderbolt` may exist on some hosts and not others, so it stays unusable as a
-  contract (the per-model slug remains the one to key on).
+  contract (the per-model slug remains the one to key on). **The `pci=assign-busses,realloc,hpbussize=0x10`
+  kernel arguments are ASRock-specific too** — not needed on the EliteBook, which enumerates the Clarett
+  with stock parameters. Try stock first; those arguments work around firmware that under-allocates bus
+  numbers behind the Apple TB3→TB2 adapter's bridge, they are not a device requirement.
+- **PENDING RETEST — an HP EliteBook 640 G11 is inbound (ordered Aug 14 2026).** When it arrives, re-run the
+  ftrace hwlat check for the ~42 ms Thunderbolt SMI freeze (`spec/provenance/clarett-smi-hwlat-vm-plan.md`).
+  That fault is recorded as platform-only with no driver fix, but it was diagnosed on ONE board; a second
+  host settles whether it follows the device or the ASRock. Re-check the TB security level, the `pci=`
+  arguments, and the cold-attach probe race on it at the same time — **three separate "Clarett needs X"
+  conclusions currently trace to that single machine's firmware.**
 - Mailbox has a per-command trace (op/seq/cause/done/fcperr) at **`dev_dbg`** — off by default;
   enable via dynamic debug when diagnosing the mailbox (info-level would flood at the ~24 Hz meter
   poll). The notify re-read failure log is `dev_warn_ratelimited` (a walled device retries the

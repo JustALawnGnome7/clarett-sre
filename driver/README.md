@@ -59,16 +59,19 @@ The whole Clarett line is **Thunderbolt 2**, which takes a little setup to reach
 
 - **Bridge TB2 to the host with an Apple Thunderbolt 2 → Thunderbolt 3 adapter.** It is an
   active cable that appears to the host as a PCI bridge, with the Clarett sitting behind it.
-  Many boards' default firmware does not reserve enough PCI bus numbers for a second device
-  behind that bridge, so the interface fails to enumerate even though the bridge itself shows
-  up. If `lspci` lists the bridge but not `1cb5:0002`, add these kernel boot parameters
-  (through GRUB, or whatever bootloader you use) and reboot:
+
+  **Some** boards' firmware does not reserve enough PCI bus numbers for a second device behind
+  that bridge, so the interface fails to enumerate even though the bridge itself shows up. Only
+  if `lspci` lists the bridge but not `1cb5:0002`, add these kernel boot parameters (through
+  GRUB, or whatever bootloader you use) and reboot:
 
   ```
   pci=assign-busses,realloc,hpbussize=0x10
   ```
 
-  Confirmed on an ASRock X570 Creator; the exact remedy can differ with other board firmware.
+  Needed on an **ASRock X570 Creator**; **not** needed on an **HP EliteBook 840 G5**, where the
+  Clarett enumerates with stock kernel parameters. Try it stock first — this is a workaround for
+  firmware that under-allocates, not a requirement of the device.
 
 ## Build & install
 
