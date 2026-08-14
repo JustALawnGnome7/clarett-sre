@@ -128,10 +128,13 @@ Slugs: `clarett-2pre` / `clarett-4pre` / `clarett-8pre` / `clarett-8prex`. Unlik
 the slug is never mangled for uniqueness, so it is a reliable contract.
 
 There is no Thunderbolt-DROM auto-detect of any kind. The model name *does* live in the DROM,
-but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3 model), and TB2
-units are firmware-tunnelled rather than enumerated as kernel-managed TB routers — so they
-never expose a `device_name` on `/sys/bus/thunderbolt`, and there is nothing for userspace to
-key on either.
+but the entire Clarett line is **Thunderbolt 2** (discontinued before any TB3 model), and
+whether such a unit is enumerated as a kernel-managed TB router — rather than merely
+firmware-tunnelled onto the PCI bus — is **host-firmware dependent**: an ASRock X570 Creator
+lists none of the Clarett Thunderbolt units in `boltctl`, while an HP EliteBook 840 G5 lists and
+authorizes all of them (see the driver README). So a `device_name` under `/sys/bus/thunderbolt`
+may exist on some hosts and not others, which makes it useless as a contract even where it is
+present. The per-model slug below is the thing userspace should key on.
 
 ### Per-model descriptors
 

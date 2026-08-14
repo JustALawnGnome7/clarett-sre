@@ -36,10 +36,26 @@ lspci -d 1cb5:0002        # the interface has to show up here first
 The whole Clarett line is **Thunderbolt 2**, which takes a little setup to reach a modern
 (Thunderbolt 3+) host:
 
-- **Disable Thunderbolt security in the UEFI/BIOS.** TB2 devices are not enumerated by
-  `boltctl`, so they cannot be user-approved while Thunderbolt security is enabled — with
-  security on, the Clarett never reaches the PCI bus at all. Set the firmware's Thunderbolt
-  security level to none/legacy (the exact wording varies by board).
+- **Try `boltctl` first; only disable Thunderbolt security if the device never appears.**
+  Whether a TB2 Clarett is enumerated by the bolt daemon turns out to be **host-firmware
+  dependent**, so start with security left on:
+
+  ```sh
+  boltctl list                  # is the interface there?
+  boltctl authorize <uuid>      # if so, approve it, then re-check lspci
+  ```
+
+  On an **HP EliteBook 840 G5** the Clarett Thunderbolt units are listed by `boltctl` and reach
+  the PCI bus as soon as they are authorized, with the firmware's Thunderbolt Security Level left
+  at *PCIe and DisplayPort - User Authorization* — no need to drop to *No Security*, and no need
+  to clear *Require BIOS PW to change Thunderbolt Security Level*. That machine's *Thunderbolt
+  PCIe Hot plug Mode* was set to *Native + Lower Power Mode* (its *Legacy Mode* alternative is
+  untested); selecting the native option also disables Thunderbolt S4 boot, which the firmware
+  says on screen. Other vendors appear to spell this setting *Thunderbolt BIOS Assist Mode*.
+
+  On an **ASRock X570 Creator** the same units never appear in `boltctl` at all, so they cannot be
+  user-approved and the security level has to be set to none/legacy before they reach the bus.
+  If your board behaves that way, that is the fallback — not the starting point.
 
 - **Bridge TB2 to the host with an Apple Thunderbolt 2 → Thunderbolt 3 adapter.** It is an
   active cable that appears to the host as a PCI bridge, with the Clarett sitting behind it.

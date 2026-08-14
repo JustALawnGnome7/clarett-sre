@@ -206,6 +206,18 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
   (and PipeWire/WirePlumber if they hold `/dev/snd/controlC*`), then `rmmod`.
 - Bare-metal test box: handle Thunderbolt auth (`boltctl authorize`) and Secure
   Boot (unsigned module needs SB off or a signed MOK).
+- **TB2 enumeration is HOST-FIRMWARE DEPENDENT, not a property of the device** (revises the old
+  "TB2 units are never enumerated by `boltctl`, so security must be disabled"). An **HP EliteBook
+  840 G5** lists the Clarett Thunderbolt units in `boltctl` and puts them on the PCI bus on
+  `boltctl authorize <uuid>` with the security level left at *PCIe and DisplayPort - User
+  Authorization* — no *No Security*, and no need to clear *Require BIOS PW to change Thunderbolt
+  Security Level*; its *Thunderbolt PCIe Hot plug Mode* was *Native + Lower Power Mode* (*Legacy Mode*
+  untested), which also disables Thunderbolt S4 boot. Other vendors seem to call that setting
+  *Thunderbolt BIOS Assist Mode*. The **ASRock X570 Creator** lists none of them, which is where the
+  old blanket claim came from — so disabling security is the FALLBACK for such boards, not the
+  starting advice. Confirmed line-wide, not per model. Consequence for detection: a DROM `device_name`
+  under `/sys/bus/thunderbolt` may exist on some hosts and not others, so it stays unusable as a
+  contract (the per-model slug remains the one to key on).
 - Mailbox has a per-command trace (op/seq/cause/done/fcperr) at **`dev_dbg`** — off by default;
   enable via dynamic debug when diagnosing the mailbox (info-level would flood at the ~24 Hz meter
   poll). The notify re-read failure log is `dev_warn_ratelimited` (a walled device retries the
