@@ -21,8 +21,12 @@ band selection, the proc read, and the meter-map re-push (fcp-support `ae0b31c`,
 **Rig:** 8PreX ADAT Out 1 → 8Pre ADAT In, the same one used for the S/MUX work.
 
 **Steps**
-1. `sudo make -C ../fcp-support install PREFIX=/usr` (PREFIX must match the build), then
-   `sudo systemctl restart 'fcp-server@*'`.
+1. `make -C ../fcp-support && sudo make -C ../fcp-support install` (PREFIX defaults to
+   `/usr/local` on both sides now — do not qualify it), then `sudo systemctl restart 'fcp-server@*'`.
+   **Verify the running binary is the one you built:** `systemctl cat 'fcp-server@*'` and check
+   `ExecStart`. A leftover install under the other prefix shadows the new one silently — `/usr/local`
+   wins in both systemd's and udev's search order, which is exactly how the first attempt at this
+   test ran the old binary.
 2. Confirm the free rate source: `cat /proc/asound/card*/clarett` shows a `rate:` line per card.
 3. Run fcp-server with `LOG_LEVEL=debug` (env var, read at startup) so the band change is visible.
 4. Route ADAT 1 to a **mixer input** on the 8Pre — the probe must be ABOVE meter slot 13, because

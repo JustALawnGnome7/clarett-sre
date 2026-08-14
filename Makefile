@@ -10,10 +10,15 @@
 #
 # PREFIX MUST match the PREFIX fcp-server was built/installed with, because
 # fcp-server looks for its maps in $(PREFIX)/share/fcp-server (its compiled-in
-# DATADIR). fcp-support is installed with PREFIX=/usr, so default to that; a
-# mismatch means fcp-server silently won't find the Clarett maps.
+# DATADIR). The default matches fcp-support's own default (/usr/local), so
+# neither side needs PREFIX spelled out; a mismatch means fcp-server silently
+# won't find the Clarett maps.
+#
+# Installing under BOTH prefixes is worse than picking the wrong one: systemd and
+# udev search /usr/local first, so a stale /usr/local install silently shadows a
+# fresh /usr one. Uninstall the old prefix before switching.
 
-PREFIX  ?= /usr
+PREFIX  ?= /usr/local
 DESTDIR ?=
 
 FCP_DATADIR := $(DESTDIR)$(PREFIX)/share/fcp-server
@@ -29,12 +34,12 @@ WP_DROPIN    := wireplumber/51-clarett-naming.conf
 # Default to help so a bare `make` never runs a root install by accident.
 help:
 	@echo "Clarett userspace install (PREFIX=$(PREFIX)):"
-	@echo "  make install              maps + WirePlumber drop-in (needs root under /usr)"
+	@echo "  make install              maps + WirePlumber drop-in (needs root)"
 	@echo "  make install-maps         maps    -> $(FCP_DATADIR)"
 	@echo "  make install-wireplumber  drop-in -> $(WP_CONFDIR)"
 	@echo "  make uninstall            remove what install placed"
 	@echo
-	@echo "PREFIX must match the fcp-server install PREFIX (default /usr)."
+	@echo "PREFIX must match the fcp-server install PREFIX (both default /usr/local)."
 	@echo "Kernel module builds separately: make -C driver (see driver/README.md)."
 
 install: install-maps install-wireplumber

@@ -196,14 +196,24 @@ captures/*.log                        Trace captures (vfio_region_* logs, guest-
 ```sh
 cd driver && make                 # builds snd-clarett.ko
 sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
-sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
-                                  # WirePlumber drop-in -> conf.d. PREFIX=/usr must
-                                  # match the fcp-server install PREFIX. `make help`.
+sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server,
+                                  # WirePlumber drop-in -> conf.d. `make help`.
 ```
 - **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
   WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
   copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +
-  systemd template) still installs from fcp-support (`make install PREFIX=/usr` there).
+  systemd template) still installs from fcp-support (`sudo make install` there).
+- **PREFIX is `/usr/local` everywhere — don't qualify it.** fcp-support and alsa-scarlett-gui both
+  default there, and this repo's Makefile now matches, so a bare `sudo make install` in each of the
+  three is correct and consistent. The prefix must agree because fcp-server compiles its DATADIR in
+  (`-DDATADIR=$(PREFIX)/share/fcp-server`), so maps installed under the other prefix are invisible
+  to it. **Never leave both prefixes populated:** systemd (`/usr/local/lib/systemd/system` before
+  `/usr/lib/systemd/system`) and udev (`/usr/local/lib/udev/rules.d` first) prefer `/usr/local`, so a
+  stale `/usr/local` install silently shadows a freshly built `/usr` one — the unit keeps launching
+  the old binary and nothing reports an error. `sudo make uninstall PREFIX=<old>` in fcp-support
+  before switching, and check with `systemctl cat 'fcp-server@*'` that `ExecStart` is the binary you
+  just built. The WirePlumber drop-in reaches `/usr/local/share` via `XDG_DATA_DIRS` (WirePlumber's
+  config lookup honours it, and the systemd user manager has it), not via WirePlumber's own prefix.
 - **Mixer-only**: `aplay -l` shows nothing (no PCM yet). Use `amixer -c N
   contents` / `alsamixer -c N`.
 - **Device must be free of `vfio-pci`** to test on the host (stop the VM, unbind).
