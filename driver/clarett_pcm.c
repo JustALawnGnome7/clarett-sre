@@ -102,6 +102,36 @@ MODULE_PARM_DESC(max_rate,
 		 "Override the highest advertised sample rate for ALL models: 48000, 96000, or 192000. "
 		 "0 (default) uses each model's hardware-confirmed cap. 44.1 and 48 kHz are always offered.");
 
+/*
+ * Clock source sent with SET_CLOCK at each stream arm (the [XML] <clock-source> enum: 24=Internal,
+ * 3=S/PDIF, 0=ADAT, plus 1=ADAT 2 and 2=Wordclock on the 8PreX). Default Internal. Set to 0 to slave
+ * to an incoming ADAT clock (needed to receive a digital ADAT input cleanly) or 3 for S/PDIF. The
+ * source is NOT a config-space byte — it lives only in the SET_CLOCK payload — so it cannot be mapped
+ * as an fcp-server global control, and there is no clock-source ALSA control yet.
+ *
+ * PER-CARD, indexed by ALSA card number (the one /proc/asound/cards shows), because a two-card rig needs
+ * one master and one slave: feeding one Clarett's ADAT output into another's input requires the source
+ * card on Internal and the sink card on ADAT, and a scalar parameter would slave both. Writable at
+ * runtime; takes effect at the next stream arm. The negotiated PCM rate must match the external clock's
+ * rate when the source is not Internal.
+ */
+static int clock_source[SNDRV_CARDS] = { [0 ... SNDRV_CARDS - 1] = CLARETT_CLOCK_INTERNAL };
+/* NULL count, not a &num: with a count the sysfs read shows only the entries explicitly set at load
+ * (nothing at all by default), which makes the live setting unreadable. NULL shows the whole array. */
+module_param_array(clock_source, int, NULL, 0644);
+MODULE_PARM_DESC(clock_source,
+		 "Per-card SET_CLOCK source at stream arm, indexed by ALSA card number: 24=Internal "
+		 "(default), 3=S/PDIF, 0=ADAT (slave to the external clock; 8PreX also has 1=ADAT 2, "
+		 "2=Wordclock). PCM rate must match the external clock when not Internal.");
+
+/* The clock source in force for this card; falls back to Internal for a card number past the array. */
+static int clarett_clock_source(struct clarett *c)
+{
+	int n = c->card->number;
+
+	return (n >= 0 && n < SNDRV_CARDS) ? clock_source[n] : CLARETT_CLOCK_INTERNAL;
+}
+
 
 
 /* One cycle of 1 kHz at 48 kHz, 24-bit signed; shifted left 8 for S32_LE MSB-justified. */
@@ -498,11 +528,12 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	const struct clarett_model *m = c->model;
 	u8 clk[8], id[2];
 	int e_clk, e_en1, e_en2, e_commit, pushes = 0, push_err = 0, batch_err = 0, i;
+	int clk_src = clarett_clock_source(c);
 
 	if (!rate)
 		rate = CLARETT_DEFAULT_RATE;
 	clarett_put_le32(clk,     rate);
-	clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
+	clarett_put_le32(clk + 4, clk_src);
 
 	e_clk = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
 
@@ -563,9 +594,9 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	e_commit = clarett_fcp(c, FCP_STREAM_COMMIT, NULL, 0);
 
 	dev_info(&c->pci->dev,
-		 "stream-handshake: SET_CLOCK{%u,24}=%d CONFIG_PUSH=%d(err=%d) batch=%s(err=%d) "
+		 "stream-handshake: SET_CLOCK{%u,%u}=%d CONFIG_PUSH=%d(err=%d) batch=%s(err=%d) "
 		 "0x6004=%d 0x6002=%d 0x6005=%d\n",
-		 rate, e_clk, pushes, push_err, stream_batch ? "yes" : "off", batch_err,
+		 rate, clk_src, e_clk, pushes, push_err, stream_batch ? "yes" : "off", batch_err,
 		 e_en1, e_en2, e_commit);
 }
 

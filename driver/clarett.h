@@ -235,6 +235,12 @@ struct snd_rawmidi_substream;
 
 /* SET_CLOCK (TRACE-CONFIRMED): payload {u32 sample_rate, u32 clock_source}. */
 #define FCP_SET_CLOCK            0x006003
+/* Clock-source enum values [XML <clock-source>]. The 8PreX adds ADAT 2 = 1 and Wordclock = 2; every
+ * model shares Internal/S/PDIF/ADAT-1. */
+#define CLARETT_CLOCK_ADAT       0
+#define CLARETT_CLOCK_ADAT2      1	/* 8PreX only */
+#define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only */
+#define CLARETT_CLOCK_SPDIF      3
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 
