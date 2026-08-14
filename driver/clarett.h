@@ -290,8 +290,20 @@ struct snd_rawmidi_substream;
  * vendor's, and because their responses are worth reading — a device reporting unlocked would explain
  * a dead engine. Ours reports LOCKED at 48000, so the data-plane stall is not a clock problem.
  */
-#define FCP_SYNC_READ            0x006004   /* u32 lock status; was misnamed FCP_STREAM_ENABLE */
-#define FCP_SYNC_RATE            0x006005   /* u32 rate; was misnamed FCP_STREAM_COMMIT */
+/*
+ * FCP_SYNC_RATE is a LIVE rate readback, confirmed on all four models (2Pre, 4Pre, 8Pre, 8PreX): it
+ * answers the rate the device is actually running at, and — the property that makes it useful —
+ * PERSISTS while nothing is streaming and across a driver reload. Probe seeds cur_rate from it so
+ * /proc/asound/cardN/clarett is truthful before the first stream.
+ *
+ * FCP_SYNC_READ is NOT the clean 0/1 lock flag its name suggests: it returns 1 or 3 depending on model
+ * and stream state (a 2Pre and 4Pre read 3 while streaming at 48 kHz where an 8Pre and 8PreX read 1),
+ * so it looks like a bitfield whose upper bit is undecoded. fcp-server collapses it with !!, which is
+ * why the exposed "Sync Status" is still sane. Suspected cause of that control being unreliable as a
+ * clock-source probe on the 8PreX.
+ */
+#define FCP_SYNC_READ            0x006004   /* lock status bitfield; was misnamed FCP_STREAM_ENABLE */
+#define FCP_SYNC_RATE            0x006005   /* u32 rate, live; was misnamed FCP_STREAM_COMMIT */
 /* Back-compat aliases: the old names appear in comments/specs written before the decode. */
 #define FCP_STREAM_ENABLE        FCP_SYNC_READ
 #define FCP_STREAM_COMMIT        FCP_SYNC_RATE
