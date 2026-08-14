@@ -321,6 +321,61 @@ METER_SLOTS_DST = {
     },
 }
 
+# --- Per-rate meter indices (peak-index-m / peak-index-h) -----------------------------------------
+# MEASURED on an 8Pre: a meter's GET_METER slot is its POSITION IN THAT RATE'S destination table, so
+# every destination ADAT S/MUX removes shifts everything after it down one. With an 8PreX feeding ADAT
+# in, one probe below the first removal and one above it:
+#
+#     rate | ADAT in (routed to PCM 11-18) | Mixer Input 01
+#     48k  | slots 10-17                   | 40
+#     96k  | slots 10-13                   | 32
+#     192k | slots 10-11                   | 28
+#
+# The ADAT INPUT meters do not move (they sit below the first removed destination), which is why this
+# was invisible until a probe was put above it. fcp-server's single-layout map is therefore correct at
+# single speed and wrong above the first removal at double/quad.
+#
+# Below: destination ROUTER PINS that cease to exist at double ("m") and quad ("h") speed, from the
+# [XML] pin-m/pin-h overrides, where "0x0" means the entry is gone at that speed AND ABOVE (the cascade
+# is corroborated by the <routing num/num-m/num-h> deltas). "h" is a superset of "m". Record pins come
+# from <record-outputs>, ADAT output pins from <outputs>; the 2Pre and 4Pre have NO ADAT outputs at all,
+# so only their record slots drop. Ranking is computed over the metered destinations in slot order, so
+# it stays correct whether or not a model meters its loopback pins (the 8Pre/8PreX do, the 2Pre/4Pre
+# do not).
+_SMUX_M = {
+    "clarett-2pre":  {0x60a, 0x60b, 0x60c, 0x60d},
+    "clarett-4pre":  {0x610, 0x611, 0x612, 0x613},
+    "clarett-8pre":  {0x610, 0x611, 0x612, 0x613} | {0x204, 0x205, 0x206, 0x207},
+    "clarett-8prex": set(range(0x614, 0x61c)) | {0x204, 0x205, 0x206, 0x207,
+                                                 0x20c, 0x20d, 0x20e, 0x20f},
+}
+_SMUX_H_EXTRA = {
+    "clarett-2pre":  {0x608, 0x609},
+    "clarett-4pre":  {0x60e, 0x60f},
+    "clarett-8pre":  {0x60e, 0x60f} | {0x202, 0x203},
+    "clarett-8prex": {0x610, 0x611, 0x612, 0x613} | {0x202, 0x203, 0x20a, 0x20b},
+}
+SMUX_GONE = {slug: {"m": _SMUX_M[slug], "h": _SMUX_M[slug] | _SMUX_H_EXTRA[slug]}
+             for slug in _SMUX_M}
+
+
+def add_rate_meter_indices(slug, dev_dests):
+    """Attach peak-index-m / peak-index-h to each metered destination that survives that speed.
+
+    A destination removed at a speed simply gets no key for it — it has no meter there at all.
+    """
+    gone = SMUX_GONE.get(slug)
+    if not gone:
+        return
+    metered = sorted((e for e in dev_dests if "peak-index" in e), key=lambda e: e["peak-index"])
+    for band, key in (("m", "peak-index-m"), ("h", "peak-index-h")):
+        rank = 0
+        for e in metered:
+            if int(e["router-pin"]) in gone[band]:
+                continue
+            e[key] = rank
+            rank += 1
+
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
 MODELS = {
     # pcm_out = PCM playback channel count (GET_7.2 / driver playback_channels). The router exposes one
@@ -599,6 +654,8 @@ for slug, spec in MODELS.items():
             dev_dests.append(entry)
             alsa_sinks.append(OD([("device_name", nm), ("alsa_name", alsa_sink_name(nm))]))
 
+        add_rate_meter_indices(slug, dev_dests)
+
     devmap = OD()
     devmap["_note"] = (f"DRAFT — hand-authored device-map for the {spec['name']} (Thunderbolt), paired with "
                        f"fcp-alsa-map-{slug}.json for fcp-server. Loaded from file so fcp-server can create "
@@ -626,15 +683,18 @@ for slug, spec in MODELS.items():
         "pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic "
         "artifact of the layout, to be fixed with the real devmap.",
         "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
-        "peak-index is present for the 4Pre ONLY, and each entry carries _peak-index-provenance: "
-        "\"measured\" (analogue in 1-4 -> slots 0-3, one signal source at a time), \"block-measured\" "
-        "(slots 18-23 lit together as the six line outputs, so the set is measured but the order "
-        "within it is not), or \"inferred\" (continuing the pin block: analogue 5-8, S/PDIF, ADAT). "
-        "Other models have NO peak-index and so get no Level Meter: slot order is not transferable "
-        "across this line (ADAT width differs 8 vs 16, and the 2Pre's analogue pins are 0x400/0x402 "
-        "skipping 0x401), so each model must be measured with tools/fcp_meter_watch.c. Also unverified: "
-        "fcp-server rejects any peak-index >= the slot count the device reports via fcp_meter_info(), "
-        "and we have assumed 48 from the request payload rather than reading that answer back.",
+        "peak-index is on DESTINATIONS on every model now (the Clarett meters destinations, not "
+        "sources), each carrying _peak-index-provenance: \"measured\" (one signal source at a time), "
+        "\"block-measured\" (a set lit together, so the set is measured but the order within it is "
+        "not), \"stride\" (continuing a measured block), or \"inferred\". Slot order is NOT "
+        "transferable across this line, so each model was measured with tools/fcp_meter_watch.c. "
+        "peak-index-m / peak-index-h are the SAME channel's slot at double / quad speed: the array "
+        "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in that "
+        "rate's destination table and everything after a removed entry shifts down. A destination "
+        "absent at a speed carries no key for it. Measured on an 8Pre (Mixer Input 01 = 40/32/28 at "
+        "48/96/192 kHz) and derived from the [XML] pin-m/pin-h overrides for the rest. Note fcp-server "
+        "rejects any peak-index >= the slot count the device reports via fcp_meter_info(), which is "
+        "why the local build raises that bound (see the fcp-support snd_clarett branch).",
         "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver "
         "relays a wildcard ~0).",
         "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob "
@@ -691,8 +751,9 @@ for slug, spec in MODELS.items():
         "clarett_arm_8pre.h): the capture half is the 4Pre's, whose input "
         "geometry is identical, and the output half is authored. Its source list is therefore not "
         "table-derived either — it is the hardware's full inventory from the XML, which is what the "
-        "other models' lists should eventually become. Its meter peak-index values are PREDICTED from "
-        "the packing rule, not measured. NOTHING here has run against 8Pre hardware.",
+        "other models' lists should eventually become. That construction predates any 8Pre hardware, but "
+        "the unit has since been exercised extensively: its meter map was measured, and the per-rate "
+        "peak-index-m/-h compaction was measured on it too.",
         "output-group-sources / output-link are not emitted: those drive the Scarlett 4th gen's output "
         "group controls, which this line does not appear to have.",
         "Add output mute once its offset is captured (omitted; see the devmap _todo).",
