@@ -235,12 +235,17 @@ struct snd_rawmidi_substream;
 
 /* SET_CLOCK (TRACE-CONFIRMED): payload {u32 sample_rate, u32 clock_source}. */
 #define FCP_SET_CLOCK            0x006003
-/* Clock-source enum values [XML <clock-source>]. The 8PreX adds ADAT 2 = 1 and Wordclock = 2; every
- * model shares Internal/S/PDIF/ADAT-1. */
-#define CLARETT_CLOCK_ADAT       0
+/*
+ * Clock-source enum values [XML <clock-source>]. Internal and ADAT agree across the line, but S/PDIF does
+ * NOT: it is 3 on the 4Pre/8Pre/8PreX and **4 on the 2Pre** — a per-model encoding of exactly the kind the
+ * clean-room rules warn about, so check the model's own XML before adding a source here. Only the 8PreX
+ * has more than one external source.
+ */
+#define CLARETT_CLOCK_ADAT       0	/* "ADAT 1" on the 8PreX */
 #define CLARETT_CLOCK_ADAT2      1	/* 8PreX only */
 #define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only */
-#define CLARETT_CLOCK_SPDIF      3
+#define CLARETT_CLOCK_SPDIF      3	/* 4Pre/8Pre/8PreX */
+#define CLARETT_CLOCK_SPDIF_2PRE 4	/* the 2Pre alone uses 4 */
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 

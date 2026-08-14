@@ -330,8 +330,11 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     per-band by `clarett_meter_source_follow` on the 8PreX; 2Pre/4Pre/8Pre use the flash-persisted ones.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
-    parameter would have slaved both. [XML] `<clock-source>` enums: **Internal=24, S/PDIF=3** (not 4),
-    **ADAT=0**, plus 8PreX-only ADAT 2=1, Wordclock=2. It is **not a config-space byte** — `<clocking>` has
+    parameter would have slaved both. [XML] `<clock-source>` enums, verified against all four TB XMLs:
+    **Internal=24** and **ADAT=0** everywhere, but **S/PDIF is PER-MODEL — 3 on the 4Pre/8Pre/8PreX and 4 on
+    the 2Pre** (a live instance of the "never copy enums across models" rule; `CLARETT_CLOCK_SPDIF` /
+    `CLARETT_CLOCK_SPDIF_2PRE`). Only the 8PreX has more than one external source (ADAT 1=0, ADAT 2=1,
+    Wordclock=2). It is **not a config-space byte** — `<clocking>` has
     no `offset-bytes`, it exists only in the SET_CLOCK payload — so it CANNOT become an fcp-server devmap
     global-control; a GUI control needs a new fcp-server clocking category over `0x006003`/`0x006004`.
     `Sync Status` (numid 1) already exists via the SYNC capability and is the external-lock indicator.
