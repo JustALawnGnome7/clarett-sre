@@ -148,6 +148,11 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
   clarett-windbg-plan.md            RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
                                     driver-level DMA is attribute-equivalent to ours; wall confirmed below-driver.
+  clarett-rate-aware-plan.md        OPEN — the remaining rate-aware control-plane work, with steps and
+                                    acceptance criteria: (1) hardware-test the fcp-server per-rate meter
+                                    path (landed but compile-only), (2) per-rate router pins for the
+                                    8PreX's re-pinning second ADAT port, (3) decode the 0x006004 upper
+                                    bit. START HERE when picking this thread back up.
 driver/                               Out-of-tree module `snd-clarett` (hwdep transport + experimental capture PCM).
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_hwdep.c (the FCP hwdep ABI — the only control surface), clarett_pcm.c (capture PCM,
