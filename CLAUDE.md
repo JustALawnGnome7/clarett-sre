@@ -330,14 +330,32 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     per-band by `clarett_meter_source_follow` on the 8PreX; 2Pre/4Pre/8Pre use the flash-persisted ones.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
-    parameter would have slaved both. [XML] `<clock-source>` enums, verified against all four TB XMLs:
-    **Internal=24** and **ADAT=0** everywhere, but **S/PDIF is PER-MODEL — 3 on the 4Pre/8Pre/8PreX and 4 on
-    the 2Pre** (a live instance of the "never copy enums across models" rule; `CLARETT_CLOCK_SPDIF` /
-    `CLARETT_CLOCK_SPDIF_2PRE`). Only the 8PreX has more than one external source (ADAT 1=0, ADAT 2=1,
-    Wordclock=2). It is **not a config-space byte** — `<clocking>` has
+    parameter would have slaved both. It is **not a config-space byte** — `<clocking>` has
     no `offset-bytes`, it exists only in the SET_CLOCK payload — so it CANNOT become an fcp-server devmap
     global-control; a GUI control needs a new fcp-server clocking category over `0x006003`/`0x006004`.
-    `Sync Status` (numid 1) already exists via the SYNC capability and is the external-lock indicator.
+    `Sync Status` already exists via the SYNC capability and is the external-lock indicator — read it by
+    **name**, never numid (fcp-server renumbers every control on restart).
+  - **Clock-source enums — MEASURED, and the 2Pre XML is WRONG (Aug 14 2026).** `Internal=24`, `ADAT=0`,
+    **`S/PDIF=3` on every model INCLUDING the 2Pre**, whose [XML] claims 4. Method: an 8PreX fed one optical
+    port (switchable between ADAT and S/PDIF via its `S/PDIF Source Playback Enum`), reading the 2Pre's
+    `Sync Status` per value, with an invalid value 7 as the negative control and the captured audio proving
+    the source was really on the wire each time:
+    | value | S/PDIF on wire | ADAT on wire | conclusion |
+    |---|---|---|---|
+    | 0 | — | Locked | ADAT |
+    | **3** | **Locked** | **Unlocked** | **S/PDIF — tracks that source and only that source** |
+    | 4 | Locked | Locked | NOT source-specific; locks to whatever is present |
+    | 7 | Unlocked | Unlocked | rejected, so Sync genuinely discriminates |
+    So the 2Pre's `option="4"` is something looser (any external / optical), not a per-model S/PDIF
+    encoding: **there is no per-model split here** and an earlier `CLARETT_CLOCK_SPDIF_2PRE` was reverted.
+    Verified: Internal (every stream arms with it), ADAT=0 (8Pre at 48/96/192 kHz), S/PDIF=3 (8Pre over RCA
+    coax, 2Pre over TOSLINK). Untested: 8PreX ADAT 2=1 and Wordclock=2.
+    **METHOD TRAP — the audio path is NOT a probe for clock source.** S/PDIF and ADAT keep arriving on their
+    capture channels whatever the clock source says, *even while Sync reads Unlocked* — the router does not
+    care. An earlier reading of "the tones landed, so the enum selected S/PDIF" was therefore invalid;
+    `Sync Status` is the only signal that distinguishes these values. Two other things that looked like
+    signal and were not: the idle-ADC noise floor (an invalid value runs the converters too), and a single
+    `Locked` reading taken right after another `Locked` leg (re-test from a known-Unlocked state).
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
     (commit `5f4bbcb`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`

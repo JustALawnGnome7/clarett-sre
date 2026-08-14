@@ -103,12 +103,12 @@ MODULE_PARM_DESC(max_rate,
 		 "0 (default) uses each model's hardware-confirmed cap. 44.1 and 48 kHz are always offered.");
 
 /*
- * Clock source sent with SET_CLOCK at each stream arm (the [XML] <clock-source> enum: 24=Internal,
- * 0=ADAT, and S/PDIF = 3 on the 4Pre/8Pre/8PreX but 4 on the 2Pre; the 8PreX alone adds 1=ADAT 2 and
- * 2=Wordclock). Default Internal. Set to 0 to slave to an incoming ADAT clock (needed to receive a
- * digital ADAT input cleanly). Values are raw device enums and PER-MODEL — see clarett.h. The source is
- * NOT a config-space byte — it lives only in the SET_CLOCK payload — so it cannot be mapped as an
- * fcp-server global control, and there is no clock-source ALSA control yet.
+ * Clock source sent with SET_CLOCK at each stream arm: 24=Internal, 0=ADAT, 3=S/PDIF on every model
+ * (the 2Pre XML claims 4 for S/PDIF; measured, 4 locks to any external source and 3 is the one that
+ * tracks S/PDIF alone — see clarett.h). The 8PreX alone adds 1=ADAT 2 and 2=Wordclock, both untested.
+ * Default Internal. Set to 0 to slave to an incoming ADAT clock (needed to receive a digital ADAT input
+ * cleanly). The source is NOT a config-space byte — it lives only in the SET_CLOCK payload — so it
+ * cannot be mapped as an fcp-server global control, and there is no clock-source ALSA control yet.
  *
  * PER-CARD, indexed by ALSA card number (the one /proc/asound/cards shows), because a two-card rig needs
  * one master and one slave: feeding one Clarett's ADAT output into another's input requires the source
@@ -122,8 +122,8 @@ static int clock_source[SNDRV_CARDS] = { [0 ... SNDRV_CARDS - 1] = CLARETT_CLOCK
 module_param_array(clock_source, int, NULL, 0644);
 MODULE_PARM_DESC(clock_source,
 		 "Per-card SET_CLOCK source at stream arm, indexed by ALSA card number: 24=Internal "
-		 "(default), 0=ADAT, S/PDIF=3 except on the 2Pre where it is 4 (8PreX also has 1=ADAT 2, "
-		 "2=Wordclock). PCM rate must match the external clock when not Internal.");
+		 "(default), 0=ADAT, 3=S/PDIF (8PreX also has 1=ADAT 2, 2=Wordclock). PCM rate must match "
+		 "the external clock when not Internal.");
 
 /* The clock source in force for this card; falls back to Internal for a card number past the array. */
 static int clarett_clock_source(struct clarett *c)

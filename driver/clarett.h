@@ -236,16 +236,27 @@ struct snd_rawmidi_substream;
 /* SET_CLOCK (TRACE-CONFIRMED): payload {u32 sample_rate, u32 clock_source}. */
 #define FCP_SET_CLOCK            0x006003
 /*
- * Clock-source enum values [XML <clock-source>]. Internal and ADAT agree across the line, but S/PDIF does
- * NOT: it is 3 on the 4Pre/8Pre/8PreX and **4 on the 2Pre** — a per-model encoding of exactly the kind the
- * clean-room rules warn about, so check the model's own XML before adding a source here. Only the 8PreX
- * has more than one external source.
+ * Clock-source enum values. Internal, ADAT and S/PDIF are the same on every model — including the 2Pre,
+ * whose [XML] claims S/PDIF is 4. That claim was tested and does NOT match the hardware. Feeding one
+ * optical port from an 8PreX and reading Sync Status per value, with an invalid value (7) as the negative
+ * control and a real source proven present by the captured audio each time:
+ *
+ *   value | S/PDIF on the wire | ADAT on the wire | conclusion
+ *      0  |        -           |      Locked      | ADAT
+ *      3  |     Locked         |     Unlocked     | S/PDIF — tracks that source and only that source
+ *      4  |     Locked         |      Locked      | NOT source-specific; locks to whatever is present
+ *      7  |    Unlocked        |     Unlocked     | rejected, so Sync really does discriminate
+ *
+ * So 3 is the S/PDIF selector line-wide and 4 is something looser on the 2Pre (any external / optical),
+ * not a per-model S/PDIF encoding. Kept as a documented observation rather than a define, because nothing
+ * in the driver selects it. Note the audio path is NOT a probe here: S/PDIF and ADAT keep arriving on
+ * their capture channels whatever the clock source says, even while Sync reads Unlocked — the router does
+ * not care. Sync Status is the only signal that distinguishes these values.
  */
 #define CLARETT_CLOCK_ADAT       0	/* "ADAT 1" on the 8PreX */
-#define CLARETT_CLOCK_ADAT2      1	/* 8PreX only */
-#define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only */
-#define CLARETT_CLOCK_SPDIF      3	/* 4Pre/8Pre/8PreX */
-#define CLARETT_CLOCK_SPDIF_2PRE 4	/* the 2Pre alone uses 4 */
+#define CLARETT_CLOCK_ADAT2      1	/* 8PreX only, untested */
+#define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only, untested */
+#define CLARETT_CLOCK_SPDIF      3	/* all models; hardware-verified on the 2Pre and 8Pre */
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 
