@@ -2479,6 +2479,8 @@ static const struct clarett_model clarett_8prex = {
 	.n_meter_sources = ARRAY_SIZE(clarett_8prex_meter_sources),
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
+	.rx_live_mid = 20,			/* [XML] two ADAT ports: ch20-27 (pin-m=0x0) gone at double speed */
+	.rx_live_high = 16,			/* + ch16-19 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * correct pitch at 96k and 192k, full 28ch width, no glitches. Rate-
 						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
@@ -2548,6 +2550,8 @@ static const struct clarett_model clarett_2pre = {
 	.mode_label = "Level",
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
+	.rx_live_mid = 10,			/* [XML] ADAT 5-8 -> ch10-13 (pin-m=0x0) gone at double speed */
+	.rx_live_high = 8,			/* + ADAT 3-4 -> ch8-9 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed: analogue capture on ch0 reads
 						 * the correct pitch at 96k and 192k, full 14ch width preserved, no drift
 						 * or glitches. Width is rate-independent (no SMUX shrink). */
@@ -2618,6 +2622,8 @@ static const struct clarett_model clarett_4pre = {
 	.has_spdif_source = true,
 	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
 	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
+	.rx_live_mid = 16,			/* [XML] ADAT 5-8 -> ch16-19 (pin-m=0x0) gone at double speed */
+	.rx_live_high = 14,			/* + ADAT 3-4 -> ch14-15 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * correct pitch at 96k and 192k, full 20ch width, no glitches. Rate-
 						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
@@ -2695,6 +2701,11 @@ static const struct clarett_model clarett_8pre = {
 	.capture_channels = 20,			/* 18 record + 2 loopback. Width HW-confirmed: capture clocks at
 						 * full 20ch with analogue-1 on ch0; per-channel map beyond analogue [XML]. */
 	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
+	.rx_live_mid = 16,			/* ADAT 5-8 -> ch16-19 (pin-m=0x0) gone at double speed. HW-CONFIRMED:
+						 * ADAT 1-4 read clean on ch12-15 at 96k, ch16-19 held stale ring content
+						 * until this cap was applied. */
+	.rx_live_high = 14,			/* + ADAT 3-4 -> ch14-15 (pin-h=0x0) gone at quad [XML]. Untested:
+						 * the 8Pre USB has no ADAT output at quad speed to feed it. */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * the correct pitch at 96k and 192k, full 20ch width, no glitches.
 						 * Rate-independent geometry (no SMUX shrink), as on the 2Pre. Playback at

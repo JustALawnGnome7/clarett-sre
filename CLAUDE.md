@@ -276,10 +276,10 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     model. **ADAT S/MUX at double/quad speed is DOCUMENTED in the vendor XML** — `<adat>`
     `pin`/`pin-m`/`pin-h` = the value at single/double(mid)/quad(high) speed, `0x0` = channel gone, giving
     textbook **8→4→2 channels per ADAT port** at 1x/2x/4x (analogue/S-PDIF have no override, present at all
-    rates). Because SMUX'd-away channels go silent rather than shrinking the stream, this needs **no driver
-    change**. Still untested (not blockers, none affect the audio path): (a) HS *playback* re-verified only
-    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate); (b) the narrow "a source into ADAT 1 lands
-    on its normal capture channel at 2x, ADAT 5 silent" spot-check (only analogue-in was fed); (c) **the
+    rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
+    that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
+    (not blockers, none affect the audio path): (a) HS *playback* re-verified only
+    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate); (b) **the
     LEVEL METERS are rate-dependent too** — the vendor XML `<hardware-meters>` `meters-l/m/h` at
     `@136/146/156` (`METER_TABLE_[LMH]_OFFSET`) carry a per-speed channel-index table whose post-ADAT slots
     walk with the SMUX shift (8Pre S/PDIF: 18/19 -> 14/15 -> 12/13 at 1x/2x/4x). The driver writes all three
@@ -288,6 +288,36 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     speed. Analogue meters (fixed slots 0-7) are correct at every rate; whether the S/PDIF/ADAT meters stay
     aligned at 2x/4x depends on whether GET_METER is served through the rate-matched table (untraced at HS)
     — a metering-display caveat only.
+  - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
+    channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
+    ADAT Out 1 -> 8Pre ADAT In** (both Thunderbolt), tones 233/311/419/523/631/743/857/971 on ADAT 1-8,
+    8PreX master (Internal), 8Pre slaved (`clock_source` = ADAT). Quad speed needs THIS pair: the
+    Clarett 8Pre **USB** has `pin-h="0x0"` on every ADAT *output* (no ADAT out at 176.4/192 kHz), while the
+    TB units keep ADAT Out 1.1-1.2 — an earlier USB-source attempt could only reach 96k and read `Unlocked`
+    at 192k, correctly. Results, all purity 1.000: **48k = ADAT 1-8 on capture ch12-19; 96k = ADAT 1-4 on
+    ch12-15; 192k = ADAT 1-2 on ch12-13** — the XML `pin-m`/`pin-h` 8->4->2 prediction, proven end to end.
+    Per-model `clarett_model.rx_live_{mid,high}` = leading capture channels the device fills at 2x/4x
+    (2Pre 10/8, 4Pre 16/14, 8Pre 16/14, 8PreX 20/16 of widths 14/20/20/28), derived from the [XML]
+    `<record-outputs>` `pin-m`/`pin-h` overrides — `0x0` = gone at that speed *and above* (the cascade is
+    confirmed by the `<routing num/num-m/num-h>` deltas), and the dead set is a contiguous tail on every
+    model. 8Pre's 16/14 are now hardware-verified; the other three are XML-derived.
+    **What the dead channels actually contain (two wrong guesses before the right answer):** they are NOT
+    silent. First they read as a frozen 32-frame loop of stale full-scale audio — the DMA ring is allocated
+    once at probe and reused, so they replayed the previous stream. Blanking the ring at `prepare` cut that
+    to a **sparse residue the engine actively writes: one non-zero sample every 32 frames, an impulse train
+    at ~-25 dBFS**, and only into channels dropped at the *immediately preceding* speed tier (ADAT 5-8 at
+    double, ADAT 3-4 at quad); channels dropped a full tier earlier stayed exactly zero. So the engine does
+    keep touching those slots and a one-shot ring blank cannot hold. **Fix as landed:** `clarett_set_rx_live()`
+    latches the live/dead byte split at `prepare`, and **`clarett_rx_drain()` blanks the dead tail per period**
+    on the frames handed to ALSA. Costs one small memset per frame (16 B/frame on the 8Pre at 96k).
+    Stream-start glitches are the ADAT receiver locking (first ~0.3 s), not a defect.
+  - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
+    default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
+    parameter would have slaved both. [XML] `<clock-source>` enums: **Internal=24, S/PDIF=3** (not 4),
+    **ADAT=0**, plus 8PreX-only ADAT 2=1, Wordclock=2. It is **not a config-space byte** — `<clocking>` has
+    no `offset-bytes`, it exists only in the SET_CLOCK payload — so it CANNOT become an fcp-server devmap
+    global-control; a GUI control needs a new fcp-server clocking category over `0x006003`/`0x006004`.
+    `Sync Status` (numid 1) already exists via the SYNC capability and is the external-lock indicator.
   - **Attaching to an already-armed engine wedged the stream — FIXED July 24 2026, hardware-confirmed
     (commit `5f4bbcb`).** `clarett_pcm_pointer()` reported the *absolute* engine frame clock mod
     `buffer_size`, correct only for the direction that armed the engine (`prepare()` reset `pcm_frames`

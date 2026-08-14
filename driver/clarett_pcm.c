@@ -197,6 +197,46 @@ static void clarett_zero_tx(struct clarett *c)
 }
 
 /*
+ * How many leading capture channels does the device actually write at this rate? ADAT S/MUX removes the
+ * upper ADAT channels at double and quad speed (8 -> 4 -> 2 per port); the frame stride is unchanged, so
+ * the removed channels are a contiguous tail of the frame. See clarett_model.rx_live_{mid,high}.
+ */
+static u8 clarett_rx_live_channels(struct clarett *c, unsigned int rate)
+{
+	const struct clarett_model *m = c->model;
+	u8 live = m->capture_channels;
+
+	if (rate > 96000) {
+		if (m->rx_live_high)
+			live = m->rx_live_high;
+	} else if (rate > 48000) {
+		if (m->rx_live_mid)
+			live = m->rx_live_mid;
+	}
+	return min(live, m->capture_channels);
+}
+
+/*
+ * Latch how much of each capture frame the device actually fills at this rate, for clarett_rx_drain() to
+ * blank on the way out. Called from prepare, once the rate is negotiated.
+ *
+ * The removed channels are NOT left untouched by the engine, which an earlier version of this assumed:
+ * hardware shows it keeps depositing a sparse residue — one non-zero sample every 32 frames, an impulse
+ * train at -25 dBFS — into channels it dropped at the immediately preceding speed tier (ADAT 5-8 at
+ * double, ADAT 3-4 at quad), while channels dropped a full tier earlier get nothing at all. So blanking
+ * the ring once cannot hold; it has to happen per period, on the frames handed to ALSA.
+ */
+static void clarett_set_rx_live(struct clarett *c, unsigned int rate)
+{
+	u8 chans = c->model->capture_channels;
+	u8 live  = clarett_rx_live_channels(c, rate);
+
+	WRITE_ONCE(c->rx_dead_bytes, (u32)(chans - live) * 4);
+	WRITE_ONCE(c->rx_live_bytes, (u32)live * 4);
+	dev_dbg(&c->pci->dev, "rx: %u of %u capture channels live at %u Hz\n", live, chans, rate);
+}
+
+/*
  * Drain nframes of captured audio from the RX device area (starting at hardware ring frame `pos`) into the
  * contiguous ALSA buffer (starting at that stream's own frame `apos` — the two differ by the capture
  * direction's attach base and wrap independently). The RX area is a table of NDESC fragment SLOTS of
@@ -211,6 +251,8 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
 	u32 frame = (u32)c->model->capture_channels * 4;
 	u32 slot  = c->rx_slot;
 	u32 ring_frames = CLARETT_STREAM_NDESC * CLARETT_FRAG_FRAMES;
+	u32 dead = READ_ONCE(c->rx_dead_bytes);		/* S/MUX-removed tail; see clarett_set_rx_live() */
+	u32 live = READ_ONCE(c->rx_live_bytes);
 
 	while (nframes) {
 		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
@@ -221,6 +263,16 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
 		memcpy(alsa + (size_t)apos * frame,
 		       ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
 		       (size_t)chunk * frame);
+
+		/* Blank the channels S/MUX removed at this rate: the engine still drops a sparse residue in
+		 * them, which a full-width capture would otherwise record as an impulse train. */
+		if (dead) {
+			u8 *d = alsa + (size_t)apos * frame + live;
+			u32 i;
+
+			for (i = 0; i < chunk; i++, d += frame)
+				memset(d, 0, dead);
+		}
 		pos += chunk;
 		if (pos == ring_frames)
 			pos = 0;
@@ -637,6 +689,10 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 		WRITE_ONCE(c->pcm_running, false);
 	}
 	mutex_unlock(&c->pcm_lock);
+
+	/* Latch this rate's live capture width so the drain blanks the S/MUX-removed tail. */
+	if (!play)
+		clarett_set_rx_live(c, ss->runtime->rate);
 
 	if (!arm)			/* engine already armed: just attached at the current clock */
 		return 0;

@@ -376,10 +376,21 @@ struct clarett_model {
 	u8 capture_channels;			/* block-1 RX stream width */
 	u8 playback_channels;			/* block-0 TX stream width */
 	u32 max_rate;				/* highest HARDWARE-CONFIRMED sample rate; 0 = single speed (48k)
-						 * only. The stream width is rate-independent (no SMUX shrink observed),
-						 * so raising this just advertises the higher SET_CLOCK rates. Gate per
-						 * model: bump only after a hardware pitch-check confirms the data plane
-						 * (see the max_rate module param, which overrides this for testing). */
+						 * only. The stream WIDTH is rate-independent (the frame stride never
+						 * shrinks), so raising this just advertises the higher SET_CLOCK rates.
+						 * Gate per model: bump only after a hardware pitch-check confirms the data
+						 * plane (see the max_rate module param, which overrides this for testing). */
+	/*
+	 * ADAT S/MUX: the frame stays capture_channels wide at every rate, but the device stops WRITING the
+	 * ADAT channels that S/MUX removes (8 -> 4 -> 2 per port at single/double/quad speed). Those slots are
+	 * not silence — the engine simply leaves the ring untouched, so they replay whatever the previous
+	 * stream left there. These are the counts of leading capture channels the device still writes at
+	 * double and quad speed; the dead remainder is a contiguous tail on every model. 0 = all channels
+	 * live (no ADAT, or unknown). Derived from the [XML] <record-outputs> pin-m/pin-h overrides, where
+	 * "0x0" means the slot is gone at that speed and above. See clarett_zero_rx_dead().
+	 */
+	u8 rx_live_mid;				/* capture channels written at 88.2/96 kHz */
+	u8 rx_live_high;			/* capture channels written at 176.4/192 kHz */
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
 						 * the PCM path derives per-direction fragments from channel counts */
 	/*
@@ -554,6 +565,11 @@ struct clarett {
 	u32 tx_slot;			/* TX descriptor fragment SLOT stride, mirror of rx_slot (the working
 					 * RX path is non-contiguous; the contiguous TX ring folded 28ch->4 on the
 					 * 8PreX). = audio bytes when contiguous (tx_frag_pad=0); page-safe pow2 default. */
+	u32 rx_live_bytes;		/* leading bytes of each capture frame the device fills at the negotiated
+					 * rate, and the S/MUX-removed tail after them. Latched at prepare from
+					 * clarett_model.rx_live_{mid,high}; the drain blanks the tail because the
+					 * engine still leaves a sparse residue there. 0 dead = full width. */
+	u32 rx_dead_bytes;
 	u32 irq_descs;			/* effective RX IRQ cadence (descriptors between markers); 0 = default 16.
 					 * dyn_period derives it from the negotiated ALSA period (clarett_irq_descs). */
 	u32 lock_period;		/* dyn_period: frame count both directions share this session (0 = none).
