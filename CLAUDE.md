@@ -278,16 +278,9 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     textbook **8→4→2 channels per ADAT port** at 1x/2x/4x (analogue/S-PDIF have no override, present at all
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
     that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
-    (not blockers, none affect the audio path): (a) HS *playback* re-verified only
-    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate); (b) **the
-    LEVEL METERS are rate-dependent too** — the vendor XML `<hardware-meters>` `meters-l/m/h` at
-    `@136/146/156` (`METER_TABLE_[LMH]_OFFSET`) carry a per-speed channel-index table whose post-ADAT slots
-    walk with the SMUX shift (8Pre S/PDIF: 18/19 -> 14/15 -> 12/13 at 1x/2x/4x). The driver writes all three
-    tables only on the 8PreX (`clarett_meter_source_follow`, Meter Source control); 2Pre/4Pre/8Pre rely on
-    the flash-persisted tables, and fcp-server's peak-index meter map is a single layout measured at single
-    speed. Analogue meters (fixed slots 0-7) are correct at every rate; whether the S/PDIF/ADAT meters stay
-    aligned at 2x/4x depends on whether GET_METER is served through the rate-matched table (untraced at HS)
-    — a metering-display caveat only.
+    (not blockers, none affect the audio path): HS *playback* re-verified only
+    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate). The rate-dependent LEVEL METERS that used
+    to be listed here are no longer a caveat — they are a CONFIRMED BUG; see the meter bullet below.
   - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
     channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
     ADAT Out 1 -> 8Pre ADAT In** (both Thunderbolt), tones 233/311/419/523/631/743/857/971 on ADAT 1-8,
@@ -311,6 +304,30 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     latches the live/dead byte split at `prepare`, and **`clarett_rx_drain()` blanks the dead tail per period**
     on the frames handed to ALSA. Costs one small memset per frame (16 B/frame on the 8Pre at 96k).
     Stream-start glitches are the ADAT receiver locking (first ~0.3 s), not a defect.
+  - **OPEN BUG — the GET_METER slot array COMPACTS at high speed, so fcp-server's meter map is wrong above
+    the first S/MUX-removed destination (Aug 14 2026, 8Pre, hardware-measured).** The meters sit at ROUTER
+    DESTINATIONS, and a meter's slot is **its position in THAT RATE's destination table** — so every
+    destination S/MUX removes shifts everything after it down. Measured with `tools/fcp_meter_watch.c` while
+    an 8PreX fed ADAT into the 8Pre, one probe below the first removal and one above it:
+    | | ADAT in (-> PCM 11-18) | Mixer Input 01 |
+    |---|---|---|
+    | 48k | slots 10-17 | **40** |
+    | 96k | slots 10-13 | **32** |
+    | 192k | slots 10-11 | **28** |
+    A model built from the [XML] `pin-m`/`pin-h` removals **predicts all three exactly** (8Pre loses PCM 15-18
+    + ADAT Out 5-8 = 8 slots at double, plus PCM 13-14 + ADAT Out 3-4 = 12 at quad; 70 -> 62 -> 58 live
+    slots): Monitor Output 1 `18->14->12`, ADAT Output 1 `30->26->24`, Mixer Input 01 `40->32->28`. Note the
+    ADAT INPUT meters do NOT move — they sit at slots 10-13, *below* the first removal (PCM 15 = slot 14) —
+    which is why partial tests looked reassuring; the shift only appears when you probe above it.
+    **Consequence:** fcp-server's `peak-index` is a single layout, so at 96k on an 8Pre EVERY meter above
+    slot 13 (all outputs, S/PDIF, ADAT, all 30 mixer inputs) displays another channel's level in
+    alsa-scarlett-gui. **Fix, easy half:** `tools/gen_fcp_maps.py` can emit `peak-index-m`/`peak-index-h`
+    computed from the XML with no new measurement. **Hard half:** *fcp-server has no idea what sample rate
+    the device is at* — clock/rate is not a config byte (`<clocking>` has no `offset-bytes`), so it would
+    have to learn the rate from `/proc/asound/cardN/pcm*/sub*/hw_params` or a new FCP query. That is a design
+    decision, not a patch. Separately, the vendor XML `<hardware-meters>` `meters-l/m/h` at `@136/146/156`
+    (`METER_TABLE_[LMH]_OFFSET`) are the FRONT-PANEL bridge tables — a different mechanism, already written
+    per-band by `clarett_meter_source_follow` on the 8PreX; 2Pre/4Pre/8Pre use the flash-persisted ones.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
     parameter would have slaved both. [XML] `<clock-source>` enums: **Internal=24, S/PDIF=3** (not 4),
