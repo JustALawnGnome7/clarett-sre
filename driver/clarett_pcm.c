@@ -24,6 +24,7 @@
 #include <linux/delay.h>
 #include <linux/jiffies.h>
 #include <sound/core.h>
+#include <sound/control.h>	/* snd_kcontrol_new — the driver-owned "Clock Source" control */
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include "clarett.h"
@@ -131,6 +132,117 @@ static int clarett_clock_source(struct clarett *c)
 	int n = c->card->number;
 
 	return (n >= 0 && n < SNDRV_CARDS) ? clock_source[n] : CLARETT_CLOCK_INTERNAL;
+}
+
+static void clarett_set_clock_source(struct clarett *c, int value)
+{
+	int n = c->card->number;
+
+	if (n >= 0 && n < SNDRV_CARDS)
+		clock_source[n] = value;
+}
+
+/*
+ * "Clock Source" — the one control this driver owns rather than leaving to fcp-server.
+ *
+ * It cannot go through fcp-server's map: the clock source is NOT a config-space byte (the [XML]
+ * <clocking> element carries no offset-bytes), it exists only in the SET_CLOCK payload, which is
+ * {u32 rate, u32 source} — and fcp-server has no idea what sample rate the device is running at, so it
+ * cannot issue that command safely. This driver already sends SET_CLOCK at every stream arm and knows
+ * the negotiated rate, so the selection belongs here. alsa-scarlett-gui renders any element named
+ * "Clock Source" as a drop-down with no changes needed on its side.
+ *
+ * Backed by the per-card clock_source[] module parameter so the control and the sysfs knob stay one
+ * value; a sysfs write still works but bypasses the control's change notification.
+ */
+static int clarett_clock_src_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	struct clarett *c = snd_kcontrol_chip(kctl);
+	const struct clarett_model *m = c->model;
+
+	unsigned int i;
+
+	/* Not snd_ctl_enum_info(): the names live in a struct array, not a flat char* table. */
+	uinfo->type  = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->count = 1;
+	uinfo->value.enumerated.items = m->n_clock_srcs;
+	i = uinfo->value.enumerated.item;
+	if (i >= m->n_clock_srcs)
+		i = m->n_clock_srcs - 1;
+	uinfo->value.enumerated.item = i;
+	strscpy(uinfo->value.enumerated.name, m->clock_srcs[i].name,
+		sizeof(uinfo->value.enumerated.name));
+	return 0;
+}
+
+static int clarett_clock_src_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct clarett *c = snd_kcontrol_chip(kctl);
+	const struct clarett_model *m = c->model;
+	int cur = clarett_clock_source(c);
+	u8 i;
+
+	/* Report the matching entry; a raw value set out-of-band via sysfs may not be in the list, in
+	 * which case fall back to entry 0 (Internal) rather than an out-of-range index. */
+	for (i = 0; i < m->n_clock_srcs; i++) {
+		if (m->clock_srcs[i].value == cur) {
+			ucontrol->value.enumerated.item[0] = i;
+			return 0;
+		}
+	}
+	dev_dbg(&c->pci->dev, "clock source %d not in this model's list; reporting %s\n",
+		cur, m->clock_srcs[0].name);
+	ucontrol->value.enumerated.item[0] = 0;
+	return 0;
+}
+
+static int clarett_clock_src_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct clarett *c = snd_kcontrol_chip(kctl);
+	const struct clarett_model *m = c->model;
+	unsigned int i = ucontrol->value.enumerated.item[0];
+	int value;
+
+	if (i >= m->n_clock_srcs)
+		return -EINVAL;
+	value = m->clock_srcs[i].value;
+	if (value == clarett_clock_source(c))
+		return 0;
+
+	clarett_set_clock_source(c, value);
+
+	/*
+	 * Apply it now if nothing is streaming, so Sync Status reflects the choice immediately instead of
+	 * waiting for the next stream arm — that is what makes the drop-down feel live in the GUI. The rate
+	 * here is nominal (nothing is streaming); the arm sends the negotiated one. While a stream IS
+	 * running we deliberately do not touch the device: re-clocking mid-stream would tear the audio, so
+	 * the change lands at the next arm.
+	 */
+	if (!READ_ONCE(c->stream_on)) {
+		u8 clk[8];
+
+		clarett_put_le32(clk, CLARETT_DEFAULT_RATE);
+		clarett_put_le32(clk + 4, value);
+		if (clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk)))
+			dev_dbg(&c->pci->dev, "clock source %s: SET_CLOCK failed\n",
+				m->clock_srcs[i].name);
+	}
+	return 1;
+}
+
+static const struct snd_kcontrol_new clarett_clock_src_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name  = "Clock Source",
+	.info  = clarett_clock_src_info,
+	.get   = clarett_clock_src_get,
+	.put   = clarett_clock_src_put,
+};
+
+int clarett_add_clock_control(struct clarett *c)
+{
+	if (!c->model->n_clock_srcs)
+		return 0;
+	return snd_ctl_add(c->card, snd_ctl_new1(&clarett_clock_src_ctl, c));
 }
 
 

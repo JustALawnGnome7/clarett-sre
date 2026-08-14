@@ -2271,6 +2271,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_warn(&pci->dev, "FCP hwdep create failed (%d)\n", err);
 	err = 0;
 
+	/* The one exception to "controls live in userspace": the clock source is not a config byte, so
+	 * fcp-server cannot map it, and SET_CLOCK needs the sample rate that only this driver knows. */
+	err = clarett_add_clock_control(c);
+	if (err)
+		dev_warn(&pci->dev, "Clock Source control create failed (%d)\n", err);
+	err = 0;
+
 	if (!early_msi) {
 		clarett_enable_msi(c);	/* old order, for A/B */
 		clarett_setup_irq(c);
@@ -2465,6 +2472,27 @@ static const u8 clarett_8prex_stream_rx[] = {
 	0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,	/* ADAT 9-16 */
 };
 
+/*
+ * Selectable clock sources for the "Clock Source" control, Internal first. Values are the SET_CLOCK
+ * enums (clarett.h): Internal 24, S/PDIF 3, ADAT 0 — hardware-verified on the 2Pre and 8Pre, and shared
+ * by the whole line. The 8PreX's second ADAT port and wordclock input are [XML]-derived and could not be
+ * verified (Sync Status is unreliable on that model), but they are real connectors, so they are offered
+ * with the caveat recorded at CLARETT_CLOCK_ADAT2.
+ */
+static const struct clarett_clock_src clarett_clock_srcs[] = {
+	{ "Internal", CLARETT_CLOCK_INTERNAL },
+	{ "S/PDIF",   CLARETT_CLOCK_SPDIF },
+	{ "ADAT",     CLARETT_CLOCK_ADAT },
+};
+
+static const struct clarett_clock_src clarett_8prex_clock_srcs[] = {
+	{ "Internal",  CLARETT_CLOCK_INTERNAL },
+	{ "S/PDIF",    CLARETT_CLOCK_SPDIF },
+	{ "ADAT 1",    CLARETT_CLOCK_ADAT },
+	{ "ADAT 2",    CLARETT_CLOCK_ADAT2 },
+	{ "Wordclock", CLARETT_CLOCK_WORDCLOCK },
+};
+
 static const struct clarett_model clarett_8prex = {
 	.name = "Clarett 8PreX",
 	.slug = "clarett-8prex",
@@ -2480,6 +2508,8 @@ static const struct clarett_model clarett_8prex = {
 	.capture_channels = STREAM_CHANS,
 	.playback_channels = STREAM_CHANS,
 	.rx_live_mid = 20,			/* [XML] two ADAT ports: ch20-27 (pin-m=0x0) gone at double speed */
+	.clock_srcs = clarett_8prex_clock_srcs,
+	.n_clock_srcs = ARRAY_SIZE(clarett_8prex_clock_srcs),
 	.rx_live_high = 16,			/* + ch16-19 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * correct pitch at 96k and 192k, full 28ch width, no glitches. Rate-
@@ -2551,6 +2581,8 @@ static const struct clarett_model clarett_2pre = {
 	.capture_channels = 14,			/* record-outputs pin count (12 record + 2 loopback) */
 	.playback_channels = 4,			/* playback pin count */
 	.rx_live_mid = 10,			/* [XML] ADAT 5-8 -> ch10-13 (pin-m=0x0) gone at double speed */
+	.clock_srcs = clarett_clock_srcs,
+	.n_clock_srcs = ARRAY_SIZE(clarett_clock_srcs),
 	.rx_live_high = 8,			/* + ADAT 3-4 -> ch8-9 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed: analogue capture on ch0 reads
 						 * the correct pitch at 96k and 192k, full 14ch width preserved, no drift
@@ -2623,6 +2655,8 @@ static const struct clarett_model clarett_4pre = {
 	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
 	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
 	.rx_live_mid = 16,			/* [XML] ADAT 5-8 -> ch16-19 (pin-m=0x0) gone at double speed */
+	.clock_srcs = clarett_clock_srcs,
+	.n_clock_srcs = ARRAY_SIZE(clarett_clock_srcs),
 	.rx_live_high = 14,			/* + ADAT 3-4 -> ch14-15 (pin-h=0x0) gone at quad */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * correct pitch at 96k and 192k, full 20ch width, no glitches. Rate-
@@ -2704,6 +2738,8 @@ static const struct clarett_model clarett_8pre = {
 	.rx_live_mid = 16,			/* ADAT 5-8 -> ch16-19 (pin-m=0x0) gone at double speed. HW-CONFIRMED:
 						 * ADAT 1-4 read clean on ch12-15 at 96k, ch16-19 held stale ring content
 						 * until this cap was applied. */
+	.clock_srcs = clarett_clock_srcs,
+	.n_clock_srcs = ARRAY_SIZE(clarett_clock_srcs),
 	.rx_live_high = 14,			/* + ADAT 3-4 -> ch14-15 (pin-h=0x0) gone at quad [XML]. Untested:
 						 * the 8Pre USB has no ADAT output at quad speed to feed it. */
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads

@@ -367,6 +367,15 @@ struct clarett_preamp {
 	int n_modes;
 };
 
+/*
+ * One selectable clock source: the enum value SET_CLOCK carries, and the label the "Clock Source" ALSA
+ * control shows. Per model, Internal first (the default, and what a user without digital inputs wants).
+ */
+struct clarett_clock_src {
+	const char *name;
+	u8 value;
+};
+
 struct clarett_model {
 	const char *name;			/* human-readable model name ("Clarett 8PreX") */
 	/*
@@ -415,6 +424,8 @@ struct clarett_model {
 	 */
 	u8 rx_live_mid;				/* capture channels written at 88.2/96 kHz */
 	u8 rx_live_high;			/* capture channels written at 176.4/192 kHz */
+	const struct clarett_clock_src *clock_srcs;	/* selectable clock sources, Internal first */
+	u8 n_clock_srcs;
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
 						 * the PCM path derives per-direction fragments from channel counts */
 	/*
@@ -939,6 +950,9 @@ int clarett_engine_start(struct clarett *c);
 
 /* pcm.c */
 int clarett_create_pcm(struct clarett *c);
+/* The "Clock Source" enum control. Driver-owned rather than fcp-server's, because the source lives only
+ * in the SET_CLOCK payload alongside the rate — see the comment on the control in clarett_pcm.c. */
+int clarett_add_clock_control(struct clarett *c);
 void clarett_pcm_tick(struct clarett *c, u32 add_frames);
 
 /* midi.c */

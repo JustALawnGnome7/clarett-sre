@@ -328,6 +328,16 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     decision, not a patch. Separately, the vendor XML `<hardware-meters>` `meters-l/m/h` at `@136/146/156`
     (`METER_TABLE_[LMH]_OFFSET`) are the FRONT-PANEL bridge tables — a different mechanism, already written
     per-band by `clarett_meter_source_follow` on the 8PreX; 2Pre/4Pre/8Pre use the flash-persisted ones.
+  - **"Clock Source" is an ALSA control, and the ONE control this driver owns** (`clarett_add_clock_control`
+    in `clarett_pcm.c`; per-model lists in `clarett_main.c`: Internal/S/PDIF/ADAT everywhere, plus ADAT 2 and
+    Wordclock on the 8PreX). **alsa-scarlett-gui needs NO changes** — `iface-mixer.c` already renders any
+    element named `Clock Source` as a drop-down next to Sync Status. It cannot go through fcp-server:
+    the source is not a config byte (so it cannot be a devmap global-control) AND `SET_CLOCK`'s payload is
+    `{rate, source}` while fcp-server has no notion of the sample rate — the same gap that blocks the
+    per-rate meter fix. The driver already sends SET_CLOCK at every arm and knows the rate, so it owns this.
+    Backed by the `clock_source[]` module param, so control and sysfs are ONE value (a sysfs write bypasses
+    the control's change notification). Changing it while idle sends SET_CLOCK immediately so Sync Status
+    updates live; while streaming the change is deferred to the next arm rather than re-clocking mid-stream.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
     parameter would have slaved both. It is **not a config-space byte** — `<clocking>` has
