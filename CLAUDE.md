@@ -349,7 +349,16 @@ sudo make install                 # (top-level) maps -> /usr/share/fcp-server,
     So the 2Pre's `option="4"` is something looser (any external / optical), not a per-model S/PDIF
     encoding: **there is no per-model split here** and an earlier `CLARETT_CLOCK_SPDIF_2PRE` was reverted.
     Verified: Internal (every stream arms with it), ADAT=0 (8Pre at 48/96/192 kHz), S/PDIF=3 (8Pre over RCA
-    coax, 2Pre over TOSLINK). Untested: 8PreX ADAT 2=1 and Wordclock=2.
+    coax, 2Pre over TOSLINK). **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
+    `Sync Status` does NOT reliably track the selected source — feeding one ADAT port from an 8Pre, the
+    invalid control value 7 read `Locked` in 2 of 3 trials, while value 1 locked with EITHER port fed and
+    value 0 locked ONLY with port 2 fed. Those are mutually inconsistent, so no port mapping can be claimed
+    (a tempting "the XML labels are inverted" reading fitted 3 of 4 cells and was dropped when the control
+    failed). Likely the 8PreX reports a lock if EITHER ADAT receiver has locked, independent of the
+    SET_CLOCK selection — which would also make Sync useless as a probe on any two-ADAT-port model. Note the
+    2Pre/8Pre results above are NOT affected: their negative control held in every run. Wordclock=2 needs a
+    BNC source and is untested. **Anchor every such test on a negative control and re-check it per run** —
+    the control is what separates a finding from a pattern fitted to noise.
     **METHOD TRAP — the audio path is NOT a probe for clock source.** S/PDIF and ADAT keep arriving on their
     capture channels whatever the clock source says, *even while Sync reads Unlocked* — the router does not
     care. An earlier reading of "the tones landed, so the enum selected S/PDIF" was therefore invalid;

@@ -254,8 +254,16 @@ struct snd_rawmidi_substream;
  * not care. Sync Status is the only signal that distinguishes these values.
  */
 #define CLARETT_CLOCK_ADAT       0	/* "ADAT 1" on the 8PreX */
-#define CLARETT_CLOCK_ADAT2      1	/* 8PreX only, untested */
-#define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only, untested */
+/*
+ * 8PreX-only, and NOT verifiable by the method above: on that model Sync Status does not reliably track
+ * the selected source. Feeding one ADAT port from an 8Pre and stepping the value, the invalid control (7)
+ * read Locked in 2 of 3 trials, and value 1 locked with either port fed while value 0 locked only with
+ * port 2 fed — mutually inconsistent, so no port mapping can be claimed. Likely the 8PreX reports a lock
+ * if EITHER ADAT receiver has locked, independently of the SET_CLOCK selection. Whether the XML's
+ * "ADAT 1"/"ADAT 2" labels match the physical ports is therefore OPEN; the values below are XML-derived.
+ */
+#define CLARETT_CLOCK_ADAT2      1	/* 8PreX only, UNVERIFIED */
+#define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only, untested (needs a BNC wordclock source) */
 #define CLARETT_CLOCK_SPDIF      3	/* all models; hardware-verified on the 2Pre and 8Pre */
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
