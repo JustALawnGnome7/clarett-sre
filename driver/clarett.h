@@ -827,31 +827,46 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  */
 #define CLARETT_CTR_MOD		0x100
 /*
- * Layout of the 0x300 cause word, as far as it is known.
+ * Layout of the 0x300 cause word.
  *
- * BIT30 IS NAMED FOR THE OBSERVABLE, NOT A HYPOTHESIS — its meaning is unconfirmed, and this driver has
- * already been bitten once by naming ahead of evidence (see FCP_SYNC_RATE, "was misnamed
- * FCP_STREAM_COMMIT"). Rename it when the cadence sweep says what it is.
+ * BIT30 == PERIOD OVERRUN: the device sets it on an event raised while the PREVIOUS period had not yet
+ * been acknowledged. Established on hardware (2Pre, Aug 19 2026) by a dyn_period cadence sweep, and it is
+ * about as clean as a black-box result gets:
  *
- * What is established (2Pre, Aug 19 2026, dyn_period cadence 1, 60 s / 73 samples): the cumulative OR of
- * every sample carrying it is exactly 0xc00000ff — bit31, bit30, and an in-range counter, never any other
- * bit. The counter in those samples is not merely in range but CORRECT: across seven consecutive pairs,
- * elapsed * rate / CLARETT_CTR_FRAMES mod CLARETT_CTR_MOD predicted the next logged counter exactly, over
- * gaps from 16.6 ms to 566 ms. So bit30 is orthogonal to the counter and the sample is usable.
+ *   cadence   period    events/s   stepmax      bit30 in 60 s
+ *     1       16 fr       3000     0x1-0x2      36, and 36 again on a repeat run
+ *     4       64 fr        750     0x4          0
+ *    16      256 fr        187     0x10         0
+ *    64     1024 fr         47     0x40         0
  *
- * It is also strongly cadence-dependent: ~0.04% of events at cadence 1, and ZERO at cadence 64 where a
- * constant per-event rate predicts ~6 occurrences and a time-based rate ~360. That points at an event
- * overrun / coalescing indicator — the engine noting it raised a period while one was still outstanding —
- * which would only surface when every descriptor carries an IRQ marker. Unconfirmed.
+ * A cliff, not a slope — a constant per-event rate predicts ~9 at cadence 4, and e^-9 says zero is not
+ * that. Note stepmax EQUALS the cadence at 4/16/64 (one period per observation, no coalescing) and
+ * alternates 0x1/0x2 at cadence 1. Cross-referencing every 2-second window of both cadence-1 runs:
+ * stepmax=0x1 => bit30 delta 0, stepmax=0x2 => bit30 delta >= 1, in 59 of 59 windows with no exceptions.
+ * So the flag marks exactly the events the host observed as two periods merged.
+ *
+ * (An earlier reading of a single run as "front-loads then settles, so it is a startup transient" was
+ * WRONG — the repeat accrues throughout, and the quiet windows are simply the stepmax=0x1 ones. There is
+ * no time dependence, only coalescing dependence.)
+ *
+ * The counter in an overrun sample is fully valid — not merely in range but CORRECT: across seven
+ * consecutive logged pairs, elapsed * rate / CLARETT_CTR_FRAMES mod CLARETT_CTR_MOD predicted the next
+ * counter exactly, over gaps from 16.6 ms to 566 ms. The cumulative OR of every such sample is exactly
+ * 0xc00000ff, never another bit. So bit30 is orthogonal to the counter and the sample must be consumed,
+ * not dropped.
  *
  * Masking with ~CLARETT_CTR_KNOWN (rather than a bare range test on 0x7fffffff, which keeps bit30 and so
  * turns a valid 0x1a into an out-of-range 0x4000001a) still rejects the all-ones reads of a stalled link,
  * which is what the range test was written for.
+ *
+ * PRACTICAL CONSEQUENCE: cadence 4 (64-frame period, 1.33 ms) is the lowest setting that runs with zero
+ * coalescing and zero overruns, gapmax only ~5% over nominal. Cadence 1 works, but the engine flags
+ * ~0.6 overruns/s. Treat 64 frames as the practical floor for low-latency work; 16 is the hardware floor.
  */
 #define CLARETT_CTR_EVENT	0x80000000u	/* bit31: a period event is pending */
-#define CLARETT_CTR_BIT30	0x40000000u	/* bit30: second flag, meaning UNCONFIRMED (see above) */
+#define CLARETT_CTR_OVERRUN	0x40000000u	/* bit30: raised before the previous period was acked */
 #define CLARETT_CTR_MASK	(CLARETT_CTR_MOD - 1)	/* the counter itself */
-#define CLARETT_CTR_KNOWN	(CLARETT_CTR_EVENT | CLARETT_CTR_BIT30 | CLARETT_CTR_MASK)
+#define CLARETT_CTR_KNOWN	(CLARETT_CTR_EVENT | CLARETT_CTR_OVERRUN | CLARETT_CTR_MASK)
 /*
  * A period-event gap over clarett_tick_late_us() counts as a LATE tick in the servicer's telemetry.
  *

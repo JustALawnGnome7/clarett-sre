@@ -1081,7 +1081,7 @@ static int clarett_stream_service(void *data)
 	unsigned long last_tick = jiffies;
 	u32 wraps = 0, rekicks = 0, bad_reads = 0;
 	u32 bad_or = 0;		/* cumulative OR of every rejected 0x300 sample (badbits) */
-	u32 bit30 = 0;		/* accepted samples carrying CLARETT_CTR_BIT30 — meaning unconfirmed */
+	u32 overruns = 0;	/* events flagged CLARETT_CTR_OVERRUN (device saw a missed ack) */
 	bool seen = false;
 	bool gone = false;	/* set when the device leaves the bus: park the loop, never return early (kthread_stop UAF) */
 	/*
@@ -1220,10 +1220,10 @@ static int clarett_stream_service(void *data)
 			/*
 			 * Reject only samples carrying bits we have never seen — which is still exactly the
 			 * all-ones reads of a dead/stalled link that this test was written for. The old test
-			 * was a range check on (c2 & 0x7fffffff), and that keeps CLARETT_CTR_BIT30: a valid
-			 * counter of 0x1a in a bit30 sample read as 0x4000001a and was thrown away as corrupt.
-			 * See CLARETT_CTR_BIT30 in clarett.h for the evidence that those samples are good
-			 * (the counter in them is provably correct) and for what little is known of bit30.
+			 * was a range check on (c2 & 0x7fffffff), and that keeps CLARETT_CTR_OVERRUN: a valid
+			 * counter of 0x1a in an overrun sample read as 0x4000001a and was thrown away as corrupt.
+			 * See CLARETT_CTR_OVERRUN in clarett.h for the cadence sweep that identified the flag and
+			 * the proof that the counter in those samples is correct.
 			 *
 			 * Dropping is still safe whatever a future unknown bit turns out to mean: the next
 			 * accepted sample's modular difference recovers the advance across the gap.
@@ -1238,8 +1238,8 @@ static int clarett_stream_service(void *data)
 				usleep_range(100, 200);
 				continue;
 			}
-			if (c2 & CLARETT_CTR_BIT30)
-				bit30++;
+			if (c2 & CLARETT_CTR_OVERRUN)
+				overruns++;
 			step = (ctr - c->stream_ctr) & (CLARETT_CTR_MOD - 1);
 			if (!step) {
 				/* An exact multiple of the modulus: the advance is genuinely unknowable. */
@@ -1296,9 +1296,9 @@ static int clarett_stream_service(void *data)
 		}
 		if (time_after(jiffies, next_log)) {
 			dev_info(&c->pci->dev,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x bit30=%u\n",
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u\n",
 				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
-				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or, bit30);
+				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or, overruns);
 			gap_max_us = 0;
 			read_us_max = 0;
 			gap_late = 0;
