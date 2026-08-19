@@ -1446,6 +1446,15 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 /* Start the persistent 0x300 servicer kthread. The caller flips stream_run to release ACKing. */
 void clarett_engine_run(struct clarett *c)
 {
+	/*
+	 * Never start a second servicer. The pointer is the ONLY handle kthread_stop() has, so overwriting
+	 * it orphans a SCHED_FIFO thread that polls the BAR forever and faults on module text after rmmod.
+	 * clarett_pcm_prepare() now claims the arm under pcm_lock so this cannot be reached, but a silent
+	 * thread leak is far too expensive to leave guarded by one caller's discipline.
+	 */
+	if (WARN_ON_ONCE(c->stream_svc))
+		return;
+
 	atomic_set(&c->stream_periods, 0);
 	c->stream_ctr = 0;
 	c->stream_ctr_step = 0;

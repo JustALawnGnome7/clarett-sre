@@ -789,8 +789,26 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 
 	mutex_lock(&c->pcm_lock);
 	arm = !c->stream_on;
-	if (arm)			/* first direction in: the shared clock starts here */
-		c->pcm_frames = 0;
+	if (arm) {
+		/*
+		 * CLAIM THE ARM UNDER THE LOCK. c->stream_on used to be published only at the END of
+		 * clarett_engine_arm(), several milliseconds later — clarett_stream_handshake() runs ~20
+		 * mailbox commands in between — so two prepares landing inside that window both decided they
+		 * were first. Both then armed the engine AND called clarett_engine_run(), whose unconditional
+		 * `c->stream_svc = kthread_run(...)` overwrote the first thread's pointer, orphaning a
+		 * SCHED_FIFO kthread that nothing could ever kthread_stop(). On rmmod that orphan keeps
+		 * executing module text while devres frees it: a panic, not a warning.
+		 *
+		 * Reproduced Aug 19 2026 by starting `arecord &` and `aplay` together at cadence 4: two
+		 * `engine armed` lines 240 us apart, two servicers, and only one `stopped` line at teardown.
+		 * PipeWire spaces its two prepares widely enough to have hidden this; a DAW opening duplex
+		 * would not. Publishing here is safe: engine_arm sets it again (idempotent), engine_stop's
+		 * `if (!c->stream_on) return` still holds, and the only other reader is the 0x400 notify gate,
+		 * which merely starts suppressing relays a few ms earlier.
+		 */
+		c->stream_on = true;
+		c->pcm_frames = 0;	/* first direction in: the shared clock starts here */
+	}
 	if (play) {
 		c->pcm_play_sub = ss;
 		c->play_base = c->pcm_frames;
