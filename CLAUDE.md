@@ -236,12 +236,35 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   kernel arguments are ASRock-specific too** — not needed on the EliteBook, which enumerates the Clarett
   with stock parameters. Try stock first; those arguments work around firmware that under-allocates bus
   numbers behind the Apple TB3→TB2 adapter's bridge, they are not a device requirement.
-- **PENDING RETEST — an HP EliteBook 640 G11 is inbound (ordered Aug 14 2026).** When it arrives, re-run the
-  ftrace hwlat check for the ~42 ms Thunderbolt SMI freeze (`spec/provenance/clarett-smi-hwlat-vm-plan.md`).
-  That fault is recorded as platform-only with no driver fix, but it was diagnosed on ONE board; a second
-  host settles whether it follows the device or the ASRock. Re-check the TB security level, the `pci=`
-  arguments, and the cold-attach probe race on it at the same time — **three separate "Clarett needs X"
-  conclusions currently trace to that single machine's firmware.**
+- **A TB4 HOST NEEDS AN INTERMEDIATE TB3 DOCK for the Apple TB3→TB2 adapter (Aug 19 2026).** An **HP
+  EliteBook 640 G11** (integrated Thunderbolt 4, Core Ultra) will **not** enumerate a Clarett through the
+  Apple adapter plugged in directly; putting an **HP TB3 dock** between host and adapter makes it work. The
+  legacy TB1/TB2 link negotiation the active adapter needs lives in **discrete** TB3 controller silicon, and
+  Intel's integrated TB4 host ports dropped it — the dock terminates the TB4 link at its own discrete
+  controller and re-originates a downstream port that still speaks legacy, so the handshake happens
+  dock↔adapter, never host↔adapter. (The 840 G5 above is discrete TB3, which is why it takes the adapter
+  directly.) Secure Boot off, stock `pci=` parameters, no security-level change needed.
+  **`boltctl` saying `authorized` is NOT enough — `lspci -nn -d 1cb5:` is the check that the PCIe tunnel
+  actually came up**, and behind a dock plus a legacy adapter that is where a chain falls down.
+  Bridge chain also identifies the device's own Thunderbolt controller: host → **DSL6540 Alpine Ridge 4C**
+  (the dock) → **DSL2210 "Port Ridge 1C"** (upstream + 2 downstream ports = the unit's in/thru jacks) →
+  the `1cb5:0002` endpoint. So the **10 Gb/s single-lane link is the Clarett's own TB1-class controller, not
+  a dock penalty**, and it refines "FPGA-based Thunderbolt front-end" above: the TB layer is an Intel
+  DSL2210 and the FPGA is a PCIe endpoint *behind* it. Irrelevant for bandwidth (worst case in the line,
+  8PreX 28in+28out S32 @192 kHz, is ~344 Mb/s both directions).
+- **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
+  independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
+  The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
+  `readmax` 25–77 µs, `stepmax` exactly one period throughout, **`badreads=0`**. The ASRock produces a
+  ~42 ms freeze every 40–58 s (5–7 expected in that window) — none here. **The ~44 s all-`0xffffffff` MMIO
+  stall did not reproduce either**, over a window that should have held ~6, which argues against the
+  device-side flash-commit hypothesis in `clarett-periodic-mmio-stall`: the same unit on different host
+  firmware never blanks. Both faults follow the ASRock, not the device. Two further notes on this host:
+  it is the first run of the data plane behind an **Intel IOMMU** (`dmar0`/`dmar1`, DMA remapping on) with
+  no DMAR faults; and the Core Ultra is **hybrid**, so the SCHED_FIFO servicer can land on an LP-E core —
+  check `ps -o psr` on it before blaming the driver for missed deadlines. Still not done on this host: a
+  listening test (all evidence so far is telemetry) and a native hwlat run (no VM needed there — the plan
+  in `spec/provenance/clarett-smi-hwlat-vm-plan.md` applies with the VM step dropped).
 - Mailbox has a per-command trace (op/seq/cause/done/fcperr) at **`dev_dbg`** — off by default;
   enable via dynamic debug when diagnosing the mailbox (info-level would flood at the ~24 Hz meter
   poll). The notify re-read failure log is `dev_warn_ratelimited` (a walled device retries the
@@ -249,6 +272,49 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
 
 ## Driver limitations / TODO
 
+- **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
+  2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
+  `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
+  `periods=45000` exact. Capture alone at the same cadence measured 1401–1687 µs, so **the TX fill costs
+  nothing measurable.** That is ~2.7 ms round trip before converter latency — inside the <5 ms
+  amp-modeling target, on a host without the SMI freeze. **Cadence 1 (16 frames) is the HARDWARE floor,
+  not the usable one:** it runs, but the engine flags ~0.6 period overruns/s, the servicer coalesces 1–2
+  periods per poll, and `CLARETT_TX_GUARD_FRAMES` (64) is *four periods* wide there — so the TX guard, not
+  the period, would set playback latency anyway. Cadence sweep at 48 kHz (1/4/16/64 = 16/64/256/1024
+  frames) is in `CLARETT_CTR_OVERRUN`'s comment in `clarett.h`.
+- **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
+  on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
+  runs, every 2-second window with `stepmax=0x1` had zero flags and every window with `stepmax=0x2` had at
+  least one — **59 of 59 windows, no exceptions** — plus a cliff across cadences (36/36/0/0/0 at
+  1/1-repeat/4/16/64) that rules out both a constant per-event rate and a time-based source. **The servicer
+  used to DISCARD every event carrying it:** the counter was masked with `0x7fffffff`, which keeps bit 30,
+  so a valid counter of `0x1a` read as `0x4000001a` and failed the `>= CLARETT_CTR_MOD` range test. Fixing
+  the mask also **halved worst-case servicer latency** (`gapmax` 917–1220 → 467–754 µs) because the reject
+  path did `usleep_range(100, 200)` per drop — the misread was self-inflicting the run's worst latency at
+  exactly the cadence low-latency work needs. Telemetry: `overrun=` in the 2-second line; `badreads=` now
+  means only genuinely unusable samples (all-ones dead-link reads), and `badbits=` is their cumulative OR.
+- **Servicer `late=` is PERIOD-RELATIVE now (`clarett_tick_late_us()`), not a fixed 16 ms.** The old
+  constant was calibrated when the period was always ~5.3 ms; `dyn_period` makes nominal span 0.33 ms to
+  tens of ms, so a fixed threshold was wrong in *both* directions — at a 1024-frame period every healthy
+  tick counted as late (so the documented `late=[1-9]` stall grep fired continuously), and at cadence 1 the
+  same 16 ms is 48 periods and would flag nothing. Threshold is 3/2 × nominal (deliberately low: 3× of a
+  1024-frame period is 64 ms, *above* the 42–48 ms platform freeze it exists to catch), floored at 2 ms.
+- **Concurrent duplex prepare used to ORPHAN a servicer kthread — fixed Aug 19 2026, hardware-confirmed.**
+  `clarett_pcm_prepare()` decided `arm = !c->stream_on` under `pcm_lock`, but `stream_on` was published
+  only at the *end* of `clarett_engine_arm()`, with `clarett_stream_handshake()`'s ~20 mailbox commands in
+  between — a **milliseconds-wide** window in which two prepares both believed they were first. Both armed,
+  and both called `clarett_engine_run()`, whose unconditional `c->stream_svc = kthread_run(...)` overwrote
+  the first thread's handle; since the loop exits only on `kthread_should_stop()` and `engine_stop()` can
+  only stop the handle it still has, **the first servicer became unstoppable — and on `rmmod` it keeps
+  executing module text while devres frees it: a panic.** PipeWire spaces its two prepares widely enough to
+  have hidden this; `arecord & aplay` reproduces it every time, and a DAW opening duplex would too. Fixed by
+  claiming the arm under `pcm_lock` plus a `WARN_ON_ONCE` guard in `clarett_engine_run()`. Log signature of
+  the bug: two `engine armed` lines microseconds apart, two `stream-svc` lines per window, one `stopped`.
+  Detect a live orphan with `ps -eLo pid,tid,comm,cls,rtprio | grep clarett-svc` (must be zero with no
+  stream running) — there is no userspace way to stop it, so **reboot, do not `rmmod`**.
+  **When two servicers ran, `gapmax`/`late` were GARBAGE** (up to 998 ms, hundreds of late ticks): they are
+  per-thread locals, and with two threads racing on a read-to-clear `0x300` each sees a random subset of
+  events. The frame clock was fine throughout — read-to-clear still delivered each event exactly once.
 - **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (on by
   default, `enable_pcm`) registers a per-model S32_LE capture + playback device (up to 28ch; 44.1–192 kHz,
   see the sample-rate bullet below), driven by the persistent `0x300` servicer
@@ -485,8 +551,25 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   *including DATA*, while a DATA-category `GET_DATA` is what just answered (the self-contradiction is the
   tell). Seen after a run of PCM arm/stop churn (four `engine armed` → `stream-svc: stopped periods=0`
   cycles). **A module reload clears it with no bring-up and no power cycle** (`clarett_is_armed` correctly
-  reports armed afterwards), so it is host/session state, not the device losing its arm. Trigger not
-  isolated. Check with `sudo ./fcp_cap_read /dev/snd/hwCxD0`; recover with `rmmod`/`insmod`.
+  reports armed afterwards), so it is host/session state, not the device losing its arm.
+  Check with `sudo ./fcp_cap_read /dev/snd/hwCxD0`; recover with `rmmod`/`insmod`.
+  - **Aug 19 2026: CHURN AND CLIENT CONCURRENCY ARE RULED OUT as the trigger, and the ~48 ms MMIO blackout
+    is now the prime suspect.** Two deliberate provocations on the EliteBook — a platform with **no**
+    blackout — both came back healthy: (A) 20 rapid `arecord` arm/stop cycles with no other mailbox client;
+    (B) the identical 20 cycles with **fcp-server active and polling meters** throughout. So neither churn
+    nor a second client is sufficient. **What differs is the HOST:** every collapse ever recorded was on the
+    ASRock, which blacks out MMIO for ~48 ms every ~44 s, and a mailbox command issued inside that window
+    fails. Each engine arm fires ~20 commands, so churn buys more chances to collide with a blackout —
+    which explains why churn *correlated* without being sufficient, why the trigger was never isolated
+    (probabilistic on a ~44 s cadence), why it survives a power cycle while fcp-server/PipeWire run (they
+    keep issuing commands into blackouts and re-collapse it), and why it hit both the 2Pre and the 8PreX
+    (different models, one host). It fits mechanically too: a command whose response never lands leaves the
+    mailbox reading responses against the wrong command — exactly "opcode echoes, payload zeros, `CAP_READ`
+    denies the category that just answered". **NOT PROVEN.** The decisive test is on the ASRock: reload
+    with `resp_trace=1`, churn until it collapses, and check whether the first `rseq != seq` line lands in
+    the same second as a `badreads` bump. If so, collapse is not its own bug but another symptom of the
+    platform fault. Find the onset with
+    `journalctl -k --since "$start" | grep FCPr | perl -ne 'print if /seq=(\d+).*rseq=(\d+).*err=(\d+)/ && ($1 != $2 || $3)'`.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/provenance/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
