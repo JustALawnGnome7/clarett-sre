@@ -827,6 +827,32 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  */
 #define CLARETT_CTR_MOD		0x100
 /*
+ * Layout of the 0x300 cause word, as far as it is known.
+ *
+ * BIT30 IS NAMED FOR THE OBSERVABLE, NOT A HYPOTHESIS — its meaning is unconfirmed, and this driver has
+ * already been bitten once by naming ahead of evidence (see FCP_SYNC_RATE, "was misnamed
+ * FCP_STREAM_COMMIT"). Rename it when the cadence sweep says what it is.
+ *
+ * What is established (2Pre, Aug 19 2026, dyn_period cadence 1, 60 s / 73 samples): the cumulative OR of
+ * every sample carrying it is exactly 0xc00000ff — bit31, bit30, and an in-range counter, never any other
+ * bit. The counter in those samples is not merely in range but CORRECT: across seven consecutive pairs,
+ * elapsed * rate / CLARETT_CTR_FRAMES mod CLARETT_CTR_MOD predicted the next logged counter exactly, over
+ * gaps from 16.6 ms to 566 ms. So bit30 is orthogonal to the counter and the sample is usable.
+ *
+ * It is also strongly cadence-dependent: ~0.04% of events at cadence 1, and ZERO at cadence 64 where a
+ * constant per-event rate predicts ~6 occurrences and a time-based rate ~360. That points at an event
+ * overrun / coalescing indicator — the engine noting it raised a period while one was still outstanding —
+ * which would only surface when every descriptor carries an IRQ marker. Unconfirmed.
+ *
+ * Masking with ~CLARETT_CTR_KNOWN (rather than a bare range test on 0x7fffffff, which keeps bit30 and so
+ * turns a valid 0x1a into an out-of-range 0x4000001a) still rejects the all-ones reads of a stalled link,
+ * which is what the range test was written for.
+ */
+#define CLARETT_CTR_EVENT	0x80000000u	/* bit31: a period event is pending */
+#define CLARETT_CTR_BIT30	0x40000000u	/* bit30: second flag, meaning UNCONFIRMED (see above) */
+#define CLARETT_CTR_MASK	(CLARETT_CTR_MOD - 1)	/* the counter itself */
+#define CLARETT_CTR_KNOWN	(CLARETT_CTR_EVENT | CLARETT_CTR_BIT30 | CLARETT_CTR_MASK)
+/*
  * A period-event gap over clarett_tick_late_us() counts as a LATE tick in the servicer's telemetry.
  *
  * This WAS a fixed 16 ms, calibrated when the period was always ~5.3 ms (step 0xd). It cannot be a

@@ -1080,7 +1080,8 @@ static int clarett_stream_service(void *data)
 	unsigned long next_log = jiffies + msecs_to_jiffies(2000);
 	unsigned long last_tick = jiffies;
 	u32 wraps = 0, rekicks = 0, bad_reads = 0;
-	u32 bad_or = 0;		/* cumulative OR of every dropped out-of-modulus 0x300 sample (badbits) */
+	u32 bad_or = 0;		/* cumulative OR of every rejected 0x300 sample (badbits) */
+	u32 bit30 = 0;		/* accepted samples carrying CLARETT_CTR_BIT30 — meaning unconfirmed */
 	bool seen = false;
 	bool gone = false;	/* set when the device leaves the bus: park the loop, never return early (kthread_stop UAF) */
 	/*
@@ -1185,8 +1186,8 @@ static int clarett_stream_service(void *data)
 			continue;
 		}
 
-		if (c2 & 0x80000000) {
-			u32 ctr = c2 & 0x7fffffff;
+		if (c2 & CLARETT_CTR_EVENT) {
+			u32 ctr = c2 & CLARETT_CTR_MASK;
 			u32 step;
 
 			/* First events of a session at info: raw counter values (2Pre steps +0xd/event,
@@ -1217,32 +1218,28 @@ static int clarett_stream_service(void *data)
 			 * stall, which is what made it look correlated with unrelated userspace activity.
 			 */
 			/*
-			 * Out of modulus. Long read as "a corrupt read (a partially-failed transaction),
-			 * not a wider counter" — which was formed when the only known source was the
-			 * all-ones reads of a dead/stalled link. Drop it either way; the next good sample's
-			 * modular difference recovers the advance, so this is safe whatever it turns out to be.
+			 * Reject only samples carrying bits we have never seen — which is still exactly the
+			 * all-ones reads of a dead/stalled link that this test was written for. The old test
+			 * was a range check on (c2 & 0x7fffffff), and that keeps CLARETT_CTR_BIT30: a valid
+			 * counter of 0x1a in a bit30 sample read as 0x4000001a and was thrown away as corrupt.
+			 * See CLARETT_CTR_BIT30 in clarett.h for the evidence that those samples are good
+			 * (the counter in them is provably correct) and for what little is known of bit30.
 			 *
-			 * That reading is now IN DOUBT (2Pre, Aug 19 2026). At dyn_period cadence 1 (~3 kHz
-			 * poll) badreads accrues ~1.7/s — 0.06% of reads — on a link that is demonstrably
-			 * healthy (gapmax 1.2 ms, readmax <70 us, no blackout); at cadence 64 it is flat zero
-			 * over minutes. So the high bits may not be corruption at all: they may be fields of
-			 * 0x300 that only a fast poll ever catches set. Discarding them would then be
-			 * discarding information.
-			 *
-			 * Diagnose without spamming: log the first few raw values (as stream-ev[] does) and
-			 * carry the cumulative OR of every dropped sample in the 2-second line. A consistent
-			 * bit pattern in badbits == a real field; scattered bits == genuinely torn reads.
+			 * Dropping is still safe whatever a future unknown bit turns out to mean: the next
+			 * accepted sample's modular difference recovers the advance across the gap.
 			 */
-			if (ctr >= CLARETT_CTR_MOD) {
+			if (c2 & ~CLARETT_CTR_KNOWN) {
 				bad_reads++;
 				bad_or |= c2;
 				if (bad_reads <= 8)
 					dev_info(&c->pci->dev,
-						 "stream-badread[%u]: 0x300=0x%08x (ctr=0x%x >= mod 0x%x)\n",
-						 bad_reads, c2, ctr, CLARETT_CTR_MOD);
+						 "stream-badread[%u]: 0x300=0x%08x (unknown bits 0x%08x)\n",
+						 bad_reads, c2, c2 & ~CLARETT_CTR_KNOWN);
 				usleep_range(100, 200);
 				continue;
 			}
+			if (c2 & CLARETT_CTR_BIT30)
+				bit30++;
 			step = (ctr - c->stream_ctr) & (CLARETT_CTR_MOD - 1);
 			if (!step) {
 				/* An exact multiple of the modulus: the advance is genuinely unknowable. */
@@ -1299,9 +1296,9 @@ static int clarett_stream_service(void *data)
 		}
 		if (time_after(jiffies, next_log)) {
 			dev_info(&c->pci->dev,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x\n",
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x bit30=%u\n",
 				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
-				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or);
+				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or, bit30);
 			gap_max_us = 0;
 			read_us_max = 0;
 			gap_late = 0;
