@@ -19,6 +19,8 @@
 #include <linux/lcm.h>		/* lcm() — descriptor fragment alignment */
 #include <linux/string.h>	/* memcpy/memset — clarett_arm_emit() */
 #include <linux/log2.h>		/* roundup_pow_of_two() — page-safe fragment slots */
+#include <linux/math64.h>	/* div_u64() — period-relative tick-late threshold */
+#include <linux/minmax.h>	/* max_t() — same */
 #include <sound/core.h>
 
 struct snd_kcontrol;
@@ -825,11 +827,39 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  */
 #define CLARETT_CTR_MOD		0x100
 /*
- * A period-event gap over this counts as a LATE tick in the servicer's telemetry. Nominal is ~5.3 ms
- * (0xd * 16 frames at 48k); 16 ms is three periods, well clear of ordinary jitter but far below the
- * ~59 ms of app lead a late refill needs to consume before it can read stale ring content.
+ * A period-event gap over clarett_tick_late_us() counts as a LATE tick in the servicer's telemetry.
+ *
+ * This WAS a fixed 16 ms, calibrated when the period was always ~5.3 ms (step 0xd). It cannot be a
+ * constant now: dyn_period derives the IRQ cadence from the negotiated ALSA period, so nominal spans
+ * 16 frames (0.33 ms at 48k, cadence 1) to thousands, and the rate itself varies 44.1-192 kHz. A fixed
+ * threshold is wrong in BOTH directions — measured Aug 19 2026 on a 1024-frame period (21.33 ms nominal),
+ * every healthy tick exceeded 16 ms, so late == the period count in every window and the documented
+ * `late=[1-9]` stall grep fired continuously; at cadence 1 the same 16 ms is 48 periods of lateness and
+ * would flag nothing at all.
+ *
+ * So derive it from the live counter step (already self-calibrating) and cur_rate. The multiplier is
+ * deliberately LOW: the platform freeze this exists to catch is ~42-48 ms, and 3x — what the old constant
+ * was relative to a 5.3 ms period — is 64 ms at a 1024-frame period, i.e. above the blackout. 3/2 clears
+ * the measured jitter (~2% of nominal) by a wide margin and stays under one blackout at every period size.
+ * The floor keeps sub-millisecond cadences from tripping on ordinary RT jitter; 2 ms is ~6 periods at
+ * cadence 1 and still far below anything audible-but-recoverable, and it never applies once nominal
+ * reaches 1.33 ms.
  */
-#define CLARETT_TICK_LATE_US	16000
+#define CLARETT_TICK_LATE_NUM		3
+#define CLARETT_TICK_LATE_DEN		2
+#define CLARETT_TICK_LATE_FLOOR_US	2000
+static inline u64 clarett_tick_late_us(const struct clarett *c)
+{
+	/* Both fall back to what this threshold was originally calibrated against, so it stays sane
+	 * before the first counter delta has been measured. cur_rate is seeded at probe from
+	 * FCP_SYNC_RATE and re-published at each stream handshake, so it is live here. */
+	u32 rate = READ_ONCE(c->cur_rate) ? READ_ONCE(c->cur_rate) : CLARETT_DEFAULT_RATE;
+	u32 step = c->stream_ctr_step ? c->stream_ctr_step : 0xd;
+	u64 nominal = div_u64((u64)step * CLARETT_CTR_FRAMES * USEC_PER_SEC, rate);
+
+	return max_t(u64, nominal * CLARETT_TICK_LATE_NUM / CLARETT_TICK_LATE_DEN,
+		     CLARETT_TICK_LATE_FLOOR_US);
+}
 /* PCM descriptor table size: NDESC bare 8-byte entries, padded to keep the following sample area 0x100-aligned.
  * No +1 terminator slot — the wrap flag on the last entry is the terminator. */
 static inline size_t clarett_pcm_tbl_bytes(void)

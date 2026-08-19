@@ -1086,8 +1086,10 @@ static int clarett_stream_service(void *data)
 	 * Tick-lateness telemetry (audible-skip diagnosis). The period counters cannot show
 	 * this: they accumulate the HARDWARE ctr delta, so a late servicer catches up on the next tick and
 	 * the totals stay perfectly smooth while the audio glitches. What matters is the wall-clock gap
-	 * between period events — nominal is CLARETT_CTR_FRAMES*step/48000 (~5.3 ms on the 2Pre). A gap far
-	 * over that means the TX refill landed late and the engine read ring content the app had not been
+	 * between period events — nominal is CLARETT_CTR_FRAMES*step/rate, which is NOT a constant: dyn_period
+	 * ties the IRQ cadence to the negotiated ALSA period, so it spans 0.33 ms (cadence 1) to tens of ms,
+	 * and the rate varies too. clarett_tick_late_us() derives the threshold from both — do not reintroduce
+	 * a fixed one. A gap far over nominal means the TX refill landed late and the engine read ring content the app had not been
 	 * copied into yet. step_max is the same signal without a clock: the counter delta per event is
 	 * normally ~0xd, so a doubled step IS a missed poll. Reset each log window.
 	 */
@@ -1240,7 +1242,7 @@ static int clarett_stream_service(void *data)
 				last_ev = now;
 				if (gap > gap_max_us)
 					gap_max_us = gap;
-				if (gap > CLARETT_TICK_LATE_US)
+				if (gap > clarett_tick_late_us(c))
 					gap_late++;
 			}
 			if (step > step_max)
