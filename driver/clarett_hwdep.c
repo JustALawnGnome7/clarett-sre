@@ -9,7 +9,7 @@
  * opcodes are our opcodes, so FCP_IOCTL_CMD maps straight onto clarett_fcp_cmd().
  *
  * This is the driver's only control surface. The device is still armed in-kernel at probe
- * (clarett_arm_device); this just hands the mailbox to userspace afterwards.
+ * (the device self-arms from flash); this just hands the mailbox to userspace.
  *
  * STATUS: complete ABI — PVERSION + CMD + INIT + SET_METER_MAP/LABELS + the notification
  * read/poll relay. fcp-server can drive this device end-to-end (bench-testing pending).

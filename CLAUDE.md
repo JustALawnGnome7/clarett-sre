@@ -164,9 +164,15 @@ wireplumber/51-clarett-naming.conf    WirePlumber drop-in: promotes the driver's
                                       "Clarett 2Pre" not the generic "Clarett Multichannel". Coupled to
                                       the driver's card->shortname (matches on it); lives here, not in
                                       fcp-support, because it depends on the driver, not on fcp-server.
+tools/arm-tables/clarett_arm*.h       The de-blobbed vendor bring-up (typed step lists + the
+                                      clarett_arm_emit() builder). Lived in driver/ while the driver
+                                      replayed the bring-up; the driver no longer arms, so these are
+                                      kept ONLY as input to gen_fcp_maps.py (it parses the SET_MUX
+                                      bands for the router pins). Regenerate with
+                                      fcp_decode.py --emit-deblob.
 tools/gen_fcp_maps.py                 Generates all four map pairs (names, routing/mixer tables from
-                                      the de-blobbed bring-up tables clarett_arm_<model>.h, measured
-                                      meter peak-index).
+                                      the de-blobbed bring-up tables tools/arm-tables/clarett_arm_<model>.h,
+                                      measured meter peak-index).
 tools/gen_sim_state.py                Map -> alsactl .state file, so alsa-scarlett-gui can render our
                                       control set with no hardware attached.
 tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction decoder.
@@ -276,7 +282,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   the 4/4 `MSI:` line (a SHORT count is now a `dev_warn`), `FCP hwdep created`, `MIDI registered`,
   `PCM registered`, `descriptor rings:`, `stream-handshake:`, `engine armed:`, `stream-ev[0..7]`.
   Still `info` unconditionally: `stream-badread[n]`, and the probe `dev_err` when the device never
-  becomes ready. Everything else already sat behind an opt-in param (`force_arm`, `stream_probe`,
+  becomes ready. Everything else already sat behind an opt-in param (`stream_probe`,
   `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`).
   - **`stream-svc:` telemetry is now anomaly-gated, not unconditional** (`clarett_svc_log`). The 2-second
     window line prints at `info` only when that window had `late`, an `overrun`, a `badread`, or a
@@ -553,11 +559,10 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     holding a stream open" — this whole symptom was one `RUNNING` on `pcm0p`.
 - **★ MODEL AUTO-DETECTION IS THE ONLY PATH — the `model=` parameter is REMOVED (Aug 20 2026).** The
   device decides, or no card registers. `clarett_pick_model()` and the `model=` charp param are gone;
-  the id_table's 2Pre now exists *solely* as the stand-in for `force_arm`'s (model-agnostic) bring-up,
-  which must run before `GET_7.1` can be asked. **Both former fallbacks now fail the probe with
-  `-ENODEV`:** a device that answers with a geometry matching no `clarett_model` (previously
-  "unrecognized stream geometry; override with model=. Assuming 2Pre") and the same case after a
-  `force_arm` bring-up. The collapse/not-ready `-ENODEV` was already there and is unchanged.
+  the id_table's 2Pre is now only a placeholder until `GET_7.1` answers. **The former fallback now fails
+  the probe with `-ENODEV`:** a device that answers with a geometry matching no `clarett_model`
+  (previously "unrecognized stream geometry; override with model=. Assuming 2Pre"). The
+  collapse/not-ready `-ENODEV` was already there and is unchanged.
   **Why refusing beats guessing:** channel counts, DMA ring + descriptor geometry, fragment strides,
   routing/mixer tables and the meter layout are all sized from `c->model`, so a wrong model is not a
   cosmetic mislabel — it is a card streaming the wrong width into wrongly strided rings. **Adding new
@@ -580,15 +585,18 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   the model from it, and leaves routing untouched. A cold Thunderbolt attach can race device readiness
   (command #0's response may not land — see [[clarett-session-collapse-recovery]]); the poll absorbs it.
   If the device never answers, probe **fails loudly (`-ENODEV`, no card registered)** instead of the old
-  fake-2Pre placeholder — a used device just needs a reload; a truly *virgin/never-armed* unit must opt in
-  with `force_arm=1` to run the bring-up. `wait_ready_ms` tunes the settle budget.
-  - The bring-up (used only under `force_arm=1`) is the de-blobbed typed step list
-    (`driver/clarett_arm_<model>.h`, built by `clarett_arm.h`'s `clarett_arm_emit()`; regenerate via
-    `fcp_decode.py --emit-init | --emit-deblob`): `CONFIG_PUSH`×N, subsystem enables `0x000001`, count
-    queries, 8 KB config read/writeback, `SET_MIX`×N + `SET_MUX`×N. `clarett_arm_device()` replays it and
-    still preserves live routing — it reads band-0 first (`clarett_band0_routed`, `MUX_READ` `0x003001`)
-    and, if any destination is already patched, skips only the `SET_MUX`/`SET_MIX` steps (so a re-arm
-    can't clobber a user's routing). `tools/fcp_cap_read.c` dumps the capability bytes. Transport §8.
+  fake-2Pre placeholder — reload to retry. `wait_ready_ms` tunes the settle budget.
+  - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
+    working assumption is now that every unit in the field has been through Focusrite Control at least
+    once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:
+    `clarett_arm_device()`, `clarett_apply_model_routing()`, `clarett_band0_routed()`, the
+    `rearm_geometry` and `inject_clock` params, and `clarett_model.arm_seq`/`n_arm_steps` (41 → 38
+    module params). **The four `clarett_arm_<model>.h` tables MOVED to `tools/arm-tables/` rather than
+    being deleted** — `gen_fcp_maps.py` parses their `SET_MUX` bands for the router pins, so deleting
+    them would have silently broken map generation (verified: the regenerated maps are byte-identical
+    after the move). `tools/fcp_cap_read.c` still dumps the capability bytes. Transport §8.
+    **If a virgin/never-armed unit ever turns up**, the replay is in git history before this commit and
+    regenerable via `fcp_decode.py --emit-deblob`; that is the bridge to cross then.
   - History: probe used to ALWAYS arm (July 23), after an "is it already armed?" detection proved
     unworkable — every host-visible surface (`CAP_READ`, a `GET_DATA` echo, the pre-mailbox block) reads
     *identically* fresh-vs-armed, so probe skipped the bring-up on exactly the devices that needed it

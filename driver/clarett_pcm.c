@@ -679,9 +679,9 @@ static int clarett_pcm_hw_free(struct snd_pcm_substream *ss)
 /*
  * Stage-1 stream-config handshake. The VM re-issues SET_CLOCK + the
  * no-arg session lifecycle (0x6004 ×2 / 0x6005) in-session, immediately before every engine arm. The device
- * resets its stream config when idle, so the byte-identical handshake we already run once in clarett_arm_device()
- * at probe does not persist to PCM-arm time. Re-run the re-run-safe SUBSET here (NOT the full bring-up, which
- * wedges GET_DATA). Process context, so the mailbox is safe.
+ * resets its stream config when idle, so nothing established earlier survives to PCM-arm time and this
+ * handshake has to run at every arm. It is deliberately the re-run-safe SUBSET, not a full bring-up.
+ * Process context, so the mailbox is safe.
  *
  * Stage 2: the per-channel CONFIG_PUSH burst (model->stream_tx_ids / stream_rx_ids) re-declares which physical
  * inputs feed which DMA stream channels — without it the engine arms cleanly but no samples are routed in and

@@ -158,7 +158,7 @@ sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
   the interface has finished coming up, it waits briefly and, if the device still isn't
   responding, refuses to register rather than come up half-working (it logs *"device did not
   become ready"*). Just reload the module (`rmmod snd_clarett; insmod snd-clarett.ko`) — the
-  device settles within a moment. A brand-new, never-configured unit may need `force_arm=1` once.
+  device settles within a moment.
 
 ## How it works / contributing
 

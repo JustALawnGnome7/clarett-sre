@@ -635,7 +635,7 @@ def main():
     ap.add_argument("--emit-deblob", action="store_true",
                     help="input is a generated clarett_init_<model>.h; emit the de-blobbed bring-up "
                          "(typed step list + mix/mux/writeback/raw tables, see clarett_arm.h). "
-                         "Use --init-model for the symbol suffix. Redirect to clarett_arm_<model>.h.")
+                         "Use --init-model for the symbol suffix. Redirect to tools/arm-tables/clarett_arm_<model>.h.")
     ap.add_argument("--deblob-check", action="store_true",
                     help="input is a generated clarett_init_<model>.h; decompose every step to a typed "
                          "record, re-serialize, and verify byte-identity (the byte-faithful de-blob "

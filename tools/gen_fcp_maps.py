@@ -11,16 +11,18 @@ import json, collections, re
 import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTDIR = os.path.join(ROOT, "fcp-server-data")
-DRIVERDIR = os.path.join(ROOT, "driver")
+# The de-blobbed vendor bring-up tables. They lived in driver/ while the driver replayed the
+# bring-up; the driver no longer arms, so they are kept here purely as generator input.
+ARMDIR = os.path.join(ROOT, "tools", "arm-tables")
 OD = collections.OrderedDict
 
 FCP_SET_MUX = 0x003002
 
 
 def load_mux_bands(key):
-    """The model's SET_MUX band tables from the de-blobbed driver/clarett_arm_<key>.h.
+    """The model's SET_MUX band tables from the de-blobbed tools/arm-tables/clarett_arm_<key>.h.
     Each clarett_armmux_<key>_b<i>[] is {u32 header (band << 16 | ...), u32 entry[]}."""
-    text = open(os.path.join(DRIVERDIR, f"clarett_arm_{key}.h")).read()
+    text = open(os.path.join(ARMDIR, f"clarett_arm_{key}.h")).read()
     bands = {}
     for m in re.finditer(r"clarett_armmux_%s_b(\d+)\[\]\s*=\s*\{(.*?)\};" % key, text, re.S):
         bands[int(m.group(1))] = [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{8})", m.group(2))]

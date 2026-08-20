@@ -17,7 +17,7 @@
 #include <linux/wait.h>		/* wait_queue_head_t — hwdep notification relay */
 #include <linux/workqueue.h>
 #include <linux/lcm.h>		/* lcm() — descriptor fragment alignment */
-#include <linux/string.h>	/* memcpy/memset — clarett_arm_emit() */
+#include <linux/string.h>	/* memcpy/memset */
 #include <linux/log2.h>		/* roundup_pow_of_two() — page-safe fragment slots */
 #include <linux/math64.h>	/* div_u64() — period-relative tick-late threshold */
 #include <linux/minmax.h>	/* max_t() — same */
@@ -328,10 +328,9 @@ struct snd_rawmidi_substream;
 #define FCP_GET_73               0x007003
 
 /*
- * Device bring-up opcodes seen in the vendor attach capture.
- * Not fully decoded; the bring-up is replayed at probe (clarett_arm_device) from the de-blobbed
- * typed step list clarett_arm_<model>[] (clarett_arm_<model>.h), which precedes config writes
- * actually taking effect on hardware. Named here for documentation only.
+ * Device bring-up opcodes seen in the vendor attach capture. Not fully decoded, and the driver does
+ * not replay them: every unit self-arms from flash, so the host has no bring-up to do. SET_MIX and
+ * SET_MUX are live opcodes — they are what a routing or mixer edit issues. Named for documentation.
  *   0x000001 subsystem enable {u16 id}; 0x001000/0x002000/0x003000/0x004000 subsystem-count
  *   queries; 0x002002 SET_MIX {u16 mix, u16 coeff[30]}; 0x003002 SET_MUX; 0x004001/0x004005
  *   subsystem-4 setup; 0x005000 CONFIG_PUSH {u16 id}.
@@ -349,10 +348,6 @@ struct snd_rawmidi_substream;
 #define FCP_CAP_READ             FCP_INIT_1
 #define FCP_CAT_INIT             0x000
 #define FCP_CAT_DATA             0x800
-
-/* De-blobbed bring-up: a typed command list replaces the opaque captured init blob.
- * enum clarett_arm_kind, struct clarett_arm_step and the byte-exact clarett_arm_emit() builder. */
-#include "clarett_arm.h"
 
 /*
  * Per-model descriptor (multi-model support). One const instance per supported
@@ -462,10 +457,6 @@ struct clarett_model {
 	const u8 *stream_rx_ids;
 	u8 n_stream_tx_ids;
 	u8 n_stream_rx_ids;
-
-	/* device bring-up replay (per-model; de-blobbed from the vendor capture) */
-	const struct clarett_arm_step *arm_seq;
-	int n_arm_steps;
 };
 
 /*

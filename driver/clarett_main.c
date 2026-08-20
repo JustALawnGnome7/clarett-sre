@@ -120,32 +120,25 @@ MODULE_PARM_DESC(base_hi,
  * has shown what the VM actually seeds the ring with.
  */
 /*
- * Host bring-up ("arm") policy at probe. Default: DO NOT arm.
+ * Host bring-up ("arm") policy at probe: THE DRIVER NEVER ARMS.
  *
  * A device that has ever been armed self-arms from flash across a power cycle: reads, input metering, AND
  * control writes all work with no host bring-up (hardware-confirmed device-wide — 2Pre and 8Pre, no arm:
- * model auto-detected, meters live, Inst/Line relay switching). So on any used device the ~232-command
- * replay is redundant, and its SET_MUX/SET_MIX steps would reset the user's routing to the vendor default.
- * Probe therefore waits for the flash-persisted session to answer (clarett_detect_model) and detects the
- * model from it, arming nothing.
+ * model auto-detected, meters live, Inst/Line relay switching). Every unit that has ever been through
+ * Focusrite Control is in that state, so a host-side ~232-command replay is redundant on real hardware,
+ * and its SET_MUX/SET_MIX steps would reset the user's routing to the vendor default. Probe waits for the
+ * flash-persisted session to answer (clarett_detect_model) and detects the model from it, arming nothing.
  *
- * If the device never answers within wait_ready_ms, probe does NOT fall back to arming as a 2Pre
- * placeholder — that masked a not-ready / collapsed device as a working card. It fails the probe loudly so
- * the condition gets attention: a used device usually just needs a moment (reload to retry), and a
- * genuinely virgin / never-armed unit must opt in with force_arm=1 to run the bring-up.
+ * If the device never answers within wait_ready_ms, probe does NOT fall back to a placeholder — that
+ * masked a not-ready / collapsed device as a working card. It fails loudly so the condition gets
+ * attention; a used device usually just needs a moment, so reload to retry.
  */
-static bool force_arm;
-module_param(force_arm, bool, 0444);
-MODULE_PARM_DESC(force_arm,
-		 "Opt in to the vendor bring-up at probe (default off). Needed only for a virgin/never-armed "
-		 "device — used devices self-arm from flash. With it off, probe waits for the flash-persisted "
-		 "session and fails loudly if the device never becomes ready, instead of arming.");
 
 static unsigned int wait_ready_ms = 2000;
 module_param(wait_ready_ms, uint, 0444);
 MODULE_PARM_DESC(wait_ready_ms,
 		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
-		 "up (default 2000). A cold Thunderbolt attach can race device readiness. Ignored with force_arm=1.");
+		 "up (default 2000). A cold Thunderbolt attach can race device readiness.");
 
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
@@ -214,7 +207,7 @@ MODULE_PARM_DESC(monitor_enables,
 		 "At probe, write the monitor HW-enable bits (0x48/0x49, cmd3) so global Mute/Dim affect "
 		 "Monitor Out 1-2. Default true. FC's captured 2Pre control session does NOT send these, so "
 		 "they are additive writes we make beyond FC. Set 0 to make our command stream an exact "
-		 "SUBSET of FC's (combine with inject_clock=0) and A/B whether any extra write we make is "
+		 "SUBSET of FC's and A/B whether any extra write we make is "
 		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
 		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
 
@@ -256,16 +249,6 @@ MODULE_PARM_DESC(premailbox_causes,
 		 "side-effect-free; the cause-block reads are read-to-clear, so they are the prime suspect. Set 0 "
 		 "(with premailbox_reads=1) to drop just the cause reads and see if the LED flash stops — isolating "
 		 "whether a read-to-clear is the trigger. Default true.");
-
-static bool inject_clock = true;
-module_param(inject_clock, bool, 0444);
-MODULE_PARM_DESC(inject_clock,
-		 "Inject SET_CLOCK{48000,Internal} (op 0x6003) before the first CONFIG_PUSH during arm. "
-		 "Default true (data-plane: the device latches the rate while processing the push). FC's "
-		 "2Pre control-only session sends NO 0x6003, so our injection is an init-sequence deviation "
-		 "from FC that is present even during pure control tests. Set 0 to make arm an exact FC "
-		 "replay and A/B whether the injected clock is why control toggles complete (done=1) but "
-		 "never physically manifest.");
 
 static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; chosen by clarett_detect_model() */
 
@@ -496,299 +479,13 @@ static void clarett_hw_init(struct clarett *c)
 	 */
 }
 
-/* De-blobbed per-model bring-up (clarett_arm_<model>[] typed step lists; the builder is
- * clarett_arm_emit() in clarett_arm.h). Generated from the vendor MMIO bring-up captures;
- * payloads verified byte-identical to the vendor capture offline. */
-#include "clarett_arm_8prex.h"
-#include "clarett_arm_2pre.h"
-#include "clarett_arm_4pre.h"
-#include "clarett_arm_8pre.h"
-
-/*
- * Replay the vendor device bring-up captured at attach from a freshly power-cycled device:
- * every non-meter command up to the monitor-mute write. Self-boot does NOT arm config access
- * (GET_DATA fails); this host init arms it. Must run against a device in its fresh power-on state —
- * re-initializing an already-armed device wedges it instead.
- * Best-effort: failures are logged and the sequence continues.
- *
- * State-preserving writeback: the vendor cycle is read-modify-writeback — the arm's bulk GET_DATA
- * steps read the whole persistent appspace before the SET_DATA steps write it back. The blob's
- * SET_DATA payloads are the CAPTURE-DAY bytes; replaying them verbatim overwrites whatever state
- * the device restored from flash at power-on (post-crossing these writes manifest physically). So
- * the GET responses are captured into a staging image and substituted into each writeback whose
- * range was fully read — the replay echoes THIS boot's device state, byte geometry unchanged.
- * Allocation failure degrades to the verbatim replay.
- */
-/*
- * The arm has to run before the device can say what it is, so it necessarily replays the id_table
- * default's bring-up blob (the 2Pre's). That is fine for the model-agnostic parts of bring-up, but
- * it leaves a non-2Pre device holding the 2Pre's ROUTING and MIXER tables — the wrong patch for the
- * hardware. Observed on a 4Pre: its live table routed 14 of its 20 PCM captures and 10 of its 30
- * mixer inputs, with the outputs wired as a 2Pre's and S/PDIF appearing as an input rather than an
- * output. (The device's own MUX_INFO still reports the correct 4Pre sizes, 74/70/68 — only the
- * contents were wrong.)
- *
- * Once detection has corrected c->model, replay just that model's SET_MUX/SET_MIX steps, in blob
- * order so the SET_MIX buses land before the SET_MUX bands. Those are the same two commands a
- * runtime routing or mixer edit issues, so this is an ordinary operation on an armed session —
- * unlike a full re-init, which is documented to wedge GET_DATA on an already-armed device.
- */
-static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geometry_only);
-
-/*
- * After model detection, re-declare the DETECTED model's stream geometry by re-running its bring-up
- * with the config read/writeback (GET_DATA/SET_DATA) skipped (clarett_arm_device geometry_only). The
- * arm ran armed_with's bring-up (the id_table default, so GET_7.1 could answer), which set armed_with's
- * per-direction channel counts + CONFIG_PUSH map. This lever re-runs the detected model's bring-up minus
- * the GET_DATA/SET_DATA config read/writeback (that re-init wedges GET_DATA, so fcp-server can't read the
- * control map), re-declaring geometry (+routing per preserve) without touching the appspace config.
- *
- * NOTE: this was built to test the hypothesis that the 8PreX 28ch->4 playback FOLD was a
- * stale-2Pre-geometry declaration. That hypothesis was WRONG — the fold was TX-fragment page-alignment
- * (0x700 straddles the 4 KB page), fixed by tx_slot page-safe slotting. Re-declaring
- * geometry does NOT fix the fold (hardware-confirmed). Kept as a harmless off-by-default diagnostic lever.
- */
-static bool rearm_geometry;
-module_param(rearm_geometry, bool, 0644);
-MODULE_PARM_DESC(rearm_geometry,
-		 "Diagnostic (default off): after detection, re-declare the detected model's stream geometry "
-		 "(re-run its bring-up minus the GET_DATA/SET_DATA config read/writeback). Does NOT fix the "
-		 "8PreX playback fold (that was TX fragment page-alignment; see tx_frag_pad).");
-
-static void clarett_apply_model_routing(struct clarett *c, const struct clarett_model *armed_with,
-					bool preserve_routing)
-{
-	const struct clarett_model *m = c->model;
-	int i, sent = 0, fails = 0;
-
-	if (m == armed_with)			/* armed as the right model already */
-		return;
-
-	/*
-	 * Geometry re-declare (opt-in diagnostic; does NOT fix the 8PreX playback fold — that was TX fragment
-	 * page-alignment, see rearm_geometry note above). clarett_arm_device threads preserve_routing
-	 * through (skips SET_MUX/SET_MIX when set) and geometry_only skips the config read/writeback that would
-	 * wedge GET_DATA. Only models with a captured blob can re-arm (all four now have one).
-	 */
-	if (rearm_geometry && m->arm_seq) {
-		clarett_arm_device(c, preserve_routing, true);
-		dev_info(&c->pci->dev,
-			 "re-declared %s stream geometry after arming as %s (geometry_only re-arm, %s)\n",
-			 m->name, armed_with->name,
-			 preserve_routing ? "live routing preserved" : "default routing applied");
-		return;
-	}
-
-	/* The arm ran as armed_with but the device is really m; normally we now swap in m's routing.
-	 * But if the arm PRESERVED live routing (the device was already configured — see
-	 * clarett_band0_routed) or was skipped entirely, then armed_with's routing was never applied, so
-	 * there is nothing to correct: sending m's DEFAULT tables here would clobber the user's routing —
-	 * the exact regression clarett_band0_routed exists to prevent, and it bit every non-default model
-	 * (4Pre/8Pre/8PreX arm as the 2Pre default) until this guard. Leave the live routing alone. */
-	if (preserve_routing) {
-		dev_info(&c->pci->dev,
-			 "kept live routing after detect (%s default tables not applied; armed as %s)\n",
-			 m->name, armed_with->name);
-		return;
-	}
-
-	for (i = 0; i < m->n_arm_steps; i++) {
-		const struct clarett_arm_step *s = &m->arm_seq[i];
-		u8 buf[CLARETT_MBOX_DATA_MAX];
-		int len;
-
-		if (s->op != FCP_SET_MUX && s->op != FCP_SET_MIX)
-			continue;
-		len = clarett_arm_emit(s, buf);
-		if (clarett_fcp(c, s->op, buf, len) < 0)
-			fails++;
-		else
-			sent++;
-	}
-
-	dev_info(&c->pci->dev,
-		 "re-applied %s routing/mixer tables after detect (armed as %s; %d sent, %d failed)\n",
-		 m->name, armed_with->name, sent, fails);
-}
-
 /*
  * The collapsed-session state (observed on the 2Pre, after a run of PCM arm/stop churn): the
  * mailbox still answers and still echoes the opcode, but every response payload is zeros — CAP_READ says
  * no category is supported even for DATA, while a DATA-category GET_DATA is what just answered. A module
  * reload clears it, so it is host/session state, not the device losing its arm; power-cycling is not
  * needed. Trigger not yet isolated. A CAP_READ bench tool is the one-command check.
- *
- * There is deliberately no "is it already armed?" probe here: nothing host-visible distinguishes a fresh
- * device from an armed one (see the force_arm comment). Probe does not arm at all by default — it waits
- * for the flash-persisted session and detects the model from it; force_arm=1 opts into the bring-up for a
- * virgin device.
  */
-
-/*
- * How many band-0 destinations are actively routed (source != 0)? A configured device — whether it holds
- * the vendor default or a user's edits — answers with a populated table; a device that has never had
- * routing pushed answers empty (or refuses, returning <0). This is the discriminator the arm uses to
- * decide whether to replay its default SET_MUX/SET_MIX (which would overwrite a user's routing) or leave
- * the live routing alone. It reads CONTENT, not session liveness — the thing that actually distinguishes
- * a fresh device from an armed one, which nothing host-visible does (see the always-arm note).
- */
-static int clarett_band0_routed(struct clarett *c)
-{
-	u8 req[4] = { 0, 0, CLARETT_MUX_READ_MAX, 0 };	/* offset, pad, count, band 0 */
-	const u8 *r = c->resp_buf;
-	int i, routed = 0;
-
-	if (clarett_fcp(c, FCP_MUX_READ, req, sizeof(req)))
-		return -EIO;
-	dma_rmb();	/* order the DMAed response before reading resp_buf */
-	if (clarett_get_le32(r + FCP_RESP_ECHO_OFF) != (CMD_EXEC_FLAG | FCP_MUX_READ))
-		return -EIO;
-	for (i = 0; i < CLARETT_MUX_READ_MAX; i++) {
-		u32 e = clarett_get_le32(r + FCP_RESP_DATA_OFF + i * 4);
-
-		if ((e >> 12) & 0xfff)	/* a real source patched to this destination */
-			routed++;
-	}
-	return routed;
-}
-
-/*
- * preserve_routing: skip the SET_MUX/SET_MIX steps of the bring-up, keeping whatever routing/mixer the
- * device already holds. Every other step still runs (subsystem enables, config read/writeback, metering),
- * so a reload no longer resets the user's routing to the vendor default while still doing the arm a
- * fresh device needs. See clarett_band0_routed() for how the caller decides.
- */
-static int clarett_arm_device(struct clarett *c, bool preserve_routing, bool geometry_only)
-{
-	int i, err, fails = 0, echoed = 0, verbatim = 0, skipped = 0, skipped_cfg = 0;
-	bool clk_sent = false;
-	unsigned long *have = NULL;
-	u8 *cfg, *pbuf;
-
-	pbuf = kmalloc(CLARETT_MBOX_DATA_MAX, GFP_KERNEL);	/* holds each step's emitted payload */
-	if (!pbuf)
-		return -ENOMEM;
-
-	cfg = kmalloc(CLARETT_APPSPACE_SIZE, GFP_KERNEL);
-	if (cfg) {
-		have = bitmap_zalloc(CLARETT_APPSPACE_SIZE, GFP_KERNEL);
-		if (!have) {
-			kfree(cfg);
-			cfg = NULL;
-		}
-	}
-
-	for (i = 0; i < c->model->n_arm_steps; i++) {
-		const struct clarett_arm_step *s = &c->model->arm_seq[i];
-		int len;
-
-		/* Leave the device's live routing/mixer in place when asked: these two opcodes are the
-		 * only ones that overwrite it, and they carry the vendor default. */
-		if (preserve_routing &&
-		    (s->op == FCP_SET_MUX || s->op == FCP_SET_MIX)) {
-			skipped++;
-			continue;
-		}
-
-		/*
-		 * geometry_only (a re-arm to re-declare a detected model's stream geometry): skip the config
-		 * read/writeback — re-running GET_DATA/SET_DATA over an already-armed device is the re-init that
-		 * wedges GET_DATA. The CONFIG_PUSH/subsystem/count steps that declare channel geometry still run.
-		 */
-		if (geometry_only &&
-		    (s->op == FCP_GET_DATA || s->op == FCP_SET_DATA)) {
-			skipped_cfg++;
-			continue;
-		}
-
-		/*
-		 * SET_CLOCK before CONFIG_PUSH. FC issues 0x6003 at device-open, ahead of the config/routing
-		 * push, in every capture; the device appears to latch the clock into its audio subsystem while
-		 * processing that push, so a SET_CLOCK sent only later (engine_start) never engages period
-		 * generation (0x300 stays flat). Inject it just before the first 0x5000, matching the order.
-		 */
-		if (inject_clock && !clk_sent && s->op == 0x005000) {
-			u8 clk[8];
-
-			clarett_put_le32(clk,     CLARETT_DEFAULT_RATE);
-			clarett_put_le32(clk + 4, CLARETT_CLOCK_INTERNAL);
-			err = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
-			dev_info(&c->pci->dev, "arm: SET_CLOCK{%u, Internal} before CONFIG_PUSH -> %d\n",
-				 CLARETT_DEFAULT_RATE, err);
-			clk_sent = true;
-		}
-
-		len = clarett_arm_emit(s, pbuf);	/* build the payload (byte-identical to the capture) */
-
-		/* Substitute the device's own bytes into this writeback if its whole range was captured
-		 * from earlier GET responses; otherwise the emitted capture-day fallback header stands. */
-		if (cfg && s->op == FCP_SET_DATA && len >= 8) {
-			u32 tgt  = clarett_get_le32(pbuf);
-			u32 tlen = clarett_get_le32(pbuf + 4);
-
-			if (tlen == (u32)len - 8 && tgt + tlen <= CLARETT_APPSPACE_SIZE &&
-			    find_next_zero_bit(have, tgt + tlen, tgt) >= tgt + tlen) {
-				memcpy(pbuf + 8, cfg + tgt, tlen);
-				echoed++;
-			} else {
-				dev_info(&c->pci->dev,
-					 "arm[%d]: SET_DATA{%u,%u} range not captured; replaying capture-day bytes\n",
-					 i, tgt, tlen);
-				verbatim++;
-			}
-		}
-
-		err = clarett_fcp(c, s->op, pbuf, len);
-		if (err) {
-			dev_warn(&c->pci->dev, "arm[%d] op 0x%06x failed: %d\n",
-				 i, s->op, err);
-			fails++;
-		}
-
-		/* Capture GET_DATA responses into the staging image. The gated-ack cycle means the
-		 * response has landed (or was reported missing) by the time clarett_fcp returns; the
-		 * echo+size guard rejects refusal stubs so a walled read can't taint the image. No
-		 * resp_buf race here: the meter heartbeat only starts after the arm completes. */
-		if (cfg && !err && s->op == FCP_GET_DATA && len >= 8) {
-			u32 tgt  = clarett_get_le32(pbuf);
-			u32 tlen = clarett_get_le32(pbuf + 4);
-			const u8 *r = c->resp_buf;
-
-			if (tgt + tlen <= CLARETT_APPSPACE_SIZE) {
-				u32 echo;
-				u16 size;
-
-				dma_rmb();	/* order the DMAed response before reading it */
-				echo = clarett_get_le32(r + FCP_RESP_ECHO_OFF);
-				size = r[FCP_RESP_SIZE_OFF] | r[FCP_RESP_SIZE_OFF + 1] << 8;
-				if (echo == (CMD_EXEC_FLAG | FCP_GET_DATA) && size >= tlen) {
-					memcpy(cfg + tgt, r + FCP_RESP_DATA_OFF, tlen);
-					bitmap_set(have, tgt, tlen);
-				}
-			}
-		}
-	}
-	if (fails)
-		dev_warn(&c->pci->dev, "arm: %d/%d steps failed\n",
-			 fails, c->model->n_arm_steps);
-	if (cfg)
-		dev_info(&c->pci->dev,
-			 "arm: writeback echoed live device state (%d echoed, %d verbatim)\n",
-			 echoed, verbatim);
-	if (skipped)
-		dev_info(&c->pci->dev,
-			 "arm: preserved live routing/mixer (%d SET_MUX/SET_MIX steps skipped)\n",
-			 skipped);
-	if (skipped_cfg)
-		dev_info(&c->pci->dev,
-			 "arm: geometry-only re-arm (%d GET_DATA/SET_DATA config steps skipped)\n",
-			 skipped_cfg);
-
-	kfree(pbuf);
-	bitmap_free(have);
-	kfree(cfg);
-	return 0;
-}
 
 /*
  * Error-code discrimination probe. Send a valid GET_DATA plus three
@@ -2114,7 +1811,6 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
-	const struct clarett_model *armed_with;
 	bool pcm_ok = false;			/* PCM fully registered (not just snd_pcm_new'd) */
 	void __iomem *bar0;
 	int err, seeded;
@@ -2128,9 +1824,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c->card = card;
 	c->pci = pci;
 	/* Shared PCI id across the line → the match can't pick the model, and there is no override.
-	 * The id_table's 2Pre stands in ONLY as the stand-in for force_arm's (model-agnostic) bring-up,
-	 * which has to run before the device can answer; clarett_detect_model then replaces it below,
-	 * or probe fails. Nothing that depends on the model may be sized before that point. */
+	 * The id_table's entry is a placeholder only: clarett_detect_model() replaces it below, or probe
+	 * fails. Nothing that depends on the model may be sized before that point. */
 	c->model = (const struct clarett_model *)ent->driver_data;
 	mutex_init(&c->mbox_lock);
 	mutex_init(&c->hwdep_lock);
@@ -2190,99 +1885,64 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_hw_init(c);
 
 	/*
-	 * Establish the session. A used device self-arms from flash — reads, input metering, and control
-	 * writes all work with no host bring-up (see the force_arm comment). So the default path arms
-	 * NOTHING: wait for the flash-persisted session to answer, detect the model from it, and leave the
-	 * device's own routing in place. force_arm=1 opts into the full vendor bring-up for a virgin device.
+	 * Establish the session. The driver never arms: a device that has been armed once self-arms from
+	 * flash, so reads, input metering and control writes all work with no host bring-up. Wait for that
+	 * flash-persisted session to answer, detect the model from it, and leave the device's own routing
+	 * alone.
 	 *
-	 * armed_with is the model whose bring-up force_arm replays: necessarily the id_table stand-in,
-	 * since the real model is not known until GET_7.1 answers below. That is fine — the bring-up is
-	 * model-agnostic (the same blob arms every bench unit), and detection corrects c->model straight
-	 * after, so the only thing armed_with is kept for is telling clarett_apply_model_routing() which
-	 * model's routing was actually pushed.
+	 * A cold Thunderbolt attach can race device readiness (command #0's response may not land), so poll
+	 * clarett_detect_model quietly — a warn per attempt would be noise — until it answers or the settle
+	 * budget expires.
 	 */
-	armed_with = c->model;
-
 	{
 		bool collapsed = false;
 		const struct clarett_model *det = NULL;
+		unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
 
-		if (force_arm) {
-			/*
-			 * Opt-in bring-up for a virgin/never-armed device. Model-agnostic: arm as armed_with,
-			 * detect below, then apply the detected model's routing. Preserve any live routing the
-			 * device already holds (a configured device reads it back; a virgin one reads empty) so
-			 * the SET_MUX/SET_MIX default tables do not clobber a user's patch.
-			 */
-			int routed = clarett_band0_routed(c);
-			bool preserve_routing = routed > 0;
-
-			clarett_arm_device(c, preserve_routing, false);
-			det = clarett_detect_model(c, &collapsed, false);
-			if (!det) {
-				dev_err(&pci->dev,
-					"force_arm: model auto-detect failed after bring-up (%s) — refusing to register. "
-					"The device decides the model and there is no override; everything downstream "
-					"(channel counts, DMA ring geometry, routing tables) is sized from it.\n",
-					collapsed ? "session refused" : "unrecognized geometry");
-				err = -ENODEV;
-				goto err_free;
-			}
-			c->model = det;
-			clarett_apply_model_routing(c, armed_with, preserve_routing);
-		} else {
-			/*
-			 * Default: no arm. A cold Thunderbolt attach can race device readiness (command #0's
-			 * response may not land), so poll clarett_detect_model (quietly, to avoid a warn per
-			 * attempt) until the flash-persisted session answers or the settle budget expires.
-			 */
-			unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
-
-			for (;;) {
-				det = clarett_detect_model(c, &collapsed, true);
-				if (det || !collapsed || time_after(jiffies, deadline))
-					break;
-				msleep(50);
-			}
-			/*
-			 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
-			 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
-			 * quiet to avoid a warn per attempt, and it breaks out of the loop immediately on an
-			 * unmatched-but-valid reply — which would otherwise leave nothing logged at all).
-			 */
-			if (!det)
-				det = clarett_detect_model(c, &collapsed, false);
-
-			if (collapsed) {
-				/*
-				 * Never became ready. Do NOT arm-as-2Pre-placeholder (that masked a not-ready or
-				 * collapsed device as a working card) — fail the probe loudly so it gets attention.
-				 */
-				dev_err(&pci->dev,
-					"device did not become ready within %u ms (GET_7.1 refused / no response) — refusing to register. "
-					"A used device self-arms from flash: reload the module to retry (a cold attach can need a moment). "
-					"For a virgin/never-armed unit, load with force_arm=1 to run the bring-up.\n",
-					wait_ready_ms);
-				err = -ENODEV;
-				goto err_free;
-			}
-
-			if (!det) {
-				/*
-				 * The device answered cleanly but with a geometry no clarett_model claims. There is
-				 * no override to fall back on, and standing in a wrong model would size the DMA
-				 * rings, fragment strides and routing tables for different hardware — so refuse.
-				 * The warn just above carries the raw pair to add to the table.
-				 */
-				dev_err(&pci->dev,
-					"unknown Clarett model (stream geometry matches none in the table) — refusing to register. "
-					"Add a clarett_model entry for the playback/capture pair logged above.\n");
-				err = -ENODEV;
-				goto err_free;
-			}
-			c->model = det;
-			/* No arm ran: the device's flash-persisted routing stands; nothing to apply. */
+		for (;;) {
+			det = clarett_detect_model(c, &collapsed, true);
+			if (det || !collapsed || time_after(jiffies, deadline))
+				break;
+			msleep(50);
 		}
+		/*
+		 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
+		 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
+		 * quiet, and it breaks out of the loop immediately on an unmatched-but-valid reply —
+		 * which would otherwise leave nothing logged at all).
+		 */
+		if (!det)
+			det = clarett_detect_model(c, &collapsed, false);
+
+		if (collapsed) {
+			/*
+			 * Never became ready. Do NOT register a placeholder — that masked a not-ready or
+			 * collapsed device as a working card. Fail the probe loudly so it gets attention.
+			 */
+			dev_err(&pci->dev,
+				"device did not become ready within %u ms (GET_7.1 refused / no response) — refusing to register. "
+				"A device self-arms from flash, so this is usually a cold attach that needed a moment: "
+				"reload the module to retry.\n",
+				wait_ready_ms);
+			err = -ENODEV;
+			goto err_free;
+		}
+
+		if (!det) {
+			/*
+			 * The device answered cleanly but with a geometry no clarett_model claims. There is
+			 * no override to fall back on, and standing in a wrong model would size the DMA
+			 * rings, fragment strides and routing tables for different hardware — so refuse.
+			 * The warn just above carries the raw pair to add to the table.
+			 */
+			dev_err(&pci->dev,
+				"unknown Clarett model (stream geometry matches none in the table) — refusing to register. "
+				"Add a clarett_model entry for the playback/capture pair logged above.\n");
+			err = -ENODEV;
+			goto err_free;
+		}
+		c->model = det;
+		/* Nothing arms the device, so its flash-persisted routing stands untouched. */
 	}
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
@@ -2649,8 +2309,6 @@ static const struct clarett_model clarett_8prex = {
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_8prex_stream_tx),
 	.stream_rx_ids = clarett_8prex_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8prex_stream_rx),
-	.arm_seq = clarett_arm_8prex,
-	.n_arm_steps = ARRAY_SIZE(clarett_arm_8prex),
 };
 
 /*
@@ -2659,8 +2317,7 @@ static const struct clarett_model clarett_8prex = {
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
  * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
- * trace). The bring-up replay is the captured 2Pre attach (clarett_arm_2pre.h). Auto-detected after the
- * arm by its (4,14) geometry (clarett_detect_model). The PRE-mailbox surface really
+ * trace). Detected by its (4,14) geometry (clarett_detect_model). The PRE-mailbox surface really
  * is undifferentiated — every MMIO reg / config read / PCI config byte is identical to the 8PreX, and
  * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
  * armed enough to answer GET_7.1.
@@ -2727,8 +2384,6 @@ static const struct clarett_model clarett_2pre = {
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
 	.stream_rx_ids = clarett_2pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_2pre_stream_rx),
-	.arm_seq = clarett_arm_2pre,
-	.n_arm_steps = ARRAY_SIZE(clarett_arm_2pre),
 };
 
 /*
@@ -2796,15 +2451,12 @@ static const struct clarett_model clarett_4pre = {
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_4pre_stream_tx),
 	.stream_rx_ids = clarett_4pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_4pre_stream_rx),
-	.arm_seq = clarett_arm_4pre,
-	.n_arm_steps = ARRAY_SIZE(clarett_arm_4pre),
 };
 
 /*
  * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
- * Focusrite's Clarett 8Pre device XML [XML]. A bring-up capture (clarett_arm_8pre.h) and
- * the derived stream-routing ids are both in place, so this descriptor arms config access (GET_DATA
- * works — hardware-verified on an 8Pre) and registers the full mixer. What remains UNVERIFIED is
+ * Focusrite's Clarett 8Pre device XML [XML], with derived stream-routing ids. Config access is
+ * hardware-verified on an 8Pre and the full mixer registers. What remains UNVERIFIED is
  * PCM streaming on real 8Pre hardware: the channel counts are [XML]-derived rather than traced, and no
  * capture/playback has been run end-to-end on an 8Pre (unlike the confirmed 2Pre/4Pre/8PreX).
  *
@@ -2881,13 +2533,6 @@ static const struct clarett_model clarett_8pre = {
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_8pre_stream_tx),
 	.stream_rx_ids = clarett_8pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
-	/*
-	 * Bring-up captured from a vendor boot trace — the 8Pre now arms with its
-	 * OWN blob rather than falling back to the id_table default. Structure matches the 8PreX arm
-	 * (INIT_2x6, 8 KB config read/writeback, SET_MIXx16, SET_MUXx3); see clarett_arm_8pre.h.
-	 */
-	.arm_seq = clarett_arm_8pre,
-	.n_arm_steps = ARRAY_SIZE(clarett_arm_8pre),
 };
 
 static const struct pci_device_id clarett_ids[] = {
