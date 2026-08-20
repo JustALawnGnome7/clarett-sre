@@ -381,11 +381,51 @@ the counter delta, and copies between the ring fragments and the ALSA buffers.
 
 ---
 
-## 5. Bring-up sequence
+## 5. Attach: session readiness and model identification
 
-A freshly power-cycled device rejects `GET_DATA` until the host replays the vendor
-initialisation. The FPGA firmware self-boots from flash, but the config backend is
-not armed until this sequence runs. The host performs it once at attach:
+**The device arms its own control session.** The FPGA boots its firmware from
+flash, and so does the config backend: a device that has been configured at least
+once restores its session across a genuine power cycle, with no host bring-up at
+all. Config reads, level metering and *control writes* all work on a device the
+host has only opened and polled — confirmed on hardware for the 2Pre and 8Pre,
+which switch preamp relays from a cold DC power-cycle with the host having sent no
+initialisation whatsoever.
+
+A host therefore performs no bring-up at attach. It waits for the session, reads
+the model, and starts using it.
+
+### 5.1 Readiness
+
+The session is not necessarily live the instant the PCIe function appears: a cold
+Thunderbolt attach can race it, and the first command's response may not land. The
+host polls an identity query (§5.2) until it answers, and only then treats the
+device as present. A budget of ~2 s covers the observed worst case; a device that
+never answers is not usable and should be refused rather than assumed.
+
+This readiness race is the sole cause of a device that appears "unarmed". Replaying
+the vendor initialisation does **not** rescue it — only waiting does.
+
+### 5.2 Model identification
+
+A routing-count query at band 0 (`GET_7.1`) returns the device's
+`{playback, capture}` channel-count pair, which is unique to each model (§1.1).
+This is the only identification path: the PCI ID is shared across the entire line
+(and beyond it — the Red range presents the same `1cb5:0002`), and every
+host-visible surface examined reads identically across models until the session
+answers. There is no DROM name to rely on either; a `device_name` under
+`/sys/bus/thunderbolt` is present on some hosts and absent on others, so it cannot
+carry a contract.
+
+Because channel counts, DMA ring and descriptor geometry, fragment strides (§4.3),
+routing and mixer tables and the meter layout are all sized from the model, a
+mis-identified device is not a cosmetic mislabel — it is a card streaming the wrong
+width into wrongly strided rings. A host that reads a valid geometry pair matching
+no model it knows should refuse the device, not guess.
+
+### 5.3 The vendor initialisation sequence
+
+The vendor host application replays a ~232-command initialisation at attach. It is
+described here because its side effects matter, not because a host needs it:
 
 1. **Config push** — a sequence of `0x5000` (CONFIG_PUSH) commands carrying the port
    inventory, followed by subsystem-enable and count-query commands.
@@ -393,16 +433,16 @@ not armed until this sequence runs. The host performs it once at attach:
 3. **Default routing and mixer** — `SET_MUX` (three bands) and `SET_MIX` (16 rows)
    carrying the device's default patch.
 
-The routing/mixer step (3) installs the *default* patch, so replaying it on an
-already-configured device would reset the user's routing. Before running it, the
-host reads back the live band-0 routing with `MUX_READ`; if any destination is
-already patched, it skips steps that would overwrite routing and mixer state and
-runs only the metering and subsystem setup. A fresh device reads empty and receives
-the full default patch; a configured device keeps its routes.
+On a device that already holds a session — which is every device that has been
+configured once — steps 1 and 2 are a no-op, and **step 3 is destructive**: it
+installs the *default* patch, discarding the user's routing and mixer state. A host
+that replays this sequence unconditionally silently resets routing on every attach.
 
-Model identification is done during bring-up by a routing-count query at band 0,
-which returns the device's `{playback, capture}` channel-count pair — a value unique
-to each model (§1.1).
+Whether a factory-fresh, never-configured device requires this sequence is
+**untested and open**. Every device observed had been through the vendor
+application at least once. A host that needs to support one would read back the
+live band-0 routing with `MUX_READ` first and apply the default patch only to a
+device that reads empty.
 
 ---
 
