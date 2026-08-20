@@ -159,11 +159,16 @@ driver/                               Out-of-tree module `snd-clarett` (hwdep tr
   enable_pcm=1), Makefile, README.md
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
-wireplumber/51-clarett-naming.conf    WirePlumber drop-in: promotes the driver's per-model card name
+wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) — do not hand-edit.
+                                      WirePlumber drop-in: promotes the driver's per-model card name
                                       (api.alsa.card.name) into device.description so GNOME shows
                                       "Clarett 2Pre" not the generic "Clarett Multichannel". Coupled to
                                       the driver's card->shortname (matches on it); lives here, not in
                                       fcp-support, because it depends on the driver, not on fcp-server.
+tools/gen_wireplumber_conf.py         Emits the drop-in above, one rule per clarett_model parsed out of
+                                      driver/clarett_main.c (order from clarett_detect_model's list).
+                                      `--check` fails on drift; `make wireplumber-conf` /
+                                      `make check-wireplumber-conf`.
 tools/arm-tables/clarett_arm*.h       The de-blobbed vendor bring-up (typed step lists + the
                                       clarett_arm_emit() builder). Lived in driver/ while the driver
                                       replayed the bring-up; the driver no longer arms, so these are
@@ -218,8 +223,25 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   stale `/usr/local` install silently shadows a freshly built `/usr` one — the unit keeps launching
   the old binary and nothing reports an error. `sudo make uninstall PREFIX=<old>` in fcp-support
   before switching, and check with `systemctl cat 'fcp-server@*'` that `ExecStart` is the binary you
-  just built. The WirePlumber drop-in reaches `/usr/local/share` via `XDG_DATA_DIRS` (WirePlumber's
-  config lookup honours it, and the systemd user manager has it), not via WirePlumber's own prefix.
+  just built. The WirePlumber drop-in reaches `/usr/local/share` via `XDG_DATA_DIRS`, not via
+  WirePlumber's own prefix — and it does so whether or not the variable is set, because
+  `/usr/local/share/:/usr/share/` is the XDG *default* that WirePlumber's config lookup falls back to.
+  (Don't read a set `XDG_DATA_DIRS` in the systemd user manager as the reason it works: on this box
+  that is flatpak's `profile.d` rewriting it, which is incidental.) Packages should use `PREFIX=/usr`;
+  `/etc/wireplumber/wireplumber.conf.d/` is read too but belongs to the user's own overrides.
+- **★ WHY THE WIREPLUMBER DROP-IN IS UNAVOIDABLE (Aug 20 2026) — and the old comment's reason was
+  WRONG.** It claimed the Thunderbolt units "have no pci.ids entry, so WirePlumber falls back to the
+  ALSA driver string". They do have one: `1cb5:0002` is listed as the whole-line name `Clarett`. The
+  real chain is udev `ID_MODEL_FROM_DATABASE` → libspa-alsa `device.product.name` → WirePlumber's
+  `alsa.lua`, which prefers `device.product.name` **over** `api.alsa.card.name` when deriving
+  `device.description` (`/usr/share/wireplumber/scripts/monitors/alsa.lua`, the
+  `d = d or properties["device.product.name"] or properties["api.alsa.card.name"] or ...` chain).
+  So we are overriding a name WirePlumber *prefers*, not supplying one it lacks. Two consequences:
+  **no card name the driver picks can ever win** (so this cannot be fixed driver-side), and **pci.ids
+  cannot be made per-model either — every model in the line reports the same subsystem ID**
+  (user-confirmed), so there is nothing for a per-model entry to key on. `update-props` takes literal
+  values only (no interpolation of `api.alsa.card.name`), so one generic rule keyed on
+  `alsa.driver_name` is impossible and the per-model list is mandatory — hence the generator.
 - **Mixer-only**: `aplay -l` shows nothing (no PCM yet). Use `amixer -c N
   contents` / `alsamixer -c N`.
 - **Device must be free of `vfio-pci`** to test on the host (stop the VM, unbind).

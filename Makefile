@@ -28,8 +28,12 @@ WP_CONFDIR  := $(DESTDIR)$(PREFIX)/share/wireplumber/wireplumber.conf.d
 CLARETT_MAPS := $(wildcard fcp-server-data/fcp-devmap-clarett-*.json) \
                 $(wildcard fcp-server-data/fcp-alsa-map-clarett-*.json)
 WP_DROPIN    := wireplumber/51-clarett-naming.conf
+# The drop-in is generated from the driver's clarett_model table, so its per-model rules
+# cannot drift from the card names the driver registers. Needs driver/ present.
+GEN_WP       := tools/gen_wireplumber_conf.py
 
-.PHONY: help install install-maps install-wireplumber uninstall
+.PHONY: help install install-maps install-wireplumber uninstall \
+        wireplumber-conf check-wireplumber-conf
 
 # Default to help so a bare `make` never runs a root install by accident.
 help:
@@ -38,6 +42,9 @@ help:
 	@echo "  make install-maps         maps    -> $(FCP_DATADIR)"
 	@echo "  make install-wireplumber  drop-in -> $(WP_CONFDIR)"
 	@echo "  make uninstall            remove what install placed"
+	@echo
+	@echo "  make wireplumber-conf        regenerate the drop-in from the model table"
+	@echo "  make check-wireplumber-conf  fail if the drop-in is stale (CI)"
 	@echo
 	@echo "PREFIX must match the fcp-server install PREFIX (both default /usr/local)."
 	@echo "Kernel module builds separately: make -C driver (see driver/README.md)."
@@ -55,3 +62,11 @@ install-wireplumber:
 uninstall:
 	rm -f $(addprefix $(FCP_DATADIR)/,$(notdir $(CLARETT_MAPS)))
 	rm -f $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
+
+# Deliberately not a prerequisite of install-wireplumber: a package or a data-only
+# install may not have driver/ checked out, and that should not block the install.
+wireplumber-conf:
+	python3 $(GEN_WP)
+
+check-wireplumber-conf:
+	python3 $(GEN_WP) --check
