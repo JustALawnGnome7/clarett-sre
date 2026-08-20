@@ -799,7 +799,7 @@ static int clarett_pcm_prepare(struct snd_pcm_substream *ss)
 		 * SCHED_FIFO kthread that nothing could ever kthread_stop(). On rmmod that orphan keeps
 		 * executing module text while devres frees it: a panic, not a warning.
 		 *
-		 * Reproduced Aug 19 2026 by starting `arecord &` and `aplay` together at cadence 4: two
+		 * Reproduced by starting `arecord &` and `aplay` together at dyn_period cadence 4: two
 		 * `engine armed` lines 240 us apart, two servicers, and only one `stopped` line at teardown.
 		 * PipeWire spaces its two prepares widely enough to have hidden this; a DAW opening duplex
 		 * would not. Publishing here is safe: engine_arm sets it again (idempotent), engine_stop's

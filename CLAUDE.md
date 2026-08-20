@@ -631,3 +631,16 @@ docs. **No vendor driver code is disassembled or copied.** Keep the original
 vendor XML out of any distributed driver source; carry facts into the authored
 spec instead. Cross-confirm XML-derived facts against the live trace where
 possible — independent observation is the strongest provenance.
+
+**NO CALENDAR DATES ANYWHERE UNDER `driver/`** — not in code comments, not in
+`driver/README.md` or `driver/DEVELOPMENT.md`. That directory is destined for a separate
+**public-facing git submodule**, and dated comments timestamp the RE work against the
+observation sessions, inviting a reader to correlate driver source with a discovery timeline.
+State the finding, the model, the method and the numbers; drop the date tag — write
+"Established on hardware (2Pre) by a dyn_period cadence sweep", not "…(2Pre, Aug 19 2026)".
+Dates stay where they earn their keep: this file and `spec/provenance/*`, which exist to BE
+the dated evidence trail. Audit with:
+```sh
+grep -rniE "\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* [0-9]{1,2},? 20[0-9]{2}|\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b" \
+  --include='*.c' --include='*.h' --include='*.md' driver/
+```

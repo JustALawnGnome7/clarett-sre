@@ -830,7 +830,7 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  * Layout of the 0x300 cause word.
  *
  * BIT30 == PERIOD OVERRUN: the device sets it on an event raised while the PREVIOUS period had not yet
- * been acknowledged. Established on hardware (2Pre, Aug 19 2026) by a dyn_period cadence sweep, and it is
+ * been acknowledged. Established on hardware (2Pre) by a dyn_period cadence sweep, and it is
  * about as clean as a black-box result gets:
  *
  *   cadence   period    events/s   stepmax      bit30 in 60 s
@@ -873,7 +873,7 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  * This WAS a fixed 16 ms, calibrated when the period was always ~5.3 ms (step 0xd). It cannot be a
  * constant now: dyn_period derives the IRQ cadence from the negotiated ALSA period, so nominal spans
  * 16 frames (0.33 ms at 48k, cadence 1) to thousands, and the rate itself varies 44.1-192 kHz. A fixed
- * threshold is wrong in BOTH directions — measured Aug 19 2026 on a 1024-frame period (21.33 ms nominal),
+ * threshold is wrong in BOTH directions — measured on a 1024-frame period (21.33 ms nominal),
  * every healthy tick exceeded 16 ms, so late == the period count in every window and the documented
  * `late=[1-9]` stall grep fired continuously; at cadence 1 the same 16 ms is 48 periods of lateness and
  * would flag nothing at all.
