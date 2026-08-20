@@ -1306,20 +1306,47 @@ int clarett_engine_start(struct clarett *c)
 /* Halt the engine before the ring buffer is freed (a bad/continued DMA would fault the IOMMU). */
 void clarett_engine_stop(struct clarett *c)
 {
-	if (!c->stream_on)
+	struct task_struct *svc;
+
+	/*
+	 * CLAIM THE TEARDOWN UNDER pcm_lock. Both directions can close simultaneously — `arecord` and
+	 * `aplay` reaching the end of a timed duplex run in the same instant does it every time — and
+	 * clarett_pcm_detach() makes its "last one out" test AFTER dropping pcm_lock, so two callers can
+	 * both observe both substreams NULL and both arrive here. This function used to read stream_svc,
+	 * kthread_stop() it and NULL it with nothing serialising that, so both read the same task pointer
+	 * and both stopped it. The first wins; the SECOND calls kthread_stop() on a task that has already
+	 * exited and been reaped, and blocks forever on a completion nothing will signal again — leaving
+	 * the closing process unkillable in D state, every later open queued behind it, and the module
+	 * impossible to unload without a panic. (Diagnostic signature: the servicer's "stopped" line DOES
+	 * appear — the winner ran to completion — while a process sits in kthread_stop().)
+	 *
+	 * Taking stream_on and the servicer handle together under the lock makes exactly one caller
+	 * proceed; the loser returns at the stream_on test. This is the teardown mirror of the arm claim
+	 * in clarett_pcm_prepare(): same bug shape, an "am I first/last?" decision evaluated outside the
+	 * lock that guards the state it reads.
+	 *
+	 * kthread_stop() MUST run outside pcm_lock: the servicer calls clarett_pcm_tick(), which takes
+	 * pcm_lock, so stopping it while holding the lock trades this hang for a deadlock.
+	 */
+	mutex_lock(&c->pcm_lock);
+	if (!c->stream_on) {
+		mutex_unlock(&c->pcm_lock);
 		return;
-	WRITE_ONCE(c->stream_run, false);		/* stop the servicer ACKing 0x300 */
-	if (c->stream_svc) {
-		kthread_stop(c->stream_svc);		/* stop acking 0x300 before the engine is torn down */
-		c->stream_svc = NULL;
 	}
+	c->stream_on = false;
+	WRITE_ONCE(c->stream_run, false);		/* stop the servicer ACKing 0x300 */
+	svc = c->stream_svc;
+	c->stream_svc = NULL;				/* take the handle: only this caller may stop it */
+	mutex_unlock(&c->pcm_lock);
+
+	if (svc)
+		kthread_stop(svc);			/* stop acking 0x300 before the engine is torn down */
 	cancel_delayed_work_sync(&c->stream_report);
 	writel(0, c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);	/* disable ring 0 */
 	writel(0, c->bar0 + STREAM_BLK1 + STREAM_OFF_CTRL);	/* disable ring 1 (blk1_only path) */
 	writel(0, c->bar0 + REG_STREAM_IRQ_ARM);
 	writel(0, c->bar0 + REG_STREAM_IRQ_CFG);
 	readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);		/* flush posted writes */
-	c->stream_on = false;
 }
 
 /*
