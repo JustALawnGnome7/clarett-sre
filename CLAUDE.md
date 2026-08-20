@@ -265,6 +265,36 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   check `ps -o psr` on it before blaming the driver for missed deadlines. Still not done on this host: a
   listening test (all evidence so far is telemetry) and a native hwlat run (no VM needed there — the plan
   in `spec/provenance/clarett-smi-hwlat-vm-plan.md` applies with the VM step dropped).
+- **★ LOG POLICY — the default load is ONE `dev_info` line (Aug 20 2026).** The RE instrumentation that
+  used to print unconditionally is now `dev_dbg`, so a healthy driver prints:
+  ```
+  snd_clarett 0000:0a:00.0: Clarett 2Pre: serial ... fw app 0x... fpga 0x...; FCP hwdep, PCM 4/14ch, MIDI
+  ```
+  and **nothing at all while streaming**. The rules: `info` = the probe summary; `warn` = degraded but
+  working (short MSI count, a subsystem that failed to register, a seed failure); `dev_dbg` = everything
+  whose audience is this project. Demoted: `pre-mailbox causes`/`pre-mailbox regs`, `resp buffer dma addr`,
+  the 4/4 `MSI:` line (a SHORT count is now a `dev_warn`), `FCP hwdep created`, `MIDI registered`,
+  `PCM registered`, `descriptor rings:`, `stream-handshake:`, `engine armed:`, `stream-ev[0..7]`.
+  Still `info` unconditionally: `stream-badread[n]`, and the probe `dev_err` when the device never
+  becomes ready. Everything else already sat behind an opt-in param (`force_arm`, `stream_probe`,
+  `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`).
+  - **`stream-svc:` telemetry is now anomaly-gated, not unconditional** (`clarett_svc_log`). The 2-second
+    window line prints at `info` only when that window had `late`, an `overrun`, a `badread`, or a
+    `rekick`; otherwise `dev_dbg`. Same rule for the per-stream `stream-svc: stopped` summary, which now
+    also carries the **run-wide** worst case (`run gapmax=/readmax=/late=/stepmax=`) so a demoted window
+    line loses nothing. Rationale: `enable_pcm` defaults on and PipeWire holds a PCM open permanently
+    ([[clarett-stream-gated-behaviour]]), so the old line wrote to the kernel log every 2 s for as long
+    as the machine was up. **A dropout still announces itself** — the ~42 ms platform freeze trips `late`.
+  - **Getting the detail back (no reload; all of it is runtime-switchable):**
+    ```sh
+    # everything, including the ~24 Hz mailbox trace — very noisy
+    echo 'module snd_clarett +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+    # just the servicer telemetry (the usual want): match one statement by format
+    echo 'format "stream-svc:" +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+    # or per file / per function
+    echo 'file clarett_main.c +p'  | sudo tee /sys/kernel/debug/dynamic_debug/control
+    ```
+    or load with `insmod snd-clarett.ko dyndbg='+p'` to catch probe-time lines. `-p` turns them off again.
 - Mailbox has a per-command trace (op/seq/cause/done/fcperr) at **`dev_dbg`** — off by default;
   enable via dynamic debug when diagnosing the mailbox (info-level would flood at the ~24 Hz meter
   poll). The notify re-read failure log is `dev_warn_ratelimited` (a walled device retries the
@@ -309,7 +339,9 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   executing module text while devres frees it: a panic.** PipeWire spaces its two prepares widely enough to
   have hidden this; `arecord & aplay` reproduces it every time, and a DAW opening duplex would too. Fixed by
   claiming the arm under `pcm_lock` plus a `WARN_ON_ONCE` guard in `clarett_engine_run()`. Log signature of
-  the bug: two `engine armed` lines microseconds apart, two `stream-svc` lines per window, one `stopped`.
+  the bug: two `engine armed` lines microseconds apart, two `stream-svc` lines per window, one `stopped` —
+  **but as of the Aug 20 log cleanup those three are `dev_dbg`, so a recurrence announces itself by the
+  `WARN_ON_ONCE` splat instead** (enable the old signature with `dyndbg` if you need to see it directly).
   Detect a live orphan with `ps -eLo pid,tid,comm,cls,rtprio | grep clarett-svc` (must be zero with no
   stream running) — there is no userspace way to stop it, so **reboot, do not `rmmod`**.
   **When two servicers ran, `gapmax`/`late` were GARBAGE** (up to 998 ms, hundreds of late ticks): they are
@@ -336,7 +368,8 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     cause**); **(3)** SIZE reg (4 frames) / fragment (16 frames) / IRQ period were conflated. All fixed:
     `clarett_frag_bytes` drops `lcm`, `clarett_build_rings` sets the periodic RX marker, the PCM period
     advances `clarett_irq_period_frames()` per event. **Test:** `enable_pcm=1`, `arecord -c14`,
-    watch `stream-svc: ctr=` advance past the `0x1b3`/`0` one-pass wall.
+    watch `stream-svc: ctr=` advance past the `0x1b3`/`0` one-pass wall — the window line is `dev_dbg` now,
+    so turn it on first: `echo 'format "stream-svc:" +p' | sudo tee /sys/kernel/debug/dynamic_debug/control`.
   - Eliminated earlier this session (spec §13): arm ritual/timing (`arm_pre`/`arm_settle_ms`), TX content
     (`tx_tone`), and **`0x214`/`0x314` settled as a real 64-bit address high word** (`base_hi=2` faults at
     `0x2_ffe00000`; closes the `dma_bits` ambiguity). **Flat-buffer hypothesis FALSIFIED** — a flat ring

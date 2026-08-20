@@ -236,6 +236,49 @@ Never load this driver while the VM is using the device.
   dim enables. These are *enables* — whether the master section reaches an output — not per-output
   mute: this hardware has no per-output mute at all (one `<mute>` in every model's descriptor).
 
+## Kernel log and diagnostics
+
+A healthy load prints **one** line and then goes quiet, including while streaming:
+
+```
+snd_clarett 0000:0a:00.0: Clarett 2Pre (auto-detected): serial 0000000012345678 fw app 0x00010007 fpga 0x00000104; FCP hwdep, PCM 4/14ch, MIDI
+```
+
+The levels mean:
+
+- **info** — the probe summary above, and a `stream-svc:` line for any 2-second window (or any
+  stream) in which something went wrong: a late servicer tick, a device-side period overrun, a
+  rejected `0x300` sample, or a rekick. Silence during playback is the healthy state; a dropout
+  announces itself.
+- **warn** — degraded but working: a short MSI vector count, a subsystem that failed to register,
+  a config-shadow seed failure, a transiently unreachable link.
+- **err** — the device never became ready, so no card was registered.
+- **debug** — everything else. Most of this driver's logging is reverse-engineering
+  instrumentation (register dumps at probe and at engine arm, the descriptor-ring geometry, the
+  stream handshake, the first eight `0x300` events, the per-command mailbox trace, and the
+  healthy-case servicer telemetry). None of it is deleted, just moved behind dynamic debug.
+
+To bring the detail back at runtime, with no reload:
+
+```sh
+# everything (includes the ~24 Hz mailbox trace — very noisy)
+echo 'module snd_clarett +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+
+# just the servicer telemetry: match the one statement by its format string
+echo 'format "stream-svc:" +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+
+# or scope it by file / function
+echo 'file clarett_main.c +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+echo 'func clarett_stream_service +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+```
+
+`-p` in place of `+p` turns them off again. To catch probe-time lines, pass it at load instead:
+`insmod snd-clarett.ko dyndbg='+p'`.
+
+The remaining `dev_info` sites all sit behind an opt-in module parameter (`force_arm`,
+`stream_probe`, `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`,
+`tx_tone`), so enabling one of those still prints at info as before.
+
 ## Module parameters
 
 The module carries a number of parameters, mostly diagnostic/experimental levers from the

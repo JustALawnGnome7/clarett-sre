@@ -237,8 +237,9 @@ int clarett_create_midi(struct clarett *c)
 	INIT_WORK(&c->midi_tx_work, clarett_midi_tx_work);
 	WRITE_ONCE(c->rmidi, rmidi);	/* set LAST: the ISR uses this as the "MIDI live" gate */
 
-	dev_info(&c->pci->dev, "MIDI registered (%s, 1 in + 1 out, register UART @0x%03x)\n",
-		 name, REG_MIDI_DATA);
+	/* Debug: the probe summary in clarett_probe() already reports that MIDI came up. */
+	dev_dbg(&c->pci->dev, "MIDI registered (%s, 1 in + 1 out, register UART @0x%03x)\n",
+		name, REG_MIDI_DATA);
 	return 0;
 }
 

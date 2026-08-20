@@ -109,7 +109,7 @@ sudo insmod snd-clarett.ko
 The driver logs which model it found:
 
 ```
-snd_clarett 0000:0a:00.0: Clarett 2Pre: serial 0000000012345678 fw app 0x00010007 fpga 0x00000104
+snd_clarett 0000:0a:00.0: Clarett 2Pre: serial 0000000012345678 fw app 0x00010007 fpga 0x00000104; FCP hwdep, PCM 4/14ch, MIDI
 ```
 
 There is deliberately no way to override this. Channel counts, DMA ring geometry, routing

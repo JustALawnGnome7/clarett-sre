@@ -589,7 +589,7 @@ int clarett_hwdep_init(struct clarett *c)
 
 	c->hwdep_ready = true;		/* dwork is live from here; clarett_hwdep_free() must run */
 
-	dev_info(&c->pci->dev,
-		 "FCP hwdep created (fcp-server transport; PVERSION+CMD+INIT+METER+notify)\n");
+	dev_dbg(&c->pci->dev,
+		"FCP hwdep created (fcp-server transport; PVERSION+CMD+INIT+METER+notify)\n");
 	return 0;
 }

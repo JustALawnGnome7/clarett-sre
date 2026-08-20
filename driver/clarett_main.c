@@ -448,17 +448,17 @@ static void clarett_hw_init(struct clarett *c)
 			u32 c400 = readl(bar + REG_NOTIFY_CAUSE);
 			u32 c500 = readl(bar + 0x500);
 
-			dev_info(&c->pci->dev,
-				 "pre-mailbox causes: 0x100=0x%08x 0x300=0x%08x 0x200=0x%08x 0x400=0x%08x 0x500=0x%08x\n",
-				 c100, c300, c200, c400, c500);
+			dev_dbg(&c->pci->dev,
+				"pre-mailbox causes: 0x100=0x%08x 0x300=0x%08x 0x200=0x%08x 0x400=0x%08x 0x500=0x%08x\n",
+				c100, c300, c200, c400, c500);
 		} else {
 			readl(bar + 0x500);
 		}
 		usleep_range(8220, 8400);		/* ~8.22 ms */
 		r58c_b = readl(bar + 0x58c);
-		dev_info(&c->pci->dev,
-			 "pre-mailbox regs: caps(0x0)=0x%08x 0x4=0x%08x 0x8=0x%08x 0x514=0x%08x 0x58c=0x%08x/0x%08x\n",
-			 r000, r004, r008, r514, r58c_a, r58c_b);
+		dev_dbg(&c->pci->dev,
+			"pre-mailbox regs: caps(0x0)=0x%08x 0x4=0x%08x 0x8=0x%08x 0x514=0x%08x 0x58c=0x%08x/0x%08x\n",
+			r000, r004, r008, r514, r58c_a, r58c_b);
 		c->fw_app  = readl(bar + REG_INFO + 0x00);	/* 0x8000 */
 		c->fw_fpga = readl(bar + REG_INFO + 0x04);	/* 0x8004 */
 		readl(bar + REG_INFO + 0x08);		/* rest of the 8-word fw-info header */
@@ -1058,6 +1058,20 @@ static void clarett_stream_rekick(struct clarett *c)
 	}
 }
 
+/*
+ * Log one servicer telemetry line at info if the window was BAD, else at debug. The healthy case is
+ * the common case and it repeats every 2 s for as long as a stream is open — which, with enable_pcm
+ * on, is "as long as the machine is up" (PipeWire adopts the card and holds a PCM). See the
+ * default-quiet rationale at the window log below.
+ */
+#define clarett_svc_log(c, bad, fmt, ...)					\
+	do {									\
+		if (bad)							\
+			dev_info(&(c)->pci->dev, fmt, ##__VA_ARGS__);		\
+		else								\
+			dev_dbg(&(c)->pci->dev, fmt, ##__VA_ARGS__);		\
+	} while (0)
+
 static int clarett_stream_service(void *data)
 {
 	struct clarett *c = data;
@@ -1067,6 +1081,11 @@ static int clarett_stream_service(void *data)
 	u32 wraps = 0, rekicks = 0, bad_reads = 0;
 	u32 bad_or = 0;		/* cumulative OR of every rejected 0x300 sample (badbits) */
 	u32 overruns = 0;	/* events flagged CLARETT_CTR_OVERRUN (device saw a missed ack) */
+	/* Previous window's values of the cumulative counters, so a window can tell whether IT was bad. */
+	u32 prev_rekicks = 0, prev_bad_reads = 0, prev_overruns = 0;
+	/* Run-wide worst case, for the one-line summary at stop (the windows reset their own maxima). */
+	u64 run_gap_max_us = 0, run_read_us_max = 0;
+	u32 run_late = 0, run_step_max = 0;
 	bool seen = false;
 	bool gone = false;	/* set when the device leaves the bus: park the loop, never return early (kthread_stop UAF) */
 	/*
@@ -1175,11 +1194,12 @@ static int clarett_stream_service(void *data)
 			u32 ctr = c2 & CLARETT_CTR_MASK;
 			u32 step;
 
-			/* First events of a session at info: raw counter values (2Pre steps +0xd/event,
-			 * wraps at a small modulus — the frame advance is ctr-delta driven). */
+			/* First events of a session: raw counter values (2Pre steps +0xd/event, wraps at a
+			 * small modulus — the frame advance is ctr-delta driven). Debug, not info: eight lines
+			 * per arm is noise on a working driver, and dynamic debug brings them back. */
 			if (atomic_read(&c->stream_periods) < 8)
-				dev_info(&c->pci->dev, "stream-ev[%d]: 0x300=0x%08x\n",
-					 atomic_read(&c->stream_periods), c2);
+				dev_dbg(&c->pci->dev, "stream-ev[%d]: 0x300=0x%08x\n",
+					atomic_read(&c->stream_periods), c2);
 
 			/*
 			 * Frames captured since the last event = ctr delta * CLARETT_CTR_FRAMES. The counter is a
@@ -1280,10 +1300,34 @@ static int clarett_stream_service(void *data)
 			last_tick = jiffies;		/* don't re-kick until another rekick_ms elapses */
 		}
 		if (time_after(jiffies, next_log)) {
-			dev_info(&c->pci->dev,
+			/*
+			 * DEFAULT-QUIET. This line used to be unconditional dev_info, i.e. one kernel-log line
+			 * every 2 s forever on any machine running PipeWire. Print at info only when the window
+			 * saw something actually wrong — a late tick (how the ~42 ms platform freeze presents),
+			 * a device-side period overrun, a rejected sample, or a rekick — and leave the healthy
+			 * case to dynamic debug. To get every window back without also enabling the ~24 Hz
+			 * mailbox trace, match this statement by its format:
+			 *   echo 'format "stream-svc:" +p' >/sys/kernel/debug/dynamic_debug/control
+			 */
+			bool bad = gap_late || rekicks != prev_rekicks ||
+				   bad_reads != prev_bad_reads || overruns != prev_overruns;
+
+			clarett_svc_log(c, bad,
 				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u\n",
 				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
 				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or, overruns);
+
+			if (gap_max_us > run_gap_max_us)
+				run_gap_max_us = gap_max_us;
+			if (read_us_max > run_read_us_max)
+				run_read_us_max = read_us_max;
+			if (step_max > run_step_max)
+				run_step_max = step_max;
+			run_late += gap_late;
+			prev_rekicks = rekicks;
+			prev_bad_reads = bad_reads;
+			prev_overruns = overruns;
+
 			gap_max_us = 0;
 			read_us_max = 0;
 			gap_late = 0;
@@ -1292,12 +1336,28 @@ static int clarett_stream_service(void *data)
 		}
 		usleep_range(100, 200);
 	}
-	/* PTR tells whether the engine walked the descriptor table at all — the thing ctr=0 leaves open. */
-	dev_info(&c->pci->dev,
-		 "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u ptr0=0x%x ptr1=0x%x)\n",
+	/* Fold the final (partial) window into the run-wide worst case before summarising. */
+	if (gap_max_us > run_gap_max_us)
+		run_gap_max_us = gap_max_us;
+	if (read_us_max > run_read_us_max)
+		run_read_us_max = read_us_max;
+	if (step_max > run_step_max)
+		run_step_max = step_max;
+	run_late += gap_late;
+
+	/*
+	 * One summary per stream, same default-quiet rule as the window line: at info only if the run
+	 * had anything wrong with it, so a clean session leaves the log untouched from arm to teardown.
+	 * PTR tells whether the engine walked the descriptor table at all — the thing ctr=0 leaves open.
+	 */
+	clarett_svc_log(c, run_late || rekicks || bad_reads || overruns,
+		 "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u ptr0=0x%x ptr1=0x%x; "
+		 "run gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u)\n",
 		 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
-		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR));
+		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
+		 run_gap_max_us, run_read_us_max, run_late, run_step_max,
+		 bad_reads, bad_or, overruns);
 	return 0;
 }
 
@@ -1410,8 +1470,12 @@ void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 	 * arms that go on to stall — while ours reads 0, i.e. the engine signals a period without
 	 * consuming a single descriptor. So capture whether the bases latched and where the per-block
 	 * pointers start; PTR is the vendor's own progress read (0x21c/0x31c in its steady-state sweep).
+	 *
+	 * Debug, not info: this is a 12-register RE dump on a path a desktop takes every time an app
+	 * opens the card. Its other use — spotting the duplex double-arm by two of these microseconds
+	 * apart — is now covered by the WARN_ON_ONCE in clarett_engine_run().
 	 */
-	dev_info(&c->pci->dev,
+	dev_dbg(&c->pci->dev,
 		 "engine armed: blk0 chans=%u size=0x%x base=%08x:%08x ctrl=%08x ptr=%08x | blk1 chans=%u size=0x%x base=%08x:%08x ctrl=%08x ptr=%08x (model chans tx=%u rx=%u)\n",
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_CHANS),
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_SIZE),
@@ -1944,11 +2008,14 @@ static void clarett_enable_msi(struct clarett *c)
 		return;
 	}
 	c->n_vec = nvec;
-	/* Always record the achieved count: 4/4 matches FC (Enable+ Count=4/4);
-	 * fewer means the platform (typically vfio passthrough) collapsed them and causes funnel to
-	 * the allocated vectors. Logged unconditionally so every run pins down what it actually got. */
-	dev_info(&pci->dev, "MSI: got %d/%d vectors%s\n", nvec, CLARETT_NUM_VECTORS,
-		 nvec < CLARETT_NUM_VECTORS ? " (causes funnel to the allocated ones)" : "");
+	/* Record the achieved count: 4/4 matches FC (Enable+ Count=4/4); fewer means the platform
+	 * (typically vfio passthrough) collapsed them and causes funnel to the allocated vectors.
+	 * A short count is a degraded configuration worth a warn; the expected 4/4 is debug. */
+	if (nvec < CLARETT_NUM_VECTORS)
+		dev_warn(&pci->dev, "MSI: got %d/%d vectors (causes funnel to the allocated ones)\n",
+			 nvec, CLARETT_NUM_VECTORS);
+	else
+		dev_dbg(&pci->dev, "MSI: got %d/%d vectors\n", nvec, CLARETT_NUM_VECTORS);
 }
 
 /* Hook the notification handlers onto the already-allocated vectors. Best-effort: on
@@ -2048,6 +2115,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	struct snd_card *card;
 	struct clarett *c;
 	const struct clarett_model *armed_with;
+	bool pcm_ok = false;			/* PCM fully registered (not just snd_pcm_new'd) */
 	void __iomem *bar0;
 	int err, seeded;
 
@@ -2107,8 +2175,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	}
 	/* The >4G lead: every working FC capture programs 0x414 != 0 (buffer above
 	 * 4 GiB); log our address so the A/B is visible without trace_regs. */
-	dev_info(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
-		 &c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
+	dev_dbg(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
+		&c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
 
 	/* Vendor attach order: MSI is enabled in config space before the first BAR access,
 	 * so the device never sees a session start from a host without an interrupt path.
@@ -2325,6 +2393,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		err = clarett_create_pcm(c);
 		if (err)
 			dev_warn(&pci->dev, "PCM create failed (%d); continuing mixer-only\n", err);
+		else
+			pcm_ok = true;	/* c->pcm is set before the buffer alloc that can still fail */
 		err = 0;
 	}
 
@@ -2366,9 +2436,35 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		goto err_free;
 
 	pci_set_drvdata(pci, card);
-	dev_info(&pci->dev,
-		 "%s: serial %08x%08x fw app 0x%08x fpga 0x%08x\n",
-		 c->model->name, c->serial_hi, c->serial_lo, c->fw_app, c->fw_fpga);
+	/*
+	 * The probe summary — and, on a healthy load, the ONLY thing this driver prints. Everything
+	 * else that used to land here (pre-mailbox register dumps, the DMA response address, the MSI
+	 * count, per-subsystem "registered" lines, the arm/engine register dumps, the 2 s servicer
+	 * telemetry) is RE instrumentation and now sits at dev_dbg. Bring any of it back at runtime
+	 * with dynamic debug, e.g. `echo 'module snd_clarett +p' >/sys/kernel/debug/dynamic_debug/control`
+	 * for all of it, or match one statement by format string to skip the ~24 Hz mailbox trace.
+	 */
+	{
+		char feat[64];
+		int n = 0;
+
+		if (c->hwdep_ready)
+			n += scnprintf(feat + n, sizeof(feat) - n, "%sFCP hwdep", n ? ", " : "");
+		if (pcm_ok)
+			n += scnprintf(feat + n, sizeof(feat) - n, "%sPCM %u/%uch", n ? ", " : "",
+				       c->model->playback_channels, c->model->capture_channels);
+		if (READ_ONCE(c->rmidi))
+			n += scnprintf(feat + n, sizeof(feat) - n, "%sMIDI", n ? ", " : "");
+		if (!n)
+			scnprintf(feat, sizeof(feat), "no interfaces registered");
+
+		/* No "(auto-detected)" tag: detection is the only way c->model can be set, so saying so
+		 * would be noise. A model named here is one the device claimed. */
+		dev_info(&pci->dev,
+			 "%s: serial %08x%08x fw app 0x%08x fpga 0x%08x; %s\n",
+			 c->model->name, c->serial_hi, c->serial_lo,
+			 c->fw_app, c->fw_fpga, feat);
+	}
 	return 0;
 
 err_free:

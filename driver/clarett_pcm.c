@@ -759,7 +759,7 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	e_en2    = clarett_fcp(c, FCP_GET_62, NULL, 0);
 	e_commit = clarett_fcp(c, FCP_STREAM_COMMIT, NULL, 0);
 
-	dev_info(&c->pci->dev,
+	dev_dbg(&c->pci->dev,
 		 "stream-handshake: SET_CLOCK{%u,%u}=%d CONFIG_PUSH=%d(err=%d) batch=%s(err=%d) "
 		 "0x6004=%d 0x6002=%d 0x6005=%d\n",
 		 rate, clk_src, e_clk, pushes, push_err, stream_batch ? "yes" : "off", batch_err,
@@ -1001,7 +1001,7 @@ static void clarett_build_rings(struct clarett *c)
 	if (tx_tone)
 		clarett_fill_tx_tone(c);
 
-	dev_info(&c->pci->dev,
+	dev_dbg(&c->pci->dev,
 		 "descriptor rings: %u entries, tx audio=0x%x slot=0x%x, rx audio=0x%x slot=0x%x, RX IRQ every %u desc (%u frames/period)\n",
 		 CLARETT_STREAM_NDESC, tx_frag, tx_slot,
 		 clarett_frag_bytes(c->model->capture_channels), rx_slot,
@@ -1038,7 +1038,9 @@ int clarett_create_pcm(struct clarett *c)
 	prealloc = max(rxbuf, txbuf);
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV, &c->pci->dev, prealloc, prealloc);
 
-	dev_info(&c->pci->dev,
+	/* Debug: the probe summary in clarett_probe() already states that a PCM registered and how wide
+	 * it is; the ring/buffer detail here is bring-up instrumentation. */
+	dev_dbg(&c->pci->dev,
 		 "PCM registered (playback %uch / capture %uch, S32_LE @%u, %s ring, bufs tx=%zu rx=%zu B @%pad)\n",
 		 c->model->playback_channels, c->model->capture_channels, CLARETT_PCM_RATE,
 		 c->flat_buffer ? "flat" : "descriptor", txbuf, rxbuf, &c->stream_dma);
