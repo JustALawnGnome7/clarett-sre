@@ -353,6 +353,38 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   **When two servicers ran, `gapmax`/`late` were GARBAGE** (up to 998 ms, hundreds of late ticks): they are
   per-thread locals, and with two threads racing on a read-to-clear `0x300` each sees a random subset of
   events. The frame clock was fine throughout — read-to-clear still delivered each event exactly once.
+- **★ CONCURRENT DUPLEX *CLOSE* WEDGED THE CLOSING PROCESS UNKILLABLY — fixed Aug 20 2026,
+  hardware-confirmed. Fixing prepare did NOT fix teardown; this is the same bug at the other end.**
+  `clarett_pcm_detach()` makes its "last one out" test **after** dropping `pcm_lock`
+  (`mutex_unlock(); if (!c->pcm_sub && !c->pcm_play_sub) clarett_engine_stop(c);`), so when `arecord` and
+  `aplay` end a timed duplex run in the same instant, both observe both substreams NULL and **both** call
+  `clarett_engine_stop()` — which serialised nothing: both read the same `c->stream_svc` and both called
+  `kthread_stop()` on it. The first wins; **the second calls `kthread_stop()` on an already-exited,
+  already-reaped task and blocks forever on a completion nothing will signal again.**
+  - **Diagnostic signature (deliberately counter-intuitive): the servicer's `stopped` line DOES appear** —
+    the winner ran to completion — *while a process sits in `kthread_stop()`*. Stacks:
+    `aplay D+ kthread_stop ← clarett_engine_stop ← clarett_pcm_close ← snd_pcm_release`;
+    `arecord DN snd_pcm_release` (queued behind it); `arecord D+ snd_pcm_open` (every later open queued
+    behind that). `D` state means SIGINT **and** SIGKILL are ignored, so `timeout -s INT` cannot recover it
+    and Ctrl-C does nothing. **Reboot; do NOT `rmmod`** (a thread wedged inside the module + devres free =
+    panic). Get the evidence first: `ps -eLo pid,tid,stat,wchan:32,comm` and `sudo cat /proc/<pid>/stack`.
+  - **Fix:** claim the teardown under `pcm_lock` — take `stream_on` **and** the servicer handle together,
+    so exactly one caller proceeds and the loser returns at the `stream_on` test. `kthread_stop()` stays
+    **outside** the lock, and that is mandatory, not stylistic: the servicer calls `clarett_pcm_tick()`,
+    which takes `pcm_lock`, so stopping it under the lock trades this hang for a deadlock.
+  - **Verified:** 10/10 consecutive simultaneous `arecord &` / `aplay &` 5 s duplex runs with no survivor,
+    then a clean `rmmod`. Before the fix it hung on the first collision. **The stream itself was never
+    implicated** — the run that exposed this clocked 44994 periods at cadence 4 with `late=2 overrun=4`
+    before teardown hung, which is a *passing* stream result.
+  - **★ METHOD (now twice in two days): audit every "am I the first/last one here?" decision for whether
+    it is evaluated under the lock that guards the state it reads.** Both instances were latent for months
+    and surfaced only when two processes hit the same instant — prepare hid behind PipeWire spacing its
+    opens, close simply won the race on every earlier run (including the day before).
+  - **Test-hygiene traps from the same session, both of which briefly faked a result:** (1) `insmod`
+    reporting `File exists` means the test ran against a **stale** module — always confirm a *silent*
+    `insmod` right after `make clean && make`; (2) **unknown module parameters are IGNORED with a warning,
+    not rejected**, so `insmod snd-clarett.ko force_arm=1` returning rc=0 proves nothing about removal —
+    `modinfo` is the check, and the kernel log's `unknown parameter 'X' ignored` is the runtime proof.
 - **Data plane: capture PCM clocks on hardware, stalls after one ring pass.** `clarett_pcm.c` (on by
   default, `enable_pcm`) registers a per-model S32_LE capture + playback device (up to 28ch; 44.1–192 kHz,
   see the sample-rate bullet below), driven by the persistent `0x300` servicer
@@ -597,6 +629,12 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     after the move). `tools/fcp_cap_read.c` still dumps the capability bytes. Transport §8.
     **If a virgin/never-armed unit ever turns up**, the replay is in git history before this commit and
     regenerable via `fcp_decode.py --emit-deblob`; that is the bridge to cross then.
+    **HARDWARE-CONFIRMED on the 2Pre (Aug 20 2026):** loads with no arm, model auto-detected, one info
+    line, fcp-server adopts the hwdep (so the flash-persisted session really is enough for the control
+    plane), 60 s duplex at cadence 4 clocks 44997/45000 periods with `late=0`, 10 duplex start/stop cycles
+    clean, `rmmod` clean. **Still untested:** the unknown-geometry `-ENODEV` path (every test used a model
+    the table knows), a genuinely never-armed unit, and 4Pre/8Pre/8PreX — the **8PreX matters most**, since
+    its geometry pair is XML-derived and it is now the model that fails hardest if that pair is wrong.
   - History: probe used to ALWAYS arm (July 23), after an "is it already armed?" detection proved
     unworkable — every host-visible surface (`CAP_READ`, a `GET_DATA` echo, the pre-mailbox block) reads
     *identically* fresh-vs-armed, so probe skipped the bring-up on exactly the devices that needed it
