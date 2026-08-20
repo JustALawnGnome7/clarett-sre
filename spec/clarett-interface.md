@@ -2,8 +2,8 @@
 
 This document specifies the Focusrite Clarett Thunderbolt audio interfaces
 (2Pre, 4Pre, 8Pre, 8PreX) at the level needed to implement a host driver: the
-device's register interface, its control protocol (FCP), its audio DMA engine,
-and the bring-up sequence a host performs to bring a device into service.
+device's register interface, its control protocol (FCP), its audio DMA engine, its
+MIDI transport, and what a host does at attach to bring a device into service.
 
 Every statement here is confirmed on real hardware unless tagged **(XML)**,
 meaning it is derived from Focusrite's device descriptor and has not yet been
@@ -12,7 +12,7 @@ carried across models by assumption.
 
 The **(XML)** tag is a claim of provenance, not of correctness. At least one
 descriptor value has been measured and found wrong (the 2Pre's S/PDIF clock source,
-§6.3), so where measurement contradicts the descriptor, the measured value stands
+§7.3), so where measurement contradicts the descriptor, the measured value stands
 and the discrepancy is called out.
 
 ---
@@ -57,7 +57,12 @@ in channel counts and pin assignments. Channel counts:
 | 8PreX  | 8           | 16      | 28                 | 28               | 10               | 16 (A–P)  |
 
 Every model also has 2 S/PDIF input channels and 2 S/PDIF output channels. The
-mixer is uniform across the line: 30 mixer inputs by 16 mix buses **(XML)**.
+mixer is uniform across the line: 30 mixer inputs by 16 mix buses **(XML)**. Every
+model carries DIN MIDI in and out (§5).
+
+The capture channel count above is the **stream width, at every sample rate** — it
+does not narrow at high rates. Which of those channels the device fills does change,
+as ADAT loses channels to S/MUX; see §4.5.
 
 ---
 
@@ -79,10 +84,14 @@ returned by DMA into a host-allocated buffer.
 | `0x200`/`0x300`/`0x400` | MSI vector 1/2/3 cause — read-to-clear (one block per vector) |
 | `0x408`           | Doorbell — write `1` = submit, `2` = acknowledge completion   |
 | `0x410` / `0x414` | Response DMA buffer bus address (low32 / high32)             |
+| `0x500` / `0x504` | MIDI IRQ summary / acknowledge (§5)                            |
+| `0x58c`           | MIDI data, bidirectional (§5)                                  |
 | `0x8000`–`0x801f` | Read-only firmware-info header                                |
 | `0x8020`          | FCP request mailbox (header + data)                           |
 
-`0x400` is a 2-bit command-phase register, not an event queue.
+`0x400` is a 2-bit command-phase register, not an event queue. The data-plane ring
+blocks that share the `0x200`/`0x300` bases are detailed in §4.1, and the MIDI UART
+in §5; both are listed here only so the map is complete.
 
 ### 2.2 Mailbox frame
 
@@ -161,11 +170,14 @@ The `cmd` word is `0x80000000` (execute) OR the opcode:
 | `0x800000`  | `GET_DATA`   | `{u32 offset, u32 len}` → response by DMA  |
 | `0x800001`  | `SET_DATA`   | `{u32 offset, u32 len, data[]}`            |
 | `0x800002`  | `DATA_CMD`   | `{u32 commit_code}`                        |
-| `0x001001`  | `GET_METER`  | meter read (§3.7)                          |
+| `0x001001`  | `GET_METER`  | meter read (§3.8)                          |
 | `0x002002`  | `SET_MIX`    | one mixer row: `{u16 mix, u16 coeff[30]}`  |
 | `0x003001`  | `MUX_READ`   | routing read-back (§3.6)                    |
 | `0x003002`  | `SET_MUX`    | routing write, one per band (§3.6)          |
 | `0x006003`  | `SET_CLOCK`  | `{u32 sample_rate, u32 clock_source}`       |
+| `0x006004`  | `SYNC_READ`  | → lock-status bitfield (§3.10)              |
+| `0x006005`  | `SYNC_RATE`  | → `u32` current sample rate (§3.10)         |
+| `0x007001`  | `GET_7.1`    | → `{playback, capture}` channel counts (§6.2) |
 
 ### 3.2 Config-space write model
 
@@ -254,7 +266,7 @@ Settings:
 |--------------------|------|--------|--------|-------------------------------|
 | S/PDIF out source  | 2    | 4      | 124    | Optical=1, RCA=2              |
 | S/PDIF in source   | 2    | 4      | 132    | Optical=1, RCA=2              |
-| Meter source       | 8    | 8      | 184    | model-specific (§6)           |
+| Meter source       | 8    | 8      | 184    | model-specific (§7)           |
 | Nickname           | 32 B | —      | 80     | user string                   |
 
 ### 3.4 Gain encodings
@@ -280,7 +292,7 @@ destination pin; its *level* into each bus is the `SET_MIX` coefficient.
 ### 3.6 Routing
 
 Routing is a table of *destination ← source* assignments over direction-scoped
-pins (§6). It is written as three `SET_MUX` commands, one per sample-rate band
+pins (§7). It is written as three `SET_MUX` commands, one per sample-rate band
 (band 0 = 44.1/48 kHz, 1 = 88.2/96 kHz, 2 = 176.4/192 kHz). Each command's payload
 is `{u32 header, u32 entry[]}` where `header = band << 16` and each entry packs two
 12-bit pins:
@@ -306,7 +318,7 @@ specific region must window its requests.
 Sample rate and clock source are set with `SET_CLOCK{u32 sample_rate, u32
 clock_source}`. Supported rates are 44100, 48000, 88200, 96000, 176400, and 192000.
 The `clock_source` enum is uniform across the line — `Internal = 24`, `ADAT = 0`,
-`S/PDIF = 3` — and only the *set of sources a model offers* differs (§6.3).
+`S/PDIF = 3` — and only the *set of sources a model offers* differs (§7.3).
 
 Neither the rate nor the source is a config-space byte: they exist only in the
 `SET_CLOCK` payload, so neither can be read or written through `GET_DATA`/`SET_DATA`
@@ -316,7 +328,7 @@ and neither can be expressed as a config-map control.
 
 `GET_METER` returns the level meters as an array of 32-bit slots. Each slot carries
 a 16-bit level replicated into the 32-bit word. Slots are packed per model in the
-order analogue → S/PDIF → ADAT (§6). The meter source (which physical bank the
+order analogue → S/PDIF → ADAT (§7). The meter source (which physical bank the
 hardware meters read) is selected by the meter-source setting (§3.3).
 
 **The slot array is rate-dependent.** Meters sit at *router destinations*, and a
@@ -370,6 +382,38 @@ self-changing control still will not update mid-stream. On the Clarett Thunderbo
 units that is not currently a gap, because none of them has front-panel Mode/Air
 controls.
 
+### 3.10 Sync category (clock read-back)
+
+The `0x006xxx` category is the clock/sync group. Apart from `SET_CLOCK` (`0x006003`)
+these are **queries**, not commands — they report state and change nothing:
+
+| Opcode     | Returns                                                          |
+|------------|------------------------------------------------------------------|
+| `0x006000` | caps/bitmask, undecoded (observed `0x30018`)                     |
+| `0x006004` | sync lock status — a bitfield, see below                         |
+| `0x006005` | the sample rate the device is currently running at               |
+
+`0x006005` is a **live rate read-back**, confirmed on all four models. Its useful
+property is that it persists while nothing is streaming and across a host driver
+reload, so a host can report the device's true rate before it has itself started a
+stream. This is the only read path for the rate — it is not a config byte (§3.7).
+
+`0x006004` is **not** the clean 0/1 flag its name suggests. It returns 1 or 3
+depending on model and stream state: a 2Pre and 4Pre read 3 while streaming at
+48 kHz where an 8Pre and 8PreX read 1. It is evidently a bitfield with an undecoded
+upper bit; collapsing it with a boolean cast yields a sane lock indicator. This is
+the suspected reason a lock status derived from it is unreliable as a clock-source
+probe on the 8PreX (§7.3).
+
+Two of these were originally misread as stream-enable and stream-commit commands,
+from watching the vendor issue them immediately before arming its engine. That was
+wrong, and the correction matters for anyone replaying the vendor's traffic: the
+vendor was **polling whether its clock had locked**, not enabling anything. It also
+explains the vendor's several-second stall before streaming with no MMIO writes in
+it. Issuing them is inert — the stream handshake has no enabling function beyond
+`SET_CLOCK` and the config-push burst — though their answers are worth reading,
+since a device reporting unlocked would explain a dead engine.
+
 ---
 
 ## 4. Data plane (audio DMA)
@@ -389,6 +433,7 @@ Offsets are relative to the block base `B` (`0x200` or `0x300`):
 
 | Offset  | Meaning                                                          |
 |---------|------------------------------------------------------------------|
+| `B+0x00`| Cause / period counter — read-to-clear (see below)                |
 | `B+0x04`| Channel count                                                    |
 | `B+0x08`| Size register — 4 frames (`channels × 16` bytes)                 |
 | `B+0x0c`| Ring enable — written **last**, after base and size             |
@@ -396,9 +441,31 @@ Offsets are relative to the block base `B` (`0x200` or `0x300`):
 | `B+0x14`| Descriptor-table base bus address, high 32 bits                  |
 | `B+0x18`| DMA pointer — current descriptor index (device-written, host reads)|
 
-Global data-plane registers: `0x108` = IRQ config, `0x10c`/`0x110` = period-IRQ
-arm. The period IRQs must be left armed once set; disarming them (`0x110 = 0`) stops
-the engine.
+Global data-plane registers: `0x108` = IRQ config, `0x10c` = a second IRQ config
+word, `0x110` = period-IRQ arm. The period IRQs must be left armed once set;
+disarming them (`0x110 = 0`) stops the engine.
+
+**Cause word layout.** The ring's cause register at `B+0x00` is read-to-clear, and
+each read delivers a pending event exactly once:
+
+| Bits    | Meaning                                                            |
+|---------|--------------------------------------------------------------------|
+| 31      | A period event is pending                                          |
+| 30      | **Period overrun** — the event was raised before the previous one was acknowledged |
+| 7–0     | The period counter, modulo `0x100`                                  |
+
+Two consequences for a host reading this register. Masking the counter with
+`0x7fffffff` keeps bit 30, so a valid counter of `0x1a` reads as `0x4000001a` and
+fails any range check against the modulus — silently discarding exactly the samples
+that report a problem. Mask against the known bits instead. And a read of all-ones
+is a disconnected device, not an event: bit 31 is set in `0xffffffff`, so every read
+from a removed device otherwise looks like a period.
+
+Bit 30 was identified by sweeping the IRQ cadence: across two runs at the finest
+cadence, every 2-second window in which the host coalesced periods had at least one
+flag and every window in which it did not had none — 59 of 59 windows — with a cliff
+across cadences that rules out both a constant per-event rate and a time-based
+source.
 
 Programming order per ring is channels → size → base (high then low) → arm the
 period IRQs → enable (`B+0x0c = 1`). The enable must come after the base is
@@ -535,7 +602,65 @@ frozen loop of the previous stream's audio in those channels.)
 
 ---
 
-## 5. Attach: session readiness and model identification
+## 5. DIN MIDI
+
+Every model in the Clarett Thunderbolt line carries DIN MIDI in and out. It is the
+simplest transport on the device: **register PIO through a single memory-mapped
+UART**, with no DMA, no descriptor rings and no mailbox round-trips. It is also
+independent of the FCP control session, so MIDI works regardless of control-plane
+state.
+
+| Register | Role                                                                |
+|----------|---------------------------------------------------------------------|
+| `0x500`  | IRQ summary; low byte `0x0a` = MIDI RX pending                      |
+| `0x504`  | Write `0x8` to clear the MIDI RX interrupt                          |
+| `0x58c`  | MIDI data, bidirectional — TX on write, RX on read                  |
+
+### 5.1 Transmit
+
+Write up to three MIDI bytes per register write, packed low to high in transmit
+order with a count in the top byte:
+
+```
+word = (count << 24) | (b2 << 16) | (b1 << 8) | b0      count = 1..3
+```
+
+`count` is a **plain byte count**, not a USB-MIDI code-index number — a lone SysEx
+`F7` terminator goes out as a `count = 1` word. Chunking is by raw 3-byte grouping
+of the outgoing byte stream and is independent of message boundaries, so a host can
+hand the device whatever bytes it has queued, three at a time, without parsing them.
+
+The vendor reads `0x500` before each data write. Whether that is a required
+transmit-ready gate or merely advisory is unconfirmed; mirroring it is harmless.
+
+### 5.2 Receive
+
+Each read of `0x58c` returns one byte:
+
+```
+value = (valid << 24) | byte          valid = bit 24; value 0 = FIFO empty
+```
+
+Receive is interrupt-driven — an idle device generates no MMIO at all. On the
+interrupt, drain `0x58c` until it reads empty, then write `0x8` to `0x504` to clear.
+The FIFO must be drained even when no client is listening, since an undrained FIFO
+holds the interrupt asserted.
+
+Two cautions for the drain loop. A failed PCIe read returns `0xffffffff`, which has
+the valid bit set and a `0xff` data byte, so a loop that trusts the valid bit alone
+spins forever emitting `0xff` from a device that has gone away — treat all-ones as
+"stop", never as data. And the drain needs mutual exclusion against itself: which
+MSI vector carries MIDI RX is unconfirmed, so a host that drains on any vector will
+have concurrent drainers on different CPUs while audio is streaming, and two
+drainers of a one-byte FIFO interleave their reads and reorder the byte stream,
+corrupting multi-byte messages.
+
+This transport was decoded from three 2Pre MMIO captures taken with a USB-MIDI
+interface on the host driving the unit's DIN ports.
+
+---
+
+## 6. Attach: session readiness and model identification
 
 **The device arms its own control session.** The FPGA boots its firmware from
 flash, and so does the config backend: a device that has been configured at least
@@ -548,18 +673,18 @@ initialisation whatsoever.
 A host therefore performs no bring-up at attach. It waits for the session, reads
 the model, and starts using it.
 
-### 5.1 Readiness
+### 6.1 Readiness
 
 The session is not necessarily live the instant the PCIe function appears: a cold
 Thunderbolt attach can race it, and the first command's response may not land. The
-host polls an identity query (§5.2) until it answers, and only then treats the
+host polls an identity query (§6.2) until it answers, and only then treats the
 device as present. A budget of ~2 s covers the observed worst case; a device that
 never answers is not usable and should be refused rather than assumed.
 
 This readiness race is the sole cause of a device that appears "unarmed". Replaying
 the vendor initialisation does **not** rescue it — only waiting does.
 
-### 5.2 Model identification
+### 6.2 Model identification
 
 A routing-count query at band 0 (`GET_7.1`) returns the device's
 `{playback, capture}` channel-count pair, which is unique to each model (§1.1).
@@ -576,7 +701,7 @@ mis-identified device is not a cosmetic mislabel — it is a card streaming the 
 width into wrongly strided rings. A host that reads a valid geometry pair matching
 no model it knows should refuse the device, not guess.
 
-### 5.3 The vendor initialisation sequence
+### 6.3 The vendor initialisation sequence
 
 The vendor host application replays a ~232-command initialisation at attach. It is
 described here because its side effects matter, not because a host needs it:
@@ -600,9 +725,9 @@ device that reads empty.
 
 ---
 
-## 6. Per-model reference
+## 7. Per-model reference
 
-### 6.1 Pin address space
+### 7.1 Pin address space
 
 Pins identify routing endpoints and are **direction-scoped**: the same number means
 different things as a source vs a destination. Reference (8PreX) sources:
@@ -635,13 +760,13 @@ The smaller models are not simple subsets; they remap several pin blocks:
 | Loopback capture pins | `0x60a`/`0x60b` | `0x60a`/`0x60b` | `0x60a`/`0x60b` | `0x604`/`0x605` |
 | ADAT | 16 ch | 8 ch | 8 ch | 8 ch |
 
-### 6.2 Mixer geometry
+### 7.2 Mixer geometry
 
 All four models have a 30-input × 16-bus mixer, with mix buses A–P on source pins
 `0x300`–`0x30f` and mixer input slots 1–30 on destination pins `0x300`–`0x31d`
 **(XML)**.
 
-### 6.3 Clock sources
+### 7.3 Clock sources
 
 The clock-source enum is **not** model-specific. `Internal = 24`, `ADAT = 0` and
 `S/PDIF = 3` on every model; only which sources a model *offers* differs:
@@ -679,14 +804,14 @@ control (an invalid enum value) re-checked on every run: the idle-ADC noise floo
 and a `Locked` reading taken directly after another `Locked` leg both look like
 signal and are not.
 
-### 6.4 Meter source
+### 7.4 Meter source
 
 The meter-source setting (offset 184, commit 8) selects which bank the hardware
 meters read. Its enum is model-specific: the 8PreX offers Analogue=1, S/PDIF=2,
 ADAT 1=4, ADAT 2=8; the 8Pre and 4Pre offer Analogue=1 only; the 2Pre has no
 meter-source control **(XML)**.
 
-### 6.5 Meter slot layout
+### 7.5 Meter slot layout
 
 `GET_METER` slots are packed per model in physical-input order (analogue → S/PDIF →
 ADAT), followed by the routed capture/output channels. The 2Pre, 4Pre and 8Pre slot
