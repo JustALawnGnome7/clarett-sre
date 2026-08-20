@@ -99,18 +99,24 @@ Then use `alsamixer -c <card>`, or **alsa-scarlett-gui** for the full mixer and 
 ### Model selection
 
 The whole Clarett Thunderbolt line shares one PCI id, so the model is detected from the
-device itself. Override it if detection is ever wrong:
+device itself — it reports its own stream geometry, which is unique per model. There is
+nothing to configure:
 
 ```sh
-sudo insmod snd-clarett.ko                # auto-detect
-sudo insmod snd-clarett.ko model=2pre     # force: model=2pre / 4pre / 8pre / 8prex
+sudo insmod snd-clarett.ko
 ```
 
-Make an override persistent:
+The driver logs which model it found:
 
-```sh
-echo 'options snd_clarett model=2pre' | sudo tee /etc/modprobe.d/snd-clarett.conf
 ```
+snd_clarett 0000:0a:00.0: Clarett 2Pre: serial 0000000012345678 fw app 0x00010007 fpga 0x00000104
+```
+
+There is deliberately no way to override this. Channel counts, DMA ring geometry, routing
+and mixer tables, and the meter layout are all sized from the model, so a wrong one is not a
+mislabel — it is a card that streams the wrong width into wrongly strided buffers. If the
+driver cannot identify the device it refuses to register rather than guess, and says so in
+the kernel log.
 
 ### PCM (recording and playback)
 

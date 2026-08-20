@@ -267,54 +267,39 @@ MODULE_PARM_DESC(inject_clock,
 		 "replay and A/B whether the injected clock is why control toggles complete (done=1) but "
 		 "never physically manifest.");
 
-static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; selected by clarett_pick_model() */
+static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; chosen by clarett_detect_model() */
 
 /*
- * Model selection. The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a
- * byte-identical PRE-MAILBOX surface (MMIO regs, config space, the fw-info header, even the dummy
- * serial — checked across 2Pre/4Pre/8PreX captures), and there is no userspace shortcut either:
- * the line is entirely Thunderbolt 2, firmware-tunneled rather than enumerated as kernel-managed
- * TB routers, so no DROM device_name appears in sysfs. But an ARMED device reports its own stream
- * geometry: GET_7.1{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model —
- * live-confirmed (4,14) 2Pre and (8,20) 4Pre — and the bring-up itself is
- * model-agnostic (the same blob arms all three bench units). So the model is auto-detected after
- * the arm (clarett_detect_model); model= forces it instead.
+ * Model selection: THE DEVICE DECIDES, always. There is deliberately no override.
+ *
+ * The whole Clarett Thunderbolt line shares PCI id 1cb5:0002 and presents a byte-identical
+ * PRE-MAILBOX surface (MMIO regs, config space, the fw-info header, even the dummy serial —
+ * checked across 2Pre/4Pre/8PreX captures), and there is no userspace shortcut either: the line is
+ * entirely Thunderbolt 2, firmware-tunneled rather than enumerated as kernel-managed TB routers, so
+ * no DROM device_name appears in sysfs. But the device reports its own stream geometry:
+ * GET_7.1{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model — live-confirmed
+ * (4,14) 2Pre and (8,20) 4Pre.
+ *
+ * Everything downstream is sized from c->model: channel counts, DMA ring and descriptor geometry,
+ * fragment strides, routing and mixer tables, meter layout, the fcp-server map slug. A wrong model
+ * is therefore not a cosmetic mislabel, it is a card that streams the wrong width into wrongly
+ * strided rings — which is why a mismatch now REFUSES TO REGISTER rather than fall back to a
+ * plausible guess, and why the guess is not available as a module parameter either. If a genuinely
+ * new model appears, the probe error prints the raw geometry pair to add to the table below.
  */
-static char *model;
-module_param(model, charp, 0444);
-MODULE_PARM_DESC(model,
-		 "Force interface model: \"2pre\", \"4pre\", \"8pre\", or \"8prex\", overriding auto-detection "
-		 "(the device reports its stream geometry once armed; unset = detect).");
-
-/* Returns the model forced by model=, or NULL to auto-detect (the default). */
-static const struct clarett_model *clarett_pick_model(void)
-{
-	if (model) {
-		if (sysfs_streq(model, "2pre"))
-			return &clarett_2pre;
-		if (sysfs_streq(model, "4pre"))
-			return &clarett_4pre;
-		if (sysfs_streq(model, "8pre"))		/* distinct from 8prex — fewer streams, combo-jack inputs */
-			return &clarett_8pre;
-		if (sysfs_streq(model, "8prex"))
-			return &clarett_8prex;
-		pr_warn("snd_clarett: unknown model=\"%s\"; auto-detecting instead\n", model);
-	}
-	return NULL;
-}
 
 /*
- * Ask the armed device who it is: GET_7.1{band 0} returns {u16 playback_ch, u16 capture_ch}
+ * Ask the device who it is: GET_7.1{band 0} returns {u16 playback_ch, u16 capture_ch}
  * (+16 more bytes, meaning open), a pair unique per model. Runs before the meter heartbeat
  * starts, so nothing else touches resp_buf between the (landed-gated) completion and the parse.
- * Returns NULL if the query fails or the pair matches no known model (new hardware — warn and
- * let the caller keep its default).
+ * Returns NULL if the query fails or the pair matches no known model.
  *
- * *collapsed distinguishes WHY it failed, so the caller can say the useful thing instead of the
- * misleading "assuming 2Pre": true = the GET path is dead (transport error, or a status=3/size=0
- * refusal) — the session-collapse signature (GETs refused while SETs still err=0), which no model
- * fallback can paper over; false = either a clean match (return non-NULL) or a VALID reply whose
- * geometry we don't recognize (genuinely new hardware — the fallback is a reasonable guess).
+ * A NULL return is fatal to probe either way — there is no fallback model — but *collapsed
+ * distinguishes WHY, because the two need opposite things from the user: true = the GET path is
+ * dead (transport error, or a status=3/size=0 refusal), the session-collapse signature (GETs
+ * refused while SETs still err=0), which usually means "not ready yet, retry"; false = a VALID
+ * reply whose geometry is not in the table, i.e. genuinely unknown hardware, which needs a new
+ * clarett_model entry. The non-quiet warn on each path prints the raw pair for exactly that.
  */
 static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed,
 							bool quiet)
@@ -366,7 +351,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 
 	if (!quiet)
 		dev_warn(&c->pci->dev,
-			 "model auto-detect: unrecognized stream geometry (playback=%u capture=%u) — new model? Override with model=\n",
+			 "model auto-detect: unrecognized stream geometry (playback=%u capture=%u) — unknown model, needs a clarett_model entry\n",
 			 pb, cap);
 	return NULL;
 }
@@ -2062,7 +2047,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 {
 	struct snd_card *card;
 	struct clarett *c;
-	const struct clarett_model *forced, *armed_with;
+	const struct clarett_model *armed_with;
 	void __iomem *bar0;
 	int err, seeded;
 
@@ -2074,13 +2059,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	c = card->private_data;
 	c->card = card;
 	c->pci = pci;
-	/* Shared PCI id across the line → the match can't pick the model. model= forces it;
-	 * otherwise the id_table's 2Pre stands in through the (model-agnostic) arm, and
-	 * clarett_detect_model asks the armed device below. */
-	forced = clarett_pick_model();
-	c->model = forced ? forced : (const struct clarett_model *)ent->driver_data;
-	if (forced)
-		dev_info(&pci->dev, "model: %s (forced by model=)\n", c->model->name);
+	/* Shared PCI id across the line → the match can't pick the model, and there is no override.
+	 * The id_table's 2Pre stands in ONLY as the stand-in for force_arm's (model-agnostic) bring-up,
+	 * which has to run before the device can answer; clarett_detect_model then replaces it below,
+	 * or probe fails. Nothing that depends on the model may be sized before that point. */
+	c->model = (const struct clarett_model *)ent->driver_data;
 	mutex_init(&c->mbox_lock);
 	mutex_init(&c->hwdep_lock);
 	mutex_init(&c->pcm_lock);
@@ -2144,15 +2127,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * NOTHING: wait for the flash-persisted session to answer, detect the model from it, and leave the
 	 * device's own routing in place. force_arm=1 opts into the full vendor bring-up for a virgin device.
 	 *
-	 * armed_with is the model whose bring-up force_arm replays: the selected model if it carries a
-	 * captured blob, else the id_table default (all four have one, so this is belt-and-braces).
+	 * armed_with is the model whose bring-up force_arm replays: necessarily the id_table stand-in,
+	 * since the real model is not known until GET_7.1 answers below. That is fine — the bring-up is
+	 * model-agnostic (the same blob arms every bench unit), and detection corrects c->model straight
+	 * after, so the only thing armed_with is kept for is telling clarett_apply_model_routing() which
+	 * model's routing was actually pushed.
 	 */
 	armed_with = c->model;
-	if (!armed_with->arm_seq) {
-		armed_with = (const struct clarett_model *)ent->driver_data;
-		c->model = armed_with;
-	}
-	c->model = forced ? forced : armed_with;
 
 	{
 		bool collapsed = false;
@@ -2169,16 +2150,17 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			bool preserve_routing = routed > 0;
 
 			clarett_arm_device(c, preserve_routing, false);
-			if (!forced) {
-				det = clarett_detect_model(c, &collapsed, false);
-				if (det)
-					c->model = det;
-				else
-					dev_warn(&pci->dev,
-						 "force_arm: auto-detect failed after bring-up (%s); override with model=. Assuming %s\n",
-						 collapsed ? "session refused" : "unrecognized geometry",
-						 c->model->name);
+			det = clarett_detect_model(c, &collapsed, false);
+			if (!det) {
+				dev_err(&pci->dev,
+					"force_arm: model auto-detect failed after bring-up (%s) — refusing to register. "
+					"The device decides the model and there is no override; everything downstream "
+					"(channel counts, DMA ring geometry, routing tables) is sized from it.\n",
+					collapsed ? "session refused" : "unrecognized geometry");
+				err = -ENODEV;
+				goto err_free;
 			}
+			c->model = det;
 			clarett_apply_model_routing(c, armed_with, preserve_routing);
 		} else {
 			/*
@@ -2194,8 +2176,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 					break;
 				msleep(50);
 			}
-			/* One non-quiet pass to log the refusal detail (status/size) before deciding. */
-			if (collapsed)
+			/*
+			 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
+			 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
+			 * quiet to avoid a warn per attempt, and it breaks out of the loop immediately on an
+			 * unmatched-but-valid reply — which would otherwise leave nothing logged at all).
+			 */
+			if (!det)
 				det = clarett_detect_model(c, &collapsed, false);
 
 			if (collapsed) {
@@ -2212,20 +2199,22 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 				goto err_free;
 			}
 
-			if (!forced) {
-				if (det)
-					c->model = det;
-				else
-					dev_warn(&pci->dev,
-						 "model auto-detect: unrecognized stream geometry; override with model=. Assuming %s\n",
-						 c->model->name);
+			if (!det) {
+				/*
+				 * The device answered cleanly but with a geometry no clarett_model claims. There is
+				 * no override to fall back on, and standing in a wrong model would size the DMA
+				 * rings, fragment strides and routing tables for different hardware — so refuse.
+				 * The warn just above carries the raw pair to add to the table.
+				 */
+				dev_err(&pci->dev,
+					"unknown Clarett model (stream geometry matches none in the table) — refusing to register. "
+					"Add a clarett_model entry for the playback/capture pair logged above.\n");
+				err = -ENODEV;
+				goto err_free;
 			}
+			c->model = det;
 			/* No arm ran: the device's flash-persisted routing stands; nothing to apply. */
 		}
-
-		if (!forced)
-			dev_info(&pci->dev, "model: %s%s\n", c->model->name,
-				 det ? " (auto-detected)" : "");
 	}
 
 	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
@@ -2575,7 +2564,7 @@ static const struct clarett_model clarett_8prex = {
  * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
  * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
  * trace). The bring-up replay is the captured 2Pre attach (clarett_arm_2pre.h). Auto-detected after the
- * arm by its (4,14) geometry (clarett_detect_model); model=2pre forces it. The PRE-mailbox surface really
+ * arm by its (4,14) geometry (clarett_detect_model). The PRE-mailbox surface really
  * is undifferentiated — every MMIO reg / config read / PCI config byte is identical to the 8PreX, and
  * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
  * armed enough to answer GET_7.1.
@@ -2649,7 +2638,7 @@ static const struct clarett_model clarett_2pre = {
 /*
  * Clarett 4Pre (Thunderbolt). Control plane from Focusrite's Clarett 4Pre device XML [XML],
  * cross-checked against a live FC boot-to-stream capture [TRACE]. Auto-detected after the
- * arm by its (8,20) geometry, live-confirmed (clarett_detect_model); model=4pre forces it.
+ * arm by its (8,20) geometry, live-confirmed (clarett_detect_model).
  *
  *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
@@ -2719,7 +2708,7 @@ static const struct clarett_model clarett_4pre = {
  * Clarett 8Pre (Thunderbolt) — a DISTINCT model from the 8PreX (do not confuse). Control plane from
  * Focusrite's Clarett 8Pre device XML [XML]. A bring-up capture (clarett_arm_8pre.h) and
  * the derived stream-routing ids are both in place, so this descriptor arms config access (GET_DATA
- * works — hardware-verified via model=8pre) and registers the full mixer. What remains UNVERIFIED is
+ * works — hardware-verified on an 8Pre) and registers the full mixer. What remains UNVERIFIED is
  * PCM streaming on real 8Pre hardware: the channel counts are [XML]-derived rather than traced, and no
  * capture/playback has been run end-to-end on an 8Pre (unlike the confirmed 2Pre/4Pre/8PreX).
  *

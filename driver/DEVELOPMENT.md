@@ -115,6 +115,16 @@ model (live-confirmed `(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). Probe read
 to detect the model — no host bring-up needed, since a used device self-arms from flash. (Under
 `force_arm=1` the model-agnostic bring-up runs first and detection follows.)
 
+**Detection is the only path — there is no override, by design.** The id_table's 2Pre exists
+solely as the stand-in for `force_arm`'s bring-up, which has to run before the device can be
+asked; nothing model-dependent may be sized before `GET_7.1` answers. If the device does not
+answer, or answers with a geometry no `clarett_model` claims, probe **fails with `-ENODEV` and
+registers no card**, logging the raw `playback=/capture=` pair. It does not fall back to a
+plausible model: channel counts, DMA ring and descriptor geometry, fragment strides, routing and
+mixer tables, and the meter layout are all derived from `c->model`, so a wrong model is not a
+mislabel but a card streaming the wrong width into wrongly strided rings. Adding genuinely new
+hardware is a `clarett_model` entry keyed on the logged pair — not a module parameter.
+
 Because the PCI id is shared line-wide, the detected model is published for userspace at
 `/proc/asound/card<N>/clarett` as a stable, greppable slug — the key `fcp-server` uses to
 select its per-model control map, since the PCI id cannot:
@@ -144,8 +154,8 @@ six output gains @ 32/33/36/37/40/41), while the channel counts (8 playback / 20
 bring-up replay, the stream-routing ids, and the Analogue-1 toggle are `[TRACE]`-confirmed.
 
 The **8Pre** (distinct from the 8PreX) gained a bring-up capture, so it can arm like the other
-models under `force_arm=1`: `clarett_arm_8pre.h` carries its bring-up (hardware-verified via
-`model=8pre`), arming config access and its own captured default routing. Its input/output layout is from
+models under `force_arm=1`: `clarett_arm_8pre.h` carries its bring-up (hardware-verified on an
+8Pre), arming config access and its own captured default routing. Its input/output layout is from
 the XML: combo XLR/TRS jacks (Mic is auto-detected by the jack, so the software mode is
 Line/Inst only, on inputs 1-2; 3-8 are air-only) unlike the 8PreX's separate ports, outputs
 matching the 8PreX (10 gains), and `(20, 20)` streams for detection. Its stream-routing ids are
@@ -232,8 +242,6 @@ The module carries a number of parameters, mostly diagnostic/experimental levers
 reverse-engineering work. Run `modinfo snd-clarett.ko` for the complete, authoritative list.
 The operationally relevant ones:
 
-- `model=` — force the interface model (`2pre` / `4pre` / `8pre` / `8prex`), overriding
-  auto-detection.
 - `enable_pcm` (default on) — register the PCM devices; `0` for a mixer-only card.
 - `enable_midi` — register the DIN MIDI rawmidi.
 - `notify_ms` — rate limit for the front-panel notification relay.
@@ -280,4 +288,4 @@ in-kernel scarlett2 / 4th-gen Scarlett policy.
   fresh boot from this region. The hardware is always correct — the mismatch is display-only and
   self-heals on first touch. Diagnostic levers for any future dig: `seed_dump=1` (one-shot full
   `[0,256)` shadow dump at probe) and `put_trace=1` (log each control write's offset/value).
-- Single-card only; no module params for index/id (but see `model=` above).
+- Single-card only; no module params for index/id.

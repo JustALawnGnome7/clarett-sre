@@ -335,7 +335,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     we set only a single wrap flag on the last entry, so the counter never advanced (**the `ctr=0`
     cause**); **(3)** SIZE reg (4 frames) / fragment (16 frames) / IRQ period were conflated. All fixed:
     `clarett_frag_bytes` drops `lcm`, `clarett_build_rings` sets the periodic RX marker, the PCM period
-    advances `clarett_irq_period_frames()` per event. **Test:** `model=2pre enable_pcm=1`, `arecord -c14`,
+    advances `clarett_irq_period_frames()` per event. **Test:** `enable_pcm=1`, `arecord -c14`,
     watch `stream-svc: ctr=` advance past the `0x1b3`/`0` one-pass wall.
   - Eliminated earlier this session (spec §13): arm ritual/timing (`arm_pre`/`arm_settle_ms`), TX content
     (`tx_tone`), and **`0x214`/`0x314` settled as a real 64-bit address high word** (`base_hi=2` faults at
@@ -518,6 +518,24 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     on the 2Pre: no front-panel Mode/Air on the Clarett TB units; the 8PreX front panel is unenumerated).
     **Method note:** `cat /proc/asound/card*/pcm*/sub*/status` is the one-line check for "is something
     holding a stream open" — this whole symptom was one `RUNNING` on `pcm0p`.
+- **★ MODEL AUTO-DETECTION IS THE ONLY PATH — the `model=` parameter is REMOVED (Aug 20 2026).** The
+  device decides, or no card registers. `clarett_pick_model()` and the `model=` charp param are gone;
+  the id_table's 2Pre now exists *solely* as the stand-in for `force_arm`'s (model-agnostic) bring-up,
+  which must run before `GET_7.1` can be asked. **Both former fallbacks now fail the probe with
+  `-ENODEV`:** a device that answers with a geometry matching no `clarett_model` (previously
+  "unrecognized stream geometry; override with model=. Assuming 2Pre") and the same case after a
+  `force_arm` bring-up. The collapse/not-ready `-ENODEV` was already there and is unchanged.
+  **Why refusing beats guessing:** channel counts, DMA ring + descriptor geometry, fragment strides,
+  routing/mixer tables and the meter layout are all sized from `c->model`, so a wrong model is not a
+  cosmetic mislabel — it is a card streaming the wrong width into wrongly strided rings. **Adding new
+  hardware (e.g. the Red 8Line) is now a `clarett_model` entry, not a load-time flag** — the probe
+  error prints the raw `playback=/capture=` pair to key it on. One subtlety fixed in passing: the
+  readiness poll runs `clarett_detect_model` *quietly* and breaks immediately on a valid-but-unmatched
+  reply, so the non-quiet re-run is now gated on `!det` rather than `collapsed` — otherwise the
+  unmatched case printed nothing at all and the `-ENODEV` referenced a pair that was never logged.
+  **Tradeoff accepted:** the 8Pre/8PreX geometry pairs are XML-derived, so if one is wrong that model
+  now fails to register where `model=` could previously force it up. The failure is loud and the fix
+  is a one-line table edit against the logged pair.
 - **Bring-up ("arm") is OPT-IN, not automatic (Aug 12 2026 — supersedes the July 23 "probe ALWAYS
   arms" design).** Firmware *code* self-boots from flash, and — the decisive finding — a
   *previously-armed* unit fully self-arms across a genuine power cycle: config reads, input metering,
