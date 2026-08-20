@@ -10,6 +10,11 @@ meaning it is derived from Focusrite's device descriptor and has not yet been
 independently observed. Model-specific values are given as tables; nothing is
 carried across models by assumption.
 
+The **(XML)** tag is a claim of provenance, not of correctness. At least one
+descriptor value has been measured and found wrong (the 2Pre's S/PDIF clock source,
+§6.3), so where measurement contradicts the descriptor, the measured value stands
+and the discrepancy is called out.
+
 ---
 
 ## 1. Device
@@ -24,12 +29,20 @@ present a single PCIe function to the host.
 | PCIe            | Gen1 x1                                             |
 | MMIO            | Single 64 KB BAR0 (`BAR0`) — the entire register interface |
 | Interrupts      | 4 MSI vectors, MSI-driven (`DisINTx+`)             |
-| Front-end       | FPGA-based Thunderbolt (firmware carries App + FPGA segments) |
+| Front-end       | Intel DSL2210 Thunderbolt controller; the FPGA is a PCIe endpoint behind it |
 
 All host interaction — the control mailbox and the audio DMA engine — is through
 BAR0. Audio samples never traverse the BAR; they move by bus-master DMA to and
-from host memory (§4). The FPGA boots its own firmware from onboard flash; the
-host does not upload firmware.
+from host memory (§4). The FPGA boots its own firmware from onboard flash (which
+carries both App and FPGA segments); the host does not upload firmware.
+
+The Thunderbolt layer is an Intel DSL2210 "Port Ridge" — one upstream and two
+downstream ports, which are the unit's Thunderbolt in and thru jacks — with the
+FPGA presenting the `1cb5:0002` function behind it. That accounts for the link
+rate: **the 10 Gb/s single-lane link is the device's own TB1-class controller**, not
+a host or cable limitation, so it is expected rather than a fault to chase. It is
+also ample — the widest case in the line, an 8PreX running 28 in and 28 out at
+`S32` / 192 kHz, is about 344 Mb/s in each direction.
 
 ### 1.1 Model summary
 
@@ -223,9 +236,17 @@ Monitor section, config region offset 24, length 92:
 
 Offset 112 is the front-panel monitor knob and is the one preamp/monitor byte the
 device keeps live: `GET_DATA` reads it back tracking the physical knob, and turning
-the knob raises a config-change notification. The other monitor and preamp bytes are
-host-owned — they read back as written, and read 0 on a fresh device until the host
-writes them.
+the knob raises a config-change notification.
+
+**Every other preamp and monitor byte is host-owned and write-only in effect.** They
+read back as written within a session, but the device never publishes its own state
+into them. The asymmetry is sharper than "reads 0 until the host writes": across a
+power cycle the device *restores Mode and Air to the hardware* from flash, yet
+offsets 166 and 174 still read 0 — the preamp is physically in Inst or Air mode
+while config space denies it. There is no read path at all, and no front-panel
+Mode/Air control on any Clarett Thunderbolt unit through which one could be
+inferred, so a host cannot display the device's boot-time preamp state. It can only
+assert its own and track it from there.
 
 Settings:
 
@@ -284,7 +305,12 @@ specific region must window its requests.
 
 Sample rate and clock source are set with `SET_CLOCK{u32 sample_rate, u32
 clock_source}`. Supported rates are 44100, 48000, 88200, 96000, 176400, and 192000.
-`clock_source` is model-specific; `Internal = 24` on every model (§6).
+The `clock_source` enum is uniform across the line — `Internal = 24`, `ADAT = 0`,
+`S/PDIF = 3` — and only the *set of sources a model offers* differs (§6.3).
+
+Neither the rate nor the source is a config-space byte: they exist only in the
+`SET_CLOCK` payload, so neither can be read or written through `GET_DATA`/`SET_DATA`
+and neither can be expressed as a config-map control.
 
 ### 3.8 Metering
 
@@ -293,14 +319,56 @@ a 16-bit level replicated into the 32-bit word. Slots are packed per model in th
 order analogue → S/PDIF → ADAT (§6). The meter source (which physical bank the
 hardware meters read) is selected by the meter-source setting (§3.3).
 
+**The slot array is rate-dependent.** Meters sit at *router destinations*, and a
+meter's slot is its position in **that rate's** destination table — so every
+destination that S/MUX removes at double or quad speed (§4.5) shifts every later
+meter down. The layout is not a constant, and a host holding one table will display
+the wrong channel's level for every meter above the first removed destination.
+
+Measured on an 8Pre fed ADAT by an 8PreX, one probe below the first removal and one
+above it:
+
+| Meter                  | 48 kHz | 96 kHz | 192 kHz |
+|------------------------|--------|--------|---------|
+| ADAT in (→ PCM 11–18)  | 10–17  | 10–13  | 10–11   |
+| Mixer Input 01         | 40     | 32     | 28      |
+
+The ADAT *input* meters do not move, because they sit below the first removed
+destination (PCM 15 = slot 14) — which is why a test that probes only them looks
+reassuring. The shift appears only above that point. Live slot counts on the 8Pre
+go 70 → 62 → 58 as it loses PCM 15–18 and ADAT Out 5–8 at double speed, then PCM
+13–14 and ADAT Out 3–4 at quad.
+
+A model built from the XML `pin-m`/`pin-h` removals predicts all three columns
+exactly, so per-rate meter tables can be derived without further measurement.
+
+Note the vendor XML's `<hardware-meters>` `meters-l`/`-m`/`-h` tables (config
+offsets 136/146/156) are a **different mechanism** — the front-panel meter bridge,
+written per band — not this array.
+
 ### 3.9 Notifications
 
 The device raises an asynchronous notification when self-changing state moves — for
 example a front-panel monitor button or the monitor knob. The notification is
-delivered as an MSI on vector 0; the ISR reads cause register `0x400` and, when a
-monitor-class cause is present, a workqueue re-reads the monitor config region
-(`GET_DATA{24, 92}`) and updates the affected controls. The control plane is
-otherwise event-driven and issues no polling when idle.
+delivered as an MSI on vector 0; a host reads cause register `0x400` and, when a
+monitor-class cause is present, re-reads the monitor config region
+(`GET_DATA{24, 92}`) and updates the affected controls.
+
+**Vector 0 is shared with the audio period interrupt**, so while a stream runs it
+fires every period and `0x400` reads its idle value each time. The notification word
+itself is not exposed, so a host cannot tell a real config change from a period
+interrupt by the cause alone. Treating every vector-0 interrupt as a possible
+notification during streaming means re-reading the control set once per audio
+period — a mailbox flood with audible consequences.
+
+The practical resolution is to stop treating the interrupt as the change signal
+while streaming and poll for change instead: re-read the monitor region on the same
+timer that polls the meters (~24 Hz) and compare it against the last snapshot,
+acting only on a real difference. That costs one command per tick and reports
+nothing when nothing moved. Note this covers only the monitor region — any other
+self-changing control still will not update mid-stream. On the Clarett Thunderbolt
+units that is not currently a gap, because none of them has front-panel Mode/Air
+controls.
 
 ---
 
@@ -345,26 +413,70 @@ bits in its low bits (fragments are aligned, leaving the low bits free):
 - **bit 1** — IRQ: consuming an IRQ-flagged descriptor raises a counted period on
   the ring's cause register.
 
-The RX (capture) ring sets the IRQ flag periodically — roughly every 16 descriptors
-— and it is the consumption of those flagged descriptors that advances the counted
-period. A ring flagged only on its last entry never advances the period counter and
-the engine stalls after one pass; the periodic marker is required. The TX ring
-carries only the wrap flag on its last entry.
+The RX (capture) ring sets the IRQ flag periodically, and it is the consumption of
+those flagged descriptors that advances the counted period. A ring flagged only on
+its last entry never advances the period counter and the engine stalls after one
+pass; the periodic marker is required. The TX ring carries only the wrap flag on
+its last entry.
+
+The IRQ **cadence is chosen by the host**, not fixed by the device — it is simply
+how often the host sets bit 1 when it builds the table, and it sets the audio period
+(§4.3). The vendor's own RX ring flags roughly every 14 descriptors. Cadences from
+1 to 64 descriptors (16 to 1024 frames at 48 kHz) are confirmed working.
 
 ### 4.3 Frame and fragment geometry
 
 - **Frame:** N-channel interleaved `S32_LE`, 24-bit MSB-justified. Frame stride =
   `channels × 4` bytes.
-- **Fragment:** 16 frames — `channels × 64` bytes — packed with no alignment
-  rounding. Each descriptor points to one fragment.
-- **Period:** `IRQ_DESCS × 16` frames (e.g. an IRQ flag every 16 descriptors gives
-  a 256-frame period).
+- **Fragment:** 16 frames of audio — `channels × 64` bytes, with no alignment
+  rounding *of the audio itself*. Each descriptor points to one fragment.
+- **Slot:** the stride between consecutive fragments in memory, which is **not** the
+  fragment size — see below.
+- **Period:** `IRQ_DESCS × 16` frames (an IRQ flag every 16 descriptors gives a
+  256-frame period; every 4 gives 64 frames).
 - **Counter unit:** one increment of a ring's period counter corresponds to 16
   frames exactly.
 
 The two rings share one frame clock, so a full-duplex stream advances both together;
-the driver computes its period advance from the counter delta per IRQ, which
+a host can compute its period advance from the counter delta per IRQ, which
 self-calibrates to the true hardware period.
+
+**Every fragment must be contained within one 4 KB page.** The engine's DMA is
+page-granular, and a fragment that straddles a page boundary is mis-transferred in
+both directions. The vendor satisfies this implicitly: its fragment buffers are
+scatter-gathered — physically discontiguous — so the engine restarts per fragment
+and never streams across a boundary. A host that instead allocates one contiguous
+region and strides by the packed audio size violates it as soon as
+`channels × 64` fails to divide the page.
+
+The simple equivalent is to give each fragment a **slot** whose stride is the audio
+size rounded up to a power of two, over a **page-aligned** sample area. Every
+fragment is then page-contained, with unused padding at the end of each slot:
+
+| Model | Channels (capture / playback) | Audio bytes/fragment | Slot stride       |
+|-------|-------------------------------|----------------------|-------------------|
+| 2Pre  | 14 / 4                        | `0x380` / `0x100`    | `0x400` / `0x100` |
+| 4Pre  | 20 / 8                        | `0x500` / `0x200`    | `0x800` / `0x200` |
+| 8Pre  | 20 / 20                       | `0x500` / `0x500`    | `0x800` / `0x800` |
+| 8PreX | 28 / 28                       | `0x700` / `0x700`    | `0x800` / `0x800` |
+
+This is easy to miss, because a size that already divides the page never fails:
+2Pre and 4Pre playback (`0x100`, `0x200`) are safe as packed, so a contiguous host
+buffer works on those and breaks on the wider models. The two directions fail
+differently, and neither symptom points at page alignment:
+
+- **Capture (RX)** *drifts*. On the 2Pre the signal walked −2 channels every ~73
+  frames and realigned every 512 — exactly 8 bytes per 4 KB page accumulating,
+  since `0x380` does not divide the page and the misalignment never resets.
+- **Playback (TX)** *folds*. On the 8PreX 28 channels collapsed into 4-channel
+  groups (every output carried its source *mod 4*) while everything the device reads
+  was byte-for-byte identical to the vendor's — registers, descriptor table, source
+  ids, handshake, arm, and the 28-channel interleaved sample layout alike. The only
+  difference left was that our fragments were contiguous and the vendor's were not.
+
+Note the padding is a *device-side* memory layout. The buffer geometry a host
+presents upward stays on the logical contiguous size; only the descriptor addresses
+and the per-fragment copies are slot-aware.
 
 ### 4.4 Engine arming
 
@@ -376,8 +488,50 @@ To start the engine:
 - The RX fragment buffers are pre-filled before arming.
 
 Once armed, the RX cause register (`0x300`) reports a period on each IRQ-flagged
-descriptor consumed; the servicer reads the counter, advances the PCM position by
-the counter delta, and copies between the ring fragments and the ALSA buffers.
+descriptor consumed; the host reads the counter, advances the stream position by
+the counter delta, and copies between the ring fragments and its audio buffers.
+
+### 4.5 High sample rates and S/MUX
+
+All six rates (44.1 through 192 kHz) are confirmed for capture on all four models.
+The data plane is rate-agnostic: fragment geometry, descriptor layout and the
+16-frames-per-counter-unit relationship are all in *frames* and do not change with
+rate. Only the `SET_CLOCK` rate differs.
+
+**The stream width does not shrink at high rates.** The per-model channel count in
+§1.1 is correct at every rate — there is no S/MUX narrowing of the DMA stream. What
+does change is which channels the device *fills*: ADAT carries 8 / 4 / 2 channels
+per port at single / double / quad speed, so the ADAT channels drop out of the
+capture stream from the tail. Analogue and S/PDIF are present at all rates.
+
+Leading capture channels the device actually writes, of the full width:
+
+| Model | Full width | 88.2 / 96 kHz | 176.4 / 192 kHz |
+|-------|-----------|----------------|-----------------|
+| 2Pre  | 14        | 10             | 8               |
+| 4Pre  | 20        | 16             | 14              |
+| 8Pre  | 20        | 16             | 14              |
+| 8PreX | 28        | 20             | 16              |
+
+The dead set is a contiguous tail on every model. The 8Pre row is measured; the
+others are derived from the XML `pin-m`/`pin-h` overrides, where `0x0` means the
+channel is gone at that speed *and above* — a cascade confirmed by the routing
+count deltas. End-to-end verification on an 8PreX → 8Pre ADAT link, tones on all
+eight ADAT channels: at 48 kHz ADAT 1–8 arrive on capture channels 12–19, at 96 kHz
+ADAT 1–4 on 12–15, at 192 kHz ADAT 1–2 on 12–13 — the 8 → 4 → 2 prediction exactly.
+
+**The removed channels are not silent, and a host must blank them.** They carry a
+sparse residue the engine actively writes: one non-zero sample every 32 frames, an
+impulse train at roughly −25 dBFS. Only channels dropped at the *immediately
+preceding* speed tier receive it — on an 8Pre, ADAT 5–8 at double speed and ADAT
+3–4 at quad — while channels dropped a full tier earlier stay exactly zero.
+
+Blanking the ring once at stream start does **not** hold, because the engine keeps
+writing those slots; the dead tail has to be blanked on the frames handed upward,
+per period. A host that skips this delivers an audible impulse train on channels it
+believes are unused. (Before any blanking at all the symptom is different again and
+easy to misread as a driver bug: a DMA ring allocated once and reused replays a
+frozen loop of the previous stream's audio in those channels.)
 
 ---
 
@@ -489,14 +643,41 @@ All four models have a 30-input × 16-bus mixer, with mix buses A–P on source 
 
 ### 6.3 Clock sources
 
-`Internal = 24` on every model. The remaining source values are model-specific:
+The clock-source enum is **not** model-specific. `Internal = 24`, `ADAT = 0` and
+`S/PDIF = 3` on every model; only which sources a model *offers* differs:
 
-| Model  | S/PDIF | ADAT 1 | ADAT 2 | Wordclock |
-|--------|--------|--------|--------|-----------|
-| 8PreX  | 3      | 0      | 1      | 2         |
-| 8Pre   | 3      | 0      | —      | —         |
-| 4Pre   | 3      | 0      | —      | —         |
-| 2Pre   | 4      | 0      | —      | —         |
+| Model  | Internal | ADAT 1 | S/PDIF | ADAT 2        | Wordclock     |
+|--------|----------|--------|--------|---------------|---------------|
+| 8PreX  | 24       | 0      | 3      | 1 **(XML)**   | 2 **(XML)**   |
+| 8Pre   | 24       | 0      | 3      | —             | —             |
+| 4Pre   | 24       | 0      | 3      | —             | —             |
+| 2Pre   | 24       | 0      | 3      | —             | —             |
+
+`Internal` is confirmed everywhere (every stream arms with it). `ADAT = 0` is
+confirmed on the 8Pre at 48, 96 and 192 kHz. `S/PDIF = 3` is confirmed on the 8Pre
+over RCA coax and the 2Pre over TOSLINK — **the 2Pre's XML claims 4, and that is
+wrong.** Value 4 is accepted by the device but is not source-specific: it locks to
+whatever external source is present, so it is something looser (any external, or
+any optical), not a per-model S/PDIF encoding.
+
+The 8PreX's `ADAT 2` and `Wordclock` values are XML-derived and **unverified**.
+They are not verifiable by the method that measured the others, because on the
+8PreX `Sync Status` does not reliably track the selected source: feeding one ADAT
+port and stepping the value, the deliberately invalid value 7 read `Locked` in 2 of
+3 trials, while value 1 locked with either port fed and value 0 locked only with
+port 2 fed — mutually inconsistent, so no port mapping can be claimed. The likely
+explanation is that the 8PreX reports a lock if *either* ADAT receiver has locked,
+independently of the `SET_CLOCK` selection, which would make `Sync Status` useless
+as a clock-source probe on any two-ADAT-port model. `Wordclock` additionally needs
+a BNC source that was never available.
+
+**Method trap.** The audio path is not a probe for clock source. S/PDIF and ADAT
+keep arriving on their capture channels whatever the clock source says, *even while
+`Sync Status` reads `Unlocked`* — the router does not care. `Sync Status` is the
+only signal that distinguishes these values, and any test of them needs a negative
+control (an invalid enum value) re-checked on every run: the idle-ADC noise floor
+and a `Locked` reading taken directly after another `Locked` leg both look like
+signal and are not.
 
 ### 6.4 Meter source
 
@@ -508,5 +689,11 @@ meter-source control **(XML)**.
 ### 6.5 Meter slot layout
 
 `GET_METER` slots are packed per model in physical-input order (analogue → S/PDIF →
-ADAT), followed by the routed capture/output channels. The 2Pre and 4Pre slot maps
-are measured against hardware; the wider models follow the same packing rule.
+ADAT), followed by the routed capture/output channels. The 2Pre, 4Pre and 8Pre slot
+maps are measured against hardware — the 8Pre's over all 70 slots, including the
+per-rate compaction of §3.8. The 8PreX follows the same packing rule but is not
+measured.
+
+Each of these layouts describes the **single-speed** array only. At double and quad
+speed the slots compact around the destinations S/MUX removes (§3.8), so a complete
+per-model meter map is three tables, not one.
