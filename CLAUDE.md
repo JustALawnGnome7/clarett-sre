@@ -726,12 +726,19 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       answered". Now directly observed, on a host with **no** MMIO blackout. The ASRock's ~48 ms
       blackout remains a plausible *trigger* there (any command whose response is swallowed wedges the
       session the same way), but the blackout is no longer needed to explain collapse.
-    - **OPEN before fixing:** is command #0's response merely LATE (would a longer per-command deadline
-      catch it?) or never sent at all? `CLARETT_MBOX_TIMEOUT_MS` is a compile-time 100 ms, so this
-      needs a build to test. That answer picks the fix: a first-command grace period, versus resetting
-      the mailbox (re-running the `0x510`/`0x500` device-enable) before each readiness retry. **Do NOT
-      simply ack on timeout** — that is precisely the premature ack the crossing forbade, and a late
-      response would then land against an already-acked command.
+    - **ANSWERED (same day, `resp_timeout_ms=3000` on the 8Pre): the response is NEVER SENT, not late.**
+      Microsecond timestamps: `pre-mailbox regs` at `16:06:41.528` → `response never landed` at
+      `16:06:44.530`, i.e. the full 3.002 s deadline elapsed with nothing. Command #0 still raised DONE
+      normally (`done=839us`), so the device processed it and simply produced no response DMA. The very
+      next command answered in **84 us** with `rseq=0 err=3` — the device is wide awake and fast, and is
+      refusing only because command #0 is unretired. **So a longer per-command deadline cannot fix this**
+      (`resp_timeout_ms` stays a diagnostic at its 100 ms default; raising it only delays the failure,
+      and raising it above `wait_ready_ms` means only ONE command is issued before the budget expires).
+      The fix must RECOVER the mailbox — re-run the `0x510`/`0x500` device-enable and retry, which is
+      what a module reload does by accident and is the only thing ever observed to clear the wedge.
+      **Do NOT simply ack on timeout** — that is the premature ack the crossing forbade; the response is
+      absent at 3 s but nothing proves it never arrives later, and it would then land against an
+      already-acked command.
   - **METHOD NOTE (three wrong readings in one session, all from incomplete sequences).** A "power cycle
     fixed it" and a "stopping the clients fixed it" conclusion were both drafted and both withdrawn once
     the operator supplied a step that had not been in the pasted log — a power cycle done to free a busy
