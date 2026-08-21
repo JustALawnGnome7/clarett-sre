@@ -1764,8 +1764,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			msleep(50);
 		}
 		if (resets)
-			dev_dbg(&pci->dev, "readiness: %d mailbox reset(s) before the session answered\n",
-				resets);
+			dev_dbg(&pci->dev, "readiness: %d mailbox reset(s), session %s\n",
+				resets, det ? "answered" : "still refusing");
 		/*
 		 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
 		 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
