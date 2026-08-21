@@ -20,6 +20,12 @@ KDIR ?= /lib/modules/$(shell uname -r)/build
 # something needs MIDI, so a machine with no MIDI device fails with "Unknown symbol
 # snd_rawmidi_*". Read the list out of the built module rather than keeping a second copy here,
 # so it stays right when the module gains or drops a dependency.
+#
+# NOTE the -a on the modprobe below is REQUIRED, not decorative: modprobe's synopsis is
+# `modprobe [modulename] [module parameters...]`, so without it only the FIRST name is treated
+# as a module and the rest are passed to it as parameters. That fails silently — unknown module
+# parameters are ignored with a warning rather than rejected — so it exits 0 having loaded one
+# module, and the missing one only surfaces later as "Unknown symbol" from insmod.
 MODDEPS = $(shell modinfo -F depends $(CURDIR)/snd-clarett.ko 2>/dev/null | tr ',' ' ')
 
 .PHONY: all clean modules_install load unload
@@ -39,7 +45,7 @@ modules_install:
 load:
 	@test -f $(CURDIR)/snd-clarett.ko || \
 		{ echo "snd-clarett.ko not built — run 'make' first (as yourself, not root)"; exit 1; }
-	$(if $(strip $(MODDEPS)),modprobe $(MODDEPS))
+	$(if $(strip $(MODDEPS)),modprobe -a $(MODDEPS))
 	insmod $(CURDIR)/snd-clarett.ko $(ARGS)
 
 unload:
