@@ -297,6 +297,21 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 				 opcode, c->seq, done_us);
 	}
 
+	/*
+	 * Wedge detection, for the readiness poll. No response at all, or one echoing a sequence number
+	 * that is not ours, both mean the device is still answering an earlier unretired command.
+	 */
+	if (!resp_echo) {
+		c->mbox_wedged = true;
+	} else {
+		u16 rseq;
+
+		dma_rmb();
+		rseq = ((const u8 *)c->resp_buf)[FCP_RESP_SEQ_OFF] |
+		       ((const u8 *)c->resp_buf)[FCP_RESP_SEQ_OFF + 1] << 8;
+		c->mbox_wedged = rseq != c->seq;
+	}
+
 	if (!(cause & IRQ_DONE_BIT))
 		ret = -ETIMEDOUT;
 	/*

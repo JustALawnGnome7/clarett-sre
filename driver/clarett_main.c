@@ -192,6 +192,33 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
  * reply whose geometry is not in the table, i.e. genuinely unknown hardware, which needs a new
  * clarett_model entry. The non-quiet warn on each path prints the raw pair for exactly that.
  */
+/*
+ * Reset the device's mailbox state machine.
+ *
+ * A command can raise DONE and never produce a response DMA. The trailing ack is then withheld — as it
+ * must be, since acking an unlanded response is what caused the original session wall — and the device
+ * is left holding that command unretired, answering every later one with the stale sequence number and
+ * a blanket refusal. Polling harder does not help: measured on an 8Pre, a wedged mailbox refuses
+ * identically for as long as it is asked.
+ *
+ * These are the same writes clarett_hw_init() makes at open (0x510/0x500 subsystem enable, then the
+ * response-DMA address), which is why a module reload has always cleared the wedge while a device power
+ * cycle has not — the reload re-runs them, the power cycle just re-creates the condition. Re-programming
+ * the DMA address is redundant while the buffer is unchanged, but it keeps this identical to the
+ * sequence that is known to recover.
+ *
+ * Caller must not hold mbox_lock, and must be sure no command is in flight — which is why this is
+ * used only from the readiness poll in probe, before the meter worker or any hwdep client exists.
+ */
+static void clarett_mbox_reset(struct clarett *c)
+{
+	clarett_wl(c, 0x510, 0x8);
+	clarett_wl(c, 0x500, 0x8);
+	clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
+	clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
+	clarett_rl(c, REG_CAPS);		/* post the writes before the next submit */
+}
+
 static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed,
 							bool quiet)
 {
@@ -1715,13 +1742,30 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		bool collapsed = false;
 		const struct clarett_model *det = NULL;
 		unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
+		int resets = 0;
 
 		for (;;) {
 			det = clarett_detect_model(c, &collapsed, true);
 			if (det || !collapsed || time_after(jiffies, deadline))
 				break;
+			/*
+			 * A cold attach can catch the device mid-wake: the first command completes but its
+			 * response never arrives, which wedges the mailbox for every command after it. Reset
+			 * it before retrying — otherwise the rest of the budget is spent asking a mailbox
+			 * that can no longer answer, which is exactly what it looked like before this was
+			 * understood. Gated on the wedge signature specifically — no response, or one
+			 * echoing someone else's sequence number — so a device that is answering for itself
+			 * and merely refusing is left alone rather than having its subsystems re-enabled.
+			 */
+			if (c->mbox_wedged) {
+				resets++;
+				clarett_mbox_reset(c);
+			}
 			msleep(50);
 		}
+		if (resets)
+			dev_dbg(&pci->dev, "readiness: %d mailbox reset(s) before the session answered\n",
+				resets);
 		/*
 		 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
 		 * status/size, or the raw geometry pair of an unmatched device (the poll above runs

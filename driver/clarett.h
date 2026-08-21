@@ -553,6 +553,17 @@ struct clarett {
 	struct completion mbox_done;		/* completed by the vec0 ISR on mailbox DONE */
 	u32 mbox_cause;				/* 0x100 value the ISR consumed with DONE set */
 	/*
+	 * Is the mailbox wedged? Set when the last command either produced no response DMA at all, or
+	 * produced one echoing a sequence number that is not the one we sent. Both are the same fault:
+	 * a command whose response never landed has its trailing ack withheld — as it must be, since
+	 * acking an unlanded response is what caused the original session wall — leaving the device
+	 * holding that command unretired and answering it in place of every later one, which is exactly
+	 * what a stale echoed seq means. clarett_fcp() cannot report this through its return value
+	 * without turning a response-less-but-successful SET into a failure, so the readiness poll reads
+	 * it here to decide whether to reset the mailbox and retry.
+	 */
+	bool mbox_wedged;
+	/*
 	 * Set while a mailbox command is in flight (clarett_fcp submit->complete). vec0 fires on
 	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1
 	 * = 0x3) at completion, so a completion MSI can be misread as a monitor event. This guard makes
