@@ -1727,23 +1727,27 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		/*
 		 * Readiness retry, with the emphasis on QUIET rather than on frequency.
 		 *
-		 * A device caught mid-wake completes its first command but never DMAs the response. The
-		 * trailing ack is then withheld — it must be, since acking an unlanded response is what
-		 * caused the original session wall — and the device is left holding that command
-		 * unretired, answering it in place of every later one. Every further command renews that
-		 * state, so what recovers it is silence, and only a long one: attempts spaced 8 s apart
-		 * all fail (including one 47 s after enumeration) while a single attempt after 20 s of
-		 * quiet succeeds at 20 s in. The gap is the variable, not the elapsed time — which is why
-		 * this is a flat CLARETT_READY_QUIET_MS gap and not a backoff ramping up through it.
+		 * A device caught mid-wake does not latch the pre-mailbox init, and nothing done over the
+		 * mailbox afterwards recovers it: with hw_init run once at ~1 s, attempts at 0, 25, 50 and
+		 * 75 s all refuse, while an attempt whose hw_init runs at 20 s succeeds at 20 s in — as
+		 * does any later bind or reload, each of which re-runs it. So the retry replays the whole
+		 * init, not just the command.
 		 *
-		 * A warm device answers the first attempt in ~90 us and never waits at all.
+		 * The first command also wedges the mailbox when it fails — it completes but never DMAs a
+		 * response, so the trailing ack is withheld (it must be; acking an unlanded response is
+		 * what caused the manifestation wall) and the device answers that command in place of
+		 * every later one. Re-running init clears that too, which is why a reload has always
+		 * worked where waiting never did.
+		 *
+		 * A warm device answers the first attempt in ~90 us and never re-inits.
 		 */
 		for (;;) {
 			tries++;
 			det = clarett_detect_model(c, &collapsed, true);
 			if (det || !collapsed || time_after(jiffies, deadline))
 				break;
-			msleep(CLARETT_READY_QUIET_MS);
+			msleep(CLARETT_READY_RETRY_MS);
+			clarett_hw_init(c);	/* replay the init; the device may be awake now */
 		}
 		if (tries > 1)
 			dev_dbg(&pci->dev, "readiness: %d attempts, session %s\n",

@@ -489,18 +489,19 @@ struct clarett_model {
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 /*
- * Quiet interval between readiness attempts.
+ * Interval between readiness attempts.
  *
- * A device caught mid-wake renews its wedged state on every command it is sent, so what recovers it is
- * an unbroken silence — and the silence has to be long. Measured on an 8Pre: attempts spaced 8 s apart
- * all fail, including one 47 s after enumeration, while a single attempt after 20 s of silence succeeds
- * at only 20 s in. It is the gap that matters, not the elapsed time, so a short early retry is not
- * merely useless — it renews the wedge and consumes the quiet the next attempt needs.
+ * What a cold attach needs is not a longer wait before asking, nor a longer silence between asks — it
+ * is the PRE-MAILBOX INIT itself replayed once the device is awake. Measured on an 8Pre: with hw_init
+ * done once at ~1 s, mailbox attempts at 0, 25, 50 and 75 s ALL fail; but a first attempt whose hw_init
+ * runs at 20 s succeeds at 20 s in, and so does any later bind or module reload — every one of which
+ * re-runs hw_init. A device caught mid-wake evidently does not latch those writes, and nothing done
+ * afterwards over the mailbox recovers it.
  *
- * Hence a flat, generous gap rather than a backoff: ask once (which is all a warm device ever needs),
- * then leave it alone for well past the measured 8 s floor before asking again.
+ * So each retry re-runs the whole init and then asks once. The interval only bounds how soon after the
+ * device becomes ready we notice.
  */
-#define CLARETT_READY_QUIET_MS		25000u
+#define CLARETT_READY_RETRY_MS		5000u
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */
