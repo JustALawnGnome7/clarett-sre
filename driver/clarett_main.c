@@ -52,14 +52,6 @@ MODULE_PARM_DESC(tx_trace,
 		 "rate/tearing hypothesis). Writable at runtime via /sys/module/snd_clarett/parameters.");
 
 /*
- * Buffer-mode override. The engine dereferences the ring contents at 0x210/0x310
- * as DMA pointers — a flat sample ring handed to it is read as a descriptor table (a zeroed ring faults
- * writing a 16-frame capture fragment to GPA 0: address 0/0x80/.../0x300 = 0x380 = 14ch*4*16, exactly
- * the decode). So NO current model uses flat mode; every model defaults to a descriptor table. This
- * lever forces flat on regardless, only to re-test the flat hypothesis once the pre-arm pmemsave capture
- * has shown what the VM actually seeds the ring with.
- */
-/*
  * Host bring-up ("arm") policy at probe: THE DRIVER NEVER ARMS.
  *
  * A device that has ever been armed self-arms from flash across a power cycle: reads, input metering, AND
@@ -1769,7 +1761,6 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		/* Nothing arms the device, so its flash-persisted routing stands untouched. */
 	}
 
-	c->flat_buffer = c->model->flat_buffer;
 	/* RX fragment slot stride: default = page-safe pow2 (fixes the even-channel drift);
 	 * 0 = contiguous (old); >0 = audio + manual padding. */
 	{
@@ -2141,10 +2132,10 @@ static const struct clarett_model clarett_8prex = {
  * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
  * armed enough to answer GET_7.1.
  * PCM uses the per-direction descriptor path (shared with the 8PreX): on hardware the engine dereferences
- * the ring base as a descriptor table (the 0xAA flat-buffer attempt faulted at 0xaaaa.. — descriptor mode
+ * the ring base as a descriptor table (descriptor mode
  * is the engine's default and is not flipped by the stream-config FCP handshake we can replay). Asymmetric
  * TX 4ch / RX 14ch: periods 0x40 / 0xe0, descriptor fragments 0x100 / 0x700 (clarett_frag_bytes). The 2Pre's
- * descriptor geometry is INFERRED (the VM uses flat mode for it); see clarett.h.
+ * descriptor geometry is INFERRED; see clarett.h.
  */
 /* Names mirror scarlett2's Clarett 2Pre USB line_out_descrs (Monitor L/R, Headphones L/R);
  * the "Line NN" number is 1-based output index, matching scarlett2's "Line %02d (%s)". */
@@ -2195,9 +2186,6 @@ static const struct clarett_model clarett_2pre = {
 						 * or glitches. Width is rate-independent (no SMUX shrink). */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
-	/* Descriptor mode: the "2Pre wants flat" hypothesis was falsified on hardware — the engine
-	 * dereferences the ring as a table, so a flat ring faults writing a 16-frame fragment to GPA 0. The
-	 * 2Pre "flat audio" RAM dump was the fragment buffers, not the table. flat_buffer stays false. */
 	.stream_tx_ids = clarett_2pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
 	.stream_rx_ids = clarett_2pre_stream_rx,

@@ -900,25 +900,13 @@ static const struct snd_pcm_ops clarett_pcm_ops = {
  * and there is NO zero terminator. dma_alloc_coherent returns zeroed memory, so the TX samples are already
  * silence and the RX sample area (the engine's write target) starts clean.
  *
- * No 0xAA pre-fill: that was a flat-mode crutch (the engine was reading the SAMPLE area as pointers). In
- * descriptor mode the engine reads the TABLE (valid, non-null entries -> it clocks) and writes audio INTO
- * the sample area, so a clean zeroed sample area is correct and fault-free.
+ * No pre-fill is needed: the engine reads the TABLE (valid, non-null entries -> it clocks) and writes
+ * audio INTO the sample area, so a clean zeroed sample area is correct and fault-free.
  */
 static void clarett_build_rings(struct clarett *c)
 {
 	size_t tbl     = clarett_pcm_tbl_bytes();
 
-	/*
-	 * Flat mode: no descriptor table at all — the engine reads/writes the contiguous sample ring directly
-	 * at 0x210/0x310. dma_alloc_coherent already zeroed the buffer (TX = silence, RX = clean write target),
-	 * so there is nothing to build. NO prefill: the "0xAA prefill" was a descriptor-mode artifact (the
-	 * engine dereferencing sample bytes as pointers); in a true flat ring the bytes are samples, not pointers.
-	 */
-	if (c->flat_buffer) {
-		dev_info(&c->pci->dev, "flat rings: TX %zu B + RX %zu B, no descriptor table\n",
-			 clarett_flat_tx_bytes(c), clarett_flat_rx_bytes(c));
-		return;
-	}
 	size_t tx_ring = clarett_pcm_tx_ring(c);
 	u32 tx_frag = clarett_frag_bytes(c->model->playback_channels);
 	u32 tx_slot = c->tx_slot;		/* TX descriptor stride: audio bytes, or a padded slot */
@@ -982,9 +970,9 @@ int clarett_create_pcm(struct clarett *c)
 	/* Debug: the probe summary in clarett_probe() already states that a PCM registered and how wide
 	 * it is; the ring/buffer detail here is bring-up instrumentation. */
 	dev_dbg(&c->pci->dev,
-		 "PCM registered (playback %uch / capture %uch, S32_LE @%u, %s ring, bufs tx=%zu rx=%zu B @%pad)\n",
+		 "PCM registered (playback %uch / capture %uch, S32_LE @%u, bufs tx=%zu rx=%zu B @%pad)\n",
 		 c->model->playback_channels, c->model->capture_channels, CLARETT_PCM_RATE,
-		 c->flat_buffer ? "flat" : "descriptor", txbuf, rxbuf, &c->stream_dma);
+		 txbuf, rxbuf, &c->stream_dma);
 
 	return 0;
 }

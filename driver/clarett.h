@@ -450,16 +450,6 @@ struct clarett_model {
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
 						 * the PCM path derives per-direction fragments from channel counts */
 	/*
-	 * Buffer mode. The engine's ring base registers 0x210/0x310 point at EITHER
-	 * a scatter-gather descriptor table (large buffers; the 8PreX RAM dump) OR a flat contiguous sample
-	 * ring (small buffers; the 2Pre RAM dump was flat audio, no table). It is per-model: the 2Pre's engine
-	 * consumes ZERO frames/period when handed a descriptor table (ctr frozen at 0) but its counter advances
-	 * in flat mode (ctr=0x1c10, 28 passes). flat_buffer=true selects the flat path (0x210/0x310 -> sample
-	 * ring directly, no table); false keeps the descriptor table. See clarett_pcm.c.
-	 */
-	bool flat_buffer;
-
-	/*
 	 * Per-channel stream-routing CONFIG_PUSH ids, re-issued in-session at PCM prepare (the device resets
 	 * stream routing when idle; the probe-time push goes stale). Captured from the VM rate-change handshake:
 	 * one CONFIG_PUSH{u16 id} per stream channel. tx[] after GET_7.2, rx[] after
@@ -610,7 +600,6 @@ struct clarett {
 	 * the engine runs (vec1/vec2 period IRQs + DMA pointer advancing). See clarett_engine_start().
 	 */
 	bool stream_on;
-	bool flat_buffer;		/* effective buffer mode (from the model; false on all current models) */
 	u32 rx_slot;			/* RX descriptor fragment SLOT stride in bytes (>= audio bytes/fragment).
 					 * = audio bytes when contiguous (rx_frag_pad=0); larger to break buffer
 					 * contiguity (scatter-gather experiment for the page-drift glitch). */
@@ -949,60 +938,35 @@ static inline size_t clarett_pcm_rx_ring(const struct clarett *c)
 }
 
 /*
- * Flat-buffer geometry (flat_buffer models). 0x210/0x310 point straight at a contiguous
- * sample ring — NO descriptor table. CLARETT_FLAT_FRAMES is the per-direction ring depth in frames; on
- * the 2Pre this makes the TX ring 1024*4ch*4 = 16 KB, exactly the VM's TX-base->RX-base gap
- * (0x680fb000-0x680f7000), and the RX ring 1024*14ch*4 = 56 KB. The engine wraps each ring at this depth
- * (VM counter wrapped ~0xf0 with these sizes). r1 = r0 + flat TX bytes, so RX abuts TX just as the VM's
- * two bases do. Sample-ring bytes = frames * channels * 4; that RX ring IS the ALSA capture buffer.
- */
-#define CLARETT_FLAT_FRAMES	1024
-static inline size_t clarett_flat_tx_bytes(const struct clarett *c)
-{
-	return (size_t)CLARETT_FLAT_FRAMES * c->model->playback_channels * 4;
-}
-static inline size_t clarett_flat_rx_bytes(const struct clarett *c)
-{
-	return (size_t)CLARETT_FLAT_FRAMES * c->model->capture_channels * 4;
-}
-
-/*
- * Mode-independent stream accessors — the PCM path uses these so it does not branch on flat_buffer
- * everywhere. total = both rings; rx_off = byte offset of the RX SAMPLE area (the engine's capture write
- * target, and the source of the per-period copy) within the contiguous buffer; rx_area = its size, which
- * is also the ALSA buffer size; r0/r1 = the two ring base addresses the engine is armed with (a table
- * base in descriptor mode, a sample base in flat mode).
+ * Stream geometry accessors. total = both rings; rx_off = byte offset of the RX SAMPLE area (the
+ * engine's capture write target, and the source of the per-period copy) within the contiguous buffer;
+ * rx_area = its size, which is also the ALSA buffer size; r1 = the block-1 descriptor table base.
  */
 static inline size_t clarett_stream_tx_off(const struct clarett *c)
 {
-	return c->flat_buffer ? 0 : clarett_pcm_tbl_bytes();  /* flat: samples at 0; descr: past TX table */
+	return clarett_pcm_tbl_bytes();			/* samples sit past the TX descriptor table */
 }
 static inline size_t clarett_stream_tx_area_bytes(const struct clarett *c)
 {
-	return c->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_samples(c);
+	return clarett_pcm_tx_samples(c);
 }
 static inline size_t clarett_stream_rx_off(const struct clarett *c)
 {
-	/* descr: past the TX ring and the RX table, PAGE-ALIGNED so each RX fragment slot (a power of two,
+	/* Past the TX ring and the RX table, PAGE-ALIGNED so each RX fragment slot (a power of two,
 	 * <= PAGE) is page-contained — the fix for the 8-bytes-per-page capture drift. */
-	return c->flat_buffer
-		? clarett_flat_tx_bytes(c)			     /* flat: RX samples abut TX samples */
-		: ALIGN(clarett_pcm_tx_ring(c) + clarett_pcm_tbl_bytes(), PAGE_SIZE);
+	return ALIGN(clarett_pcm_tx_ring(c) + clarett_pcm_tbl_bytes(), PAGE_SIZE);
 }
 static inline size_t clarett_stream_rx_area_bytes(const struct clarett *c)
 {
-	return c->flat_buffer ? clarett_flat_rx_bytes(c) : clarett_pcm_rx_samples(c);
+	return clarett_pcm_rx_samples(c);
 }
 static inline size_t clarett_stream_r1_off(const struct clarett *c)
 {
-	/* base of block 1: its sample ring (flat) or its descriptor table (descriptor). */
-	return c->flat_buffer ? clarett_flat_tx_bytes(c) : clarett_pcm_tx_ring(c);
+	return clarett_pcm_tx_ring(c);			/* base of block 1: its descriptor table */
 }
 static inline size_t clarett_stream_total_bytes(const struct clarett *c)
 {
-	return c->flat_buffer
-		? clarett_flat_tx_bytes(c) + clarett_flat_rx_bytes(c)
-		: clarett_stream_rx_off(c) + clarett_pcm_rx_dev_bytes(c);  /* RX samples are last; page-aligned */
+	return clarett_stream_rx_off(c) + clarett_pcm_rx_dev_bytes(c);	/* RX samples last; page-aligned */
 }
 
 /* mailbox.c */
