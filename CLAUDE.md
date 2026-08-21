@@ -697,90 +697,46 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   loaded with no arm: model auto-detected, meters live, Inst/Line relay switching). So the ~232-command
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
-  (GET_7.1, quietly) for up to `wait_ready_ms` (2000) until the
-  flash-persisted session answers, detects the model from it, and leaves routing untouched. A cold
-  Thunderbolt attach can race device readiness (command #0's response may not land — see
-  [[clarett-session-collapse-recovery]]); the poll absorbs it. If the device never answers, probe
-  **fails loudly (`-ENODEV`, no card registered)** instead of the old fake-2Pre placeholder — reload to
-  retry. `wait_ready_ms` tunes the settle budget.
-  - **★★ THE REFUSAL IS NOT A TIMING PROBLEM — MEASURED AND CLOSED (Aug 21 2026, 8PreX, EliteBook 640
-    G11 behind the Dock G4). Do not raise `wait_ready_ms` to chase it.** The budget was briefly raised
-    2000 → 10000 on a slow-settle hypothesis and reverted the same day once measured:
-    | budget | result |
+  (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
+  routing untouched. **It waits `settle_ms` (30 s) BEFORE touching the device at all** — a cold attach
+  cannot answer and asking early wedges it unrecoverably (see the SOLVED entry below); `wait_ready_ms`
+  then bounds a backstop retry. If the device never answers, probe **fails loudly (`-ENODEV`, no card
+  registered)** instead of the old fake-2Pre placeholder — reload to retry.
+  - **★★★ SOLVED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind the Dock G4) — DO NOT TOUCH A COLD
+    DEVICE. `settle_ms` (default 30 s) is the fix.** A cold-attached unit registers unaided now:
+    `enabling device` 17:05:59.531 → `Clarett 8Pre ... PCM 20/20ch` 17:06:30.073, **first attempt,
+    ~90 us, no retry** — the case that had failed every single time all session.
+    **Root cause: asking the device anything too soon is what breaks it, not how we retry afterwards.**
+    An interface ~140 ms out of power-up cannot answer; the command completes (DONE raised) but never
+    DMAs a response, the trailing ack is withheld — as it must be, since acking an unlanded response is
+    what caused the manifestation wall — and the device is then left holding it unretired, answering it
+    in place of every later command (`rseq` stale, blanket `err=3`). **Once that has happened nothing
+    recovers it.** The decisive A/B, same build, same unit, back to back:
+    | run | result |
     |---|---|
-    | 2000 ms | refused (twice) |
-    | 10000 ms | refused (twice) |
-    | **180000 ms** | **refused** — on a unit already powered **~2.5 min before probe started**, i.e. ~5.5 min of device uptime, GET_7.1's response never landing once |
-    Symptom is identical at every budget: `FCP op=0x007001 seq=0: response never landed; ack withheld`
-    → `GET_7.1 bad response (status=3 size=0 raw playback=0 capture=0)` → refusal. **A refused session
-    stays refused for as long as you poll it**, so a longer budget buys only a slower failure report.
-    2000 ms is retained solely to absorb a genuine cold-attach race; `wait_ready_ms` is now runtime-
-    writable (0644) since it is read only in probe and a TB device re-probes on every power cycle —
-    tunable without an rmmod that a running audio server would block anyway.
-  - **★★★ ROOT CAUSE FOUND — A TIMED-OUT COMMAND #0 WEDGES THE MAILBOX, AND THE WEDGE IS OURS
-    (Aug 21 2026, 8Pre, EliteBook 640 G11 behind the Dock G4, `resp_trace=1` + `dyndbg='+p'`
-    side-by-side capture).** The refusal is not the device being slow, not being unready, and not a
-    client re-collapsing it. It is `clarett_fcp()`'s own timeout path.
-    | | FAILING (hotplug, ~1 s after power-up) | WORKING (module reload) |
-    |---|---|---|
-    | `seq=0` DONE | **1306 us** | 102 us |
-    | `seq=0` response | **never landed** (100 ms `CLARETT_MBOX_TIMEOUT_MS`) | landed 152 us, `err=0 size=24` |
-    | later commands | `rseq=0` on ALL of seq=1..39, `err=3`, `size=0` | `rseq` tracks `seq` (1, 2, ...) |
-    **Mechanism:** a second after power-up the device is still waking, so command #0 completes ~13x
-    slower than normal and its response DMA misses the 100 ms window. `clarett_mailbox.c` then
-    deliberately withholds the trailing ack (`/* on timeout: no ack — the vendor never acks an
-    incomplete command */`), so **command #0 is never retired** and the device refuses everything
-    afterwards with `err=3` while still answering as command #0. The readiness poll then fires 39 more
-    commands into an already-wedged mailbox.
-    **Why `rseq` is the proof:** in the healthy capture `rseq` follows `seq` exactly, so `rseq=0`
-    forever in the failing one really does mean "stuck on command #0" — it is not that error responses
-    carry seq 0.
-    **This explains every observation of the day:** identical refusal at 2 s / 10 s / 180 s (polling a
-    wedged mailbox); power-cycling never helping (probe re-runs ~1 s later and re-creates the wedge);
-    a module reload always helping (probe re-runs `clarett_hw_init()`, whose `0x510`/`0x500`
-    device-enable writes reset the mailbox state machine). The device was ready the whole time.
-    **It is the mirror image of the wall crossing**: that fixed acking too EARLY; this is never acking
-    at ALL. The "vendor never acks an incomplete command" premise is true but vacuous — under MMIO
-    trapping the vendor never HAD an incomplete command.
-    - **Strongly supports the [[clarett-session-collapse-recovery]] hypothesis**, which predicted
-      exactly this: "a command whose response never lands leaves the mailbox reading responses against
-      the wrong command — opcode echoes, payload zeros, CAP_READ denies the category that just
-      answered". Now directly observed, on a host with **no** MMIO blackout. The ASRock's ~48 ms
-      blackout remains a plausible *trigger* there (any command whose response is swallowed wedges the
-      session the same way), but the blackout is no longer needed to explain collapse.
-    - **ANSWERED (same day, `resp_timeout_ms=3000` on the 8Pre): the response is NEVER SENT, not late.**
-      Microsecond timestamps: `pre-mailbox regs` at `16:06:41.528` → `response never landed` at
-      `16:06:44.530`, i.e. the full 3.002 s deadline elapsed with nothing. Command #0 still raised DONE
-      normally (`done=839us`), so the device processed it and simply produced no response DMA. The very
-      next command answered in **84 us** with `rseq=0 err=3` — the device is wide awake and fast, and is
-      refusing only because command #0 is unretired. **So a longer per-command deadline cannot fix this**
-      (`resp_timeout_ms` stays a diagnostic at its 100 ms default; raising it only delays the failure,
-      and raising it above `wait_ready_ms` means only ONE command is issued before the budget expires).
-      The fix must RECOVER the mailbox — re-run the `0x510`/`0x500` device-enable and retry, which is
-      what a module reload does by accident and is the only thing ever observed to clear the wedge.
-      **Do NOT simply ack on timeout** — that is the premature ack the crossing forbade; the response is
-      absent at 3 s but nothing proves it never arrives later, and it would then land against an
-      already-acked command.
-    - **★★ CORRECTED SAME DAY — IT IS THE FIRST COMMAND'S TIMING, AND THE WEDGE IS COLLATERAL.** With
-      PCI auto-probe disabled (`echo 0 > /sys/bus/pci/drivers_autoprobe`), the 8Pre power-cycled, left
-      **20 s unbound**, then bound by hand: `seq=0 done=41us resp=87us rseq=0 err=0 size=24` — lands
-      immediately, card registers. So the device cannot answer its FIRST mailbox command ~1 s after
-      power-up; everything after that is damage from that one failed command.
-      **Consequences:** (1) every wait tested before this was spent AFTER the mailbox had already
-      wedged (2 s / 10 s / 180 s / 38 resets), which is why none helped; (2) the reload "fix" is
-      explained by elapsed time just as well as by re-init — every successful reload today came tens of
-      seconds after a power cycle, and the 38-reset run proves the `0x510`/`0x500` writes alone do
-      nothing; (3) **there is no readiness register to poll** — the pre-mailbox surface is byte-identical
-      cold and warm (`caps=0x032003fd 0x4=0x80 0x8=0x2000 0x514=0x847 0x58c=0/0`, all cause blocks 0
-      except `0x500=0x00ff0000`), matching the older finding that every host-visible surface reads the
-      same fresh-vs-armed. The fix therefore has to delay or safely retry the FIRST command, and since a
-      long wait must not block the PCI hotplug path, it likely wants an asynchronous probe.
-      **OPEN: the minimum safe delay.** ~1 s fails, 20 s works; the threshold is unmeasured.
-  - **METHOD NOTE (three wrong readings in one session, all from incomplete sequences).** A "power cycle
-    fixed it" and a "stopping the clients fixed it" conclusion were both drafted and both withdrawn once
-    the operator supplied a step that had not been in the pasted log — a power cycle done to free a busy
-    `rmmod`, and an `rmmod` that had failed. **Reconstruct the operator's actions, not just the kernel
-    log, before attributing a recovery**; the log records what the device did, never what was done to it.
+    | `settle_ms=0`, attempts at 0/30/60/90 s | all refuse |
+    | `settle_ms=30000`, one attempt | answers first try |
+    - **Everything tried before this was an attempt to undo damage already done, and all of it failed:**
+      50 ms tight polling (2 s, 10 s, 180 s budgets); 25 s spacing between mailbox commands; replaying
+      the pre-mailbox init every 5 s (13 attempts); `clarett_mbox_reset()` writing `0x510`/`0x500` +
+      the DMA address (38 resets). Raising `resp_timeout_ms` to 3 s does not help either — the response
+      is never sent, not late.
+    - **The floor is 10-20 s, bracketed not measured** (10 s untouched still fails; 20 s and 30 s both
+      succeed). 30 s is the confirmed value; the margin is free because nothing useful can happen sooner.
+    - **A warm reload waits too, which is a real cost.** Telling warm from cold needs a signal we do not
+      have — the pre-mailbox surface reads byte-identical either way, and the only probe that would
+      distinguish them is the touch that must not happen. `settle_ms=0` is the escape hatch when the
+      device is known to be awake. A module-init flag will NOT work: probe is asynchronous now.
+    - **★ METHOD — why this took a whole session.** Four builds went into retry tuning before the answer
+      turned out to be *don't ask*. Every experiment varied HOW WE RETRY; none varied WHETHER WE TOUCH IT
+      AT ALL, because the first attempt looks free — on a warm device it always succeeds. Each successive
+      theory (timing before the first command / quiet between commands / init replay) was confounded the
+      same way: every successful run happened to share an unexamined step, namely that nothing had touched
+      the device early. **Two ingredients were also tested only separately, never together** (long quiet,
+      fresh init) which burned two more builds. And three drafted conclusions were withdrawn when the
+      operator supplied a step absent from the pasted log — a power cycle done to free a busy `rmmod`, and
+      an `rmmod` that had failed. **Reconstruct the operator's actions, not just the kernel log, before
+      attributing a recovery**; the log records what the device did, never what was done to it.
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:
