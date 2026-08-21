@@ -53,9 +53,13 @@ the first attempt answers in ~90 us. The damage is done by the first touch, not 
 afterwards. The floor is between 10 s and 20 s — 10 s untouched still fails, 20 s and 30 s both
 succeed. The retry loop behind it is a backstop only.
 
-There is no way to tell a warm device from a cold one without touching it, which is the one thing
-that must not happen, so a warm reload waits too; pass `settle_ms=0` when the device is known to be
-awake.
+**Every probe pays it**, including a reload or sysfs rebind against a device that was working seconds
+before. Skipping it for devices already on the bus at module load was tried and reverted: presence
+looks like a safe proxy for "awake" and is not. Unbinding disables the PCI device and re-enabling
+brings it back cold — a rebind 32 s after a good registration failed on its first command, with the
+command register visibly going `0000 -> 0002` again. Nor can readiness be tested first, since testing
+it is the touch that breaks it. `settle_ms=0` skips the wait when you know the device has been up and
+untouched.
 
 If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
 rather than registering a placeholder, and the error names which condition it saw — a wedged

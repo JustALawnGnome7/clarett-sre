@@ -101,15 +101,20 @@ MODULE_PARM_DESC(wait_ready_ms,
  *
  * The floor is between 10 s and 20 s (10 s untouched still fails; 20 s and 30 s both succeed); 30 s is
  * the value confirmed on this build, and the margin is cheap because nothing useful can happen sooner.
- * A warm device pays it too — we cannot tell warm from cold without touching, which is the one thing
- * that must not happen — so pass settle_ms=0 when reloading against a device already known to be up.
+ * EVERY probe pays it, including a reload or sysfs rebind against a device that was working seconds
+ * earlier. An attempt to skip it for devices already on the bus at module load was tried and REVERTED:
+ * presence looks like a safe proxy for "awake" and is not. Unbinding disables the PCI device
+ * (clarett_remove plus the devres release) and re-enabling brings it back COLD — a rebind 32 s after a
+ * good registration failed on its first command, with the command register visibly going 0000 -> 0002
+ * again. Pass settle_ms=0 only when you know the device has been up and untouched.
  */
 static unsigned int settle_ms = 30000;
 module_param(settle_ms, uint, 0644);
 MODULE_PARM_DESC(settle_ms,
 		 "Leave the device untouched for this long (ms) after attach before the first init "
 		 "(default 30000). A cold interface cannot answer, and asking early wedges it "
-		 "unrecoverably. Set 0 when reloading against a device already known to be awake.");
+		 "unrecoverably. Paid by every probe, including a reload — an unbind disables the device "
+		 "and it comes back cold. Set 0 only when the device is known to be awake.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
