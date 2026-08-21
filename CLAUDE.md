@@ -706,7 +706,10 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     the Dock G4).** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
     pre-mailbox init. **This is an observation, not a root cause.**
     **Observed:** an in-probe first touch ~140 ms after enumeration fails reliably; a first touch at 1 s
-    or later has never failed. 3 s is margin over the only failing point measured. When it fails, the
+    or later has never failed. 3 s is margin over the only failing point measured, and is
+    **hardware-confirmed on the probe path** — `enabling device` 17:40:59.141 → model line
+    17:41:02.201, 3.06 s, first attempt. (That check mattered: every 1 s data point came from a manual
+    sysfs bind, and binds never fail, so it was not obvious the number transferred to the probe path.) When it fails, the
     command completes (DONE raised) but never DMAs a response; the ack is correctly withheld (acking an
     unlanded response is what caused the wall), and the device then answers that command in place of
     every later one — stale `rseq`, blanket `err=3`. **Nothing recovers that**, which is why the fix is
