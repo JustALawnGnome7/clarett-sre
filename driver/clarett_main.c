@@ -1896,7 +1896,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		goto err_free;
 	}
 	/* The >4G lead: every working FC capture programs 0x414 != 0 (buffer above
-	 * 4 GiB); log our address so the A/B is visible without trace_regs. */
+	 * 4 GiB); log our address so the A/B is visible from the kernel log alone. */
 	dev_dbg(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
 		&c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
 

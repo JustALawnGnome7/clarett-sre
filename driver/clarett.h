@@ -311,10 +311,14 @@ struct snd_rawmidi_substream;
 #define FCP_STREAM_COMMIT        FCP_SYNC_RATE
 
 /*
- * Firmware init-handshake opcodes, replayed verbatim at probe (see clarett_init_handshake).
- * Observed at device attach from the vendor app and not fully decoded: CONFIG_PUSH registers
- * config items by id (arms the config space so SET_DATA writes actually reach hardware), and
- * GET_6x/GET_7x/READ_SEG are version/identity queries whose responses we ignore.
+ * Firmware init-handshake opcodes, observed at device attach from the vendor app and not fully
+ * decoded: CONFIG_PUSH registers config items by id (arms the config space so SET_DATA writes
+ * actually reach hardware), and GET_6x/GET_7x/READ_SEG are version/identity queries.
+ *
+ * Probe no longer replays any of this — the device restores its own session from flash, so the
+ * bring-up is a no-op on a configured unit. What survives is the subset the stream path still
+ * needs: clarett_stream_handshake() re-issues CONFIG_PUSH and the GET_7.x queries at every arm,
+ * and clarett_detect_model() uses GET_7.1's channel-count answer as the model identity.
  */
 #define FCP_READ_SEG             0x800005
 #define FCP_INIT_2               0x000002
@@ -342,8 +346,12 @@ struct snd_rawmidi_substream;
 /*
  * 0x000001 is also the CAPABILITY READ: {u16 category} -> one byte, non-zero = that opcode category
  * is live on this session. fcp-server calls it first and refuses the device unless INIT (0x000) and
- * DATA (0x800) both answer non-zero, so it is the authoritative "is the session really up?" test —
- * see clarett_is_armed(). A capability-dump bench tool dumps every category.
+ * DATA (0x800) both answer non-zero, so it is the authoritative "is the session really up?" test.
+ * The driver itself does not run it: probe waits for the identity query to answer instead, which is
+ * the same evidence one command earlier. A capability-dump bench tool dumps every category, and is
+ * what distinguishes a device that never came up from one whose session collapsed (a collapsed
+ * session denies DATA while a DATA-category read is still answering — the self-contradiction is
+ * the tell).
  */
 #define FCP_CAP_READ             FCP_INIT_1
 #define FCP_CAT_INIT             0x000
@@ -424,12 +432,16 @@ struct clarett_model {
 						 * plane (see the max_rate module param, which overrides this for testing). */
 	/*
 	 * ADAT S/MUX: the frame stays capture_channels wide at every rate, but the device stops WRITING the
-	 * ADAT channels that S/MUX removes (8 -> 4 -> 2 per port at single/double/quad speed). Those slots are
-	 * not silence — the engine simply leaves the ring untouched, so they replay whatever the previous
-	 * stream left there. These are the counts of leading capture channels the device still writes at
-	 * double and quad speed; the dead remainder is a contiguous tail on every model. 0 = all channels
-	 * live (no ADAT, or unknown). Derived from the [XML] <record-outputs> pin-m/pin-h overrides, where
-	 * "0x0" means the slot is gone at that speed and above. See clarett_zero_rx_dead().
+	 * ADAT channels that S/MUX removes (8 -> 4 -> 2 per port at single/double/quad speed). Those slots
+	 * are not silence, and blanking the ring once does not make them silent: the engine keeps writing a
+	 * sparse residue into them — one non-zero sample every 32 frames, an impulse train at roughly
+	 * -25 dBFS — and only into the channels dropped at the immediately preceding speed tier (channels
+	 * dropped a full tier earlier stay exactly zero). So the dead tail has to be blanked per period, on
+	 * the frames handed to ALSA; clarett_set_rx_live() latches the split at prepare and
+	 * clarett_rx_drain() does the blanking. These are the counts of leading capture channels the device
+	 * still writes at double and quad speed; the dead remainder is a contiguous tail on every model.
+	 * 0 = all channels live (no ADAT, or unknown). Derived from the [XML] <record-outputs> pin-m/pin-h
+	 * overrides, where "0x0" means the slot is gone at that speed and above.
 	 */
 	u8 rx_live_mid;				/* capture channels written at 88.2/96 kHz */
 	u8 rx_live_high;			/* capture channels written at 176.4/192 kHz */
@@ -487,7 +499,7 @@ struct clarett_model {
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
-#define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region (MBOX_END - MBOX_DATA); SET_MUX = 412 */
+#define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */
 #define CLARETT_APPSPACE_SIZE    8392    /* full persistent config/appspace: the arm's bulk
 					  * GET_DATA reads span exactly [0, 8392) and its
@@ -997,6 +1009,8 @@ static inline size_t clarett_stream_total_bytes(const struct clarett *c)
 int clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len);
 int clarett_fcp_cmd(struct clarett *c, u32 opcode, const u8 *req, u16 req_len,
 		    u8 *resp, u16 resp_len);
+
+/* hwdep.c */
 int clarett_hwdep_init(struct clarett *c);	/* create the FCP hwdep (fcp-server transport) */
 void clarett_hwdep_notify(struct clarett *c, u32 ev);	/* relay a device notification to fcp-server */
 void clarett_hwdep_free(struct clarett *c);	/* stop the relay before c is freed (UAF guard) */
@@ -1018,8 +1032,6 @@ void clarett_wl(struct clarett *c, u32 off, u32 val);
 u32 clarett_rl(struct clarett *c, u32 off);
 
 int clarett_write_bits(struct clarett *c, u32 offset, u8 mask, u8 val, u32 activate);
-
-/* mixer.c */
 
 /* main.c — data-plane engine (shared with pcm.c) */
 void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1);
