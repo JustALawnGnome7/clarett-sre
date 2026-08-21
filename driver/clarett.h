@@ -489,12 +489,18 @@ struct clarett_model {
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 /*
- * Readiness retry backoff. A device caught mid-wake renews its wedged state on every command it is
- * sent, so the retry has to be sparse rather than fast: these bound a geometric 1, 2, 4, 8 ... second
- * backoff, which fits a handful of attempts into wait_ready_ms instead of many hundreds.
+ * Quiet interval between readiness attempts.
+ *
+ * A device caught mid-wake renews its wedged state on every command it is sent, so what recovers it is
+ * an unbroken silence — and the silence has to be long. Measured on an 8Pre: attempts spaced 8 s apart
+ * all fail, including one 47 s after enumeration, while a single attempt after 20 s of silence succeeds
+ * at only 20 s in. It is the gap that matters, not the elapsed time, so a short early retry is not
+ * merely useless — it renews the wedge and consumes the quiet the next attempt needs.
+ *
+ * Hence a flat, generous gap rather than a backoff: ask once (which is all a warm device ever needs),
+ * then leave it alone for well past the measured 8 s floor before asking again.
  */
-#define CLARETT_READY_BACKOFF_MIN_MS	1000u
-#define CLARETT_READY_BACKOFF_MAX_MS	8000u
+#define CLARETT_READY_QUIET_MS		25000u
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */

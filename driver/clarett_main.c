@@ -79,11 +79,11 @@ MODULE_PARM_DESC(tx_trace,
  * Writable at runtime because it is read only inside probe, and a Thunderbolt device re-probes on every
  * power cycle — so a write applies to the next attach without needing the card free.
  */
-static unsigned int wait_ready_ms = 45000;
+static unsigned int wait_ready_ms = 60000;
 module_param(wait_ready_ms, uint, 0644);
 MODULE_PARM_DESC(wait_ready_ms,
 		 "Total budget (ms) for the backing-off readiness retry at probe before giving up "
-		 "(default 45000). A warm device answers the first attempt and never spends it.");
+		 "(default 60000). A warm device answers the first attempt and never spends it.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -1722,7 +1722,6 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		bool collapsed = false;
 		const struct clarett_model *det = NULL;
 		unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
-		unsigned int backoff = CLARETT_READY_BACKOFF_MIN_MS;
 		int tries = 0;
 
 		/*
@@ -1731,23 +1730,20 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		 * A device caught mid-wake completes its first command but never DMAs the response. The
 		 * trailing ack is then withheld — it must be, since acking an unlanded response is what
 		 * caused the original session wall — and the device is left holding that command
-		 * unretired, answering it in place of every later one. Measured on an 8Pre: each further
-		 * command renews that state, so polling tightly never escapes it (2 s, 10 s and even 180 s
-		 * of 50 ms polling all refuse identically), while leaving the device ALONE for tens of
-		 * seconds and then asking once succeeds — on the very same wedged device, with no power
-		 * cycle and no reload. The silence between attempts is the active ingredient, not the
-		 * budget: raising the budget without backing off measurably achieves nothing.
+		 * unretired, answering it in place of every later one. Every further command renews that
+		 * state, so what recovers it is silence, and only a long one: attempts spaced 8 s apart
+		 * all fail (including one 47 s after enumeration) while a single attempt after 20 s of
+		 * quiet succeeds at 20 s in. The gap is the variable, not the elapsed time — which is why
+		 * this is a flat CLARETT_READY_QUIET_MS gap and not a backoff ramping up through it.
 		 *
-		 * So back off geometrically and keep the total attempt count tiny. A device that is
-		 * already awake — every warm attach — answers the first try in ~90 us and pays none of it.
+		 * A warm device answers the first attempt in ~90 us and never waits at all.
 		 */
 		for (;;) {
 			tries++;
 			det = clarett_detect_model(c, &collapsed, true);
 			if (det || !collapsed || time_after(jiffies, deadline))
 				break;
-			msleep(backoff);
-			backoff = min(backoff * 2, CLARETT_READY_BACKOFF_MAX_MS);
+			msleep(CLARETT_READY_QUIET_MS);
 		}
 		if (tries > 1)
 			dev_dbg(&pci->dev, "readiness: %d attempts, session %s\n",
