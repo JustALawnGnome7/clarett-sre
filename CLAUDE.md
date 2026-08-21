@@ -739,6 +739,21 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       **Do NOT simply ack on timeout** — that is the premature ack the crossing forbade; the response is
       absent at 3 s but nothing proves it never arrives later, and it would then land against an
       already-acked command.
+    - **★★ CORRECTED SAME DAY — IT IS THE FIRST COMMAND'S TIMING, AND THE WEDGE IS COLLATERAL.** With
+      PCI auto-probe disabled (`echo 0 > /sys/bus/pci/drivers_autoprobe`), the 8Pre power-cycled, left
+      **20 s unbound**, then bound by hand: `seq=0 done=41us resp=87us rseq=0 err=0 size=24` — lands
+      immediately, card registers. So the device cannot answer its FIRST mailbox command ~1 s after
+      power-up; everything after that is damage from that one failed command.
+      **Consequences:** (1) every wait tested before this was spent AFTER the mailbox had already
+      wedged (2 s / 10 s / 180 s / 38 resets), which is why none helped; (2) the reload "fix" is
+      explained by elapsed time just as well as by re-init — every successful reload today came tens of
+      seconds after a power cycle, and the 38-reset run proves the `0x510`/`0x500` writes alone do
+      nothing; (3) **there is no readiness register to poll** — the pre-mailbox surface is byte-identical
+      cold and warm (`caps=0x032003fd 0x4=0x80 0x8=0x2000 0x514=0x847 0x58c=0/0`, all cause blocks 0
+      except `0x500=0x00ff0000`), matching the older finding that every host-visible surface reads the
+      same fresh-vs-armed. The fix therefore has to delay or safely retry the FIRST command, and since a
+      long wait must not block the PCI hotplug path, it likely wants an asynchronous probe.
+      **OPEN: the minimum safe delay.** ~1 s fails, 20 s works; the threshold is unmeasured.
   - **METHOD NOTE (three wrong readings in one session, all from incomplete sequences).** A "power cycle
     fixed it" and a "stopping the clients fixed it" conclusion were both drafted and both withdrawn once
     the operator supplied a step that had not been in the pasted log — a power cycle done to free a busy
