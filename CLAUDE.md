@@ -276,10 +276,16 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   Lake / Core Ultra) dropped that. Discrete TB3 (Alpine Ridge) and discrete TB4 (Goshen Ridge) both work.
   (The 840 G5 above has a discrete TB3 host controller, which is why it takes the adapter directly.)
   Secure Boot off, stock `pci=` parameters, no security-level change needed.
-  **NOTE the Aug 19 record identified the dock's bridges as `DSL6540 Alpine Ridge 4C` where the same rig
-  now reads Goshen Ridge** — so either a second dock was in use then, or that identification was wrong and
-  a genuinely TB3 dock has never actually been tested here (only inferred). Either way the corrected claim
-  stands, because the failing and working legs were both re-run on the G4.
+  **CONFIRMED both docks are real and distinct (Aug 21 2026, `boltctl list` on the host):** an
+  `HP Thunderbolt 3Dock` (`generation: Thunderbolt 3`, the Aug 19-20 rig, matching the `DSL6540 Alpine
+  Ridge` chain recorded then) and an `HP Thunderbolt Dock G4` (`generation: USB4`, today's, Goshen Ridge)
+  are both stored and have both carried the adapter. So discrete TB3 and discrete TB4 are each
+  INDEPENDENTLY confirmed, not one inferred from the other.
+  **`boltctl` also confirms the link rates directly:** the Dock G4 negotiates `40 Gb/s = 2 lanes * 20 Gb/s`
+  while the Clarett 8Pre behind it negotiates `10 Gb/s = 1 lanes * 10 Gb/s` and reports
+  `generation: Thunderbolt 1`. Since the dock's own link is 4x faster, the 10 Gb/s is definitively the
+  **device's** TB1-class controller and not a dock penalty — an independent confirmation of the DSL2210
+  reading below, from a source that needs no PCIe topology reasoning.
   **`boltctl` saying `authorized` is NOT enough — `lspci -nn -d 1cb5:` is the check that the PCIe tunnel
   actually came up**, and behind a dock plus a legacy adapter that is where a chain falls down.
   Bridge chain also identifies the device's own Thunderbolt controller: host root port → **dock switch**
