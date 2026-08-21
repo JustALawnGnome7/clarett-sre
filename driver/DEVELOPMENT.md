@@ -39,9 +39,18 @@ because the arm state is flash-persisted. Probe waits for that session to answer
 (`clarett_detect_model()` polls `GET_7.1` for up to `wait_ready_ms`), detects the model from it,
 and leaves the device's own routing untouched.
 
-If the device never answers within the settle budget — a cold Thunderbolt attach can race device
-readiness (command #0's response may not land) — probe **fails loudly** (`-ENODEV`, no card)
-rather than registering a placeholder, so the condition gets attention. Reload to retry.
+A unit still waking from a cold power-up **cannot answer its first mailbox command**, and that
+failure is self-perpetuating: the command completes (DONE raised) but never DMAs a response, so the
+trailing ack is withheld — as it must be, since acking an unlanded response is what caused the
+manifestation wall — and the device is left holding it unretired, answering it in place of every
+later command. **Every further command renews that state**, which is why the readiness retry backs
+off geometrically instead of polling: measured on an 8Pre, 50 ms polling never escapes it at any
+budget (2 s, 10 s and 180 s all refuse identically), while leaving the device alone for tens of
+seconds and asking once succeeds on the very same wedged device, with no power cycle and no reload.
+
+If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
+rather than registering a placeholder, and the error names which condition it saw — a wedged
+mailbox, or one answering for itself and refusing. Replug or reload once the unit has settled.
 
 The driver used to carry the full vendor bring-up behind a `force_arm=1` parameter: a de-blobbed
 typed init table per model (a `CONFIG_PUSH` burst, subsystem enables, an 8 KB config sync, and
@@ -291,14 +300,17 @@ The operationally relevant ones:
   double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to
   test double/quad speed on a not-yet-confirmed model — the stream width is rate-independent, so verify
   with a known tone (correct pitch on the analogue channel) before trusting a rate on an ADAT model.
-- `wait_ready_ms` (default 2000, runtime-writable) — settle budget to wait for the flash-persisted
-  session to answer at probe before giving up. Absorbs a cold Thunderbolt attach that races device
-  readiness. Costs nothing on a healthy device: the poll returns as soon as the device answers, so
-  the budget is only ever spent on one that is not talking. **Raising it does not recover a refused
-  session** — an 8PreX that refused at 2 s refused identically at 10 s and at 180 s, the last on a
-  unit already powered ~2.5 min before probe started. Writable at runtime because it is read only
-  inside probe and a Thunderbolt device re-probes on every power cycle, so a write applies to the
-  next attach without needing to reload (which an audio server holding the card would block).
+- `wait_ready_ms` (default 45000, runtime-writable) — total budget for the backing-off readiness
+  retry at probe. A warm device answers the first attempt in ~90 us and never spends any of it;
+  the budget exists for a unit still waking from a cold power-up, which cannot answer its first
+  mailbox command and renews that state on every command it is sent. **The budget only works
+  together with the backoff** — the same budget spent polling tightly recovers nothing, measured
+  at 2 s, 10 s and 180 s alike. Probe is asynchronous so the worst case does not stall the PCI
+  hotplug worker. Writable at runtime because it is read only inside probe and a Thunderbolt device
+  re-probes on every power cycle, so a write applies to the next attach without needing a reload.
+- `resp_timeout_ms` (default 100, runtime-writable) — deadline for one command's response DMA to
+  land before the trailing ack is withheld. Diagnostic; raising it does not rescue a wedged
+  mailbox (measured: a 3 s deadline elapsed with nothing while the next command answered in 84 us).
 
 A few parameters are A/B levers retained from localizing the control-plane crossing —
 `legacy_mbox_cycle`, which reproducibly re-creates the wall and is therefore the negative

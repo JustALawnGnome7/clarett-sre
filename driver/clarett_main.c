@@ -67,16 +67,23 @@ MODULE_PARM_DESC(tx_trace,
  */
 
 /*
- * Settle budget for the readiness poll, absorbing a cold attach that races device readiness. Free on a
- * healthy device — the poll returns as soon as GET_7.1 answers. Writable at runtime because it is read
- * only inside probe and a Thunderbolt device re-probes on every power cycle, so a write applies to the
- * next attach without needing the card free.
+ * Total budget for the readiness retry, which backs off geometrically (see the loop in probe). It has to
+ * cover a device still waking from a cold power-up: measured on an 8Pre, a first command issued ~1 s
+ * after enumeration is not answered and 10 s is still too early, while tens of seconds of quiet lets it
+ * through. This is only meaningful WITH the backoff — the same budget spent polling tightly recovers
+ * nothing, at any size.
+ *
+ * Costs a warm attach nothing: the first attempt answers in ~90 us and the budget is never touched.
+ * Probe is asynchronous, so the worst case does not stall the PCI hotplug worker.
+ *
+ * Writable at runtime because it is read only inside probe, and a Thunderbolt device re-probes on every
+ * power cycle — so a write applies to the next attach without needing the card free.
  */
-static unsigned int wait_ready_ms = 2000;
+static unsigned int wait_ready_ms = 45000;
 module_param(wait_ready_ms, uint, 0644);
 MODULE_PARM_DESC(wait_ready_ms,
-		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
-		 "up (default 2000).");
+		 "Total budget (ms) for the backing-off readiness retry at probe before giving up "
+		 "(default 45000). A warm device answers the first attempt and never spends it.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -192,33 +199,6 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
  * reply whose geometry is not in the table, i.e. genuinely unknown hardware, which needs a new
  * clarett_model entry. The non-quiet warn on each path prints the raw pair for exactly that.
  */
-/*
- * Reset the device's mailbox state machine.
- *
- * A command can raise DONE and never produce a response DMA. The trailing ack is then withheld — as it
- * must be, since acking an unlanded response is what caused the original session wall — and the device
- * is left holding that command unretired, answering every later one with the stale sequence number and
- * a blanket refusal. Polling harder does not help: measured on an 8Pre, a wedged mailbox refuses
- * identically for as long as it is asked.
- *
- * These are the same writes clarett_hw_init() makes at open (0x510/0x500 subsystem enable, then the
- * response-DMA address), which is why a module reload has always cleared the wedge while a device power
- * cycle has not — the reload re-runs them, the power cycle just re-creates the condition. Re-programming
- * the DMA address is redundant while the buffer is unchanged, but it keeps this identical to the
- * sequence that is known to recover.
- *
- * Caller must not hold mbox_lock, and must be sure no command is in flight — which is why this is
- * used only from the readiness poll in probe, before the meter worker or any hwdep client exists.
- */
-static void clarett_mbox_reset(struct clarett *c)
-{
-	clarett_wl(c, 0x510, 0x8);
-	clarett_wl(c, 0x500, 0x8);
-	clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
-	clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
-	clarett_rl(c, REG_CAPS);		/* post the writes before the next submit */
-}
-
 static const struct clarett_model *clarett_detect_model(struct clarett *c, bool *collapsed,
 							bool quiet)
 {
@@ -1742,30 +1722,36 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		bool collapsed = false;
 		const struct clarett_model *det = NULL;
 		unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
-		int resets = 0;
+		unsigned int backoff = CLARETT_READY_BACKOFF_MIN_MS;
+		int tries = 0;
 
+		/*
+		 * Readiness retry, with the emphasis on QUIET rather than on frequency.
+		 *
+		 * A device caught mid-wake completes its first command but never DMAs the response. The
+		 * trailing ack is then withheld — it must be, since acking an unlanded response is what
+		 * caused the original session wall — and the device is left holding that command
+		 * unretired, answering it in place of every later one. Measured on an 8Pre: each further
+		 * command renews that state, so polling tightly never escapes it (2 s, 10 s and even 180 s
+		 * of 50 ms polling all refuse identically), while leaving the device ALONE for tens of
+		 * seconds and then asking once succeeds — on the very same wedged device, with no power
+		 * cycle and no reload. The silence between attempts is the active ingredient, not the
+		 * budget: raising the budget without backing off measurably achieves nothing.
+		 *
+		 * So back off geometrically and keep the total attempt count tiny. A device that is
+		 * already awake — every warm attach — answers the first try in ~90 us and pays none of it.
+		 */
 		for (;;) {
+			tries++;
 			det = clarett_detect_model(c, &collapsed, true);
 			if (det || !collapsed || time_after(jiffies, deadline))
 				break;
-			/*
-			 * A cold attach can catch the device mid-wake: the first command completes but its
-			 * response never arrives, which wedges the mailbox for every command after it. Reset
-			 * it before retrying — otherwise the rest of the budget is spent asking a mailbox
-			 * that can no longer answer, which is exactly what it looked like before this was
-			 * understood. Gated on the wedge signature specifically — no response, or one
-			 * echoing someone else's sequence number — so a device that is answering for itself
-			 * and merely refusing is left alone rather than having its subsystems re-enabled.
-			 */
-			if (c->mbox_wedged) {
-				resets++;
-				clarett_mbox_reset(c);
-			}
-			msleep(50);
+			msleep(backoff);
+			backoff = min(backoff * 2, CLARETT_READY_BACKOFF_MAX_MS);
 		}
-		if (resets)
-			dev_dbg(&pci->dev, "readiness: %d mailbox reset(s), session %s\n",
-				resets, det ? "answered" : "still refusing");
+		if (tries > 1)
+			dev_dbg(&pci->dev, "readiness: %d attempts, session %s\n",
+				tries, det ? "answered" : "still refusing");
 		/*
 		 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
 		 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
@@ -1781,9 +1767,12 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			 * collapsed device as a working card. Fail the probe loudly so it gets attention.
 			 */
 			dev_err(&pci->dev,
-				"device did not become ready within %u ms (GET_7.1 refused / no response) — refusing to register. "
-				"Reload to retry; if it repeats, stop fcp-server and PipeWire first.\n",
-				wait_ready_ms);
+				"device did not become ready within %u ms over %d attempts (mailbox %s) — refusing "
+				"to register. A unit still waking from power-up cannot answer, and each command "
+				"renews that state; replug or reload to retry once it has settled.\n",
+				wait_ready_ms, tries,
+				c->mbox_wedged ? "wedged: no response, or one echoing another command's seq"
+					       : "answering, but refusing the request");
 			err = -ENODEV;
 			goto err_free;
 		}
@@ -2394,6 +2383,11 @@ MODULE_DEVICE_TABLE(pci, clarett_ids);
 
 static struct pci_driver clarett_driver = {
 	.name = KBUILD_MODNAME,
+	/*
+	 * Probe can wait tens of seconds for a cold device to answer (see wait_ready_ms). Asynchronous
+	 * so that wait runs on its own worker instead of stalling the PCI hotplug path behind it.
+	 */
+	.driver = { .probe_type = PROBE_PREFER_ASYNCHRONOUS },
 	.id_table = clarett_ids,
 	.probe = clarett_probe,
 	.remove = clarett_remove,

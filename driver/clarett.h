@@ -488,6 +488,13 @@ struct clarett_model {
 #define FCP_RESP_ERR_WALLED      0x03   /* the refusal every command gets on our sessions */
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
+/*
+ * Readiness retry backoff. A device caught mid-wake renews its wedged state on every command it is
+ * sent, so the retry has to be sparse rather than fast: these bound a geometric 1, 2, 4, 8 ... second
+ * backoff, which fits a handful of attempts into wait_ready_ms instead of many hundreds.
+ */
+#define CLARETT_READY_BACKOFF_MIN_MS	1000u
+#define CLARETT_READY_BACKOFF_MAX_MS	8000u
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */
