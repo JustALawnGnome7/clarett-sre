@@ -54,6 +54,23 @@ MODULE_PARM_DESC(resp_trace,
 	"meter_poll_ms=0. Default 0.");
 
 /*
+ * Deadline for a command's response DMA to land, split out from CLARETT_MBOX_TIMEOUT_MS (which still
+ * governs the DONE wait) because only this half is in question. A command can complete normally — DONE
+ * raised, status clean — and still have its response DMA arrive late; the ack is then withheld, and the
+ * device is left holding an unretired command that it answers instead of every later one.
+ *
+ * Runtime-writable on purpose: raising it must be possible against an ALREADY-LOADED module, because a
+ * reload re-runs the pre-mailbox device-enable and clears the device's mailbox state — which would hide
+ * the very condition being measured. Set it, then power-cycle the unit so probe re-runs.
+ */
+static uint resp_timeout_ms = CLARETT_MBOX_TIMEOUT_MS;
+module_param(resp_timeout_ms, uint, 0644);
+MODULE_PARM_DESC(resp_timeout_ms,
+	"Deadline (ms) for a command's response DMA to land before the trailing ack is withheld "
+	"(default 100). Diagnostic: raise it to find out whether a slow command's response is merely "
+	"LATE or never sent at all. resp_trace=1 prints the landing latency.");
+
+/*
  * True for a stream period-cause block (0x200 TX / 0x300 RX) while the PCM engine is streaming. The
  * mailbox skips these in its DONE sweep so it does not read-to-clear a period event the stream servicer
  * is waiting for (an audible gap). When idle they read 0 and are swept normally.
@@ -73,7 +90,7 @@ static inline bool clarett_stream_cause(const struct clarett *c, u16 reg)
 static u32 clarett_resp_wait(struct clarett *c, u32 exp_echo, ktime_t t_submit, s64 *land_us)
 {
 	const u8 *r = c->resp_buf;
-	unsigned long deadline = jiffies + msecs_to_jiffies(CLARETT_MBOX_TIMEOUT_MS);
+	unsigned long deadline = jiffies + msecs_to_jiffies(max(resp_timeout_ms, 1u));
 	ktime_t spin_until = ktime_add_us(ktime_get(), 500);
 	u32 echo;
 
