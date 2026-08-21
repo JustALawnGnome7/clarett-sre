@@ -79,11 +79,11 @@ MODULE_PARM_DESC(tx_trace,
  * Writable at runtime because it is read only inside probe, and a Thunderbolt device re-probes on every
  * power cycle — so a write applies to the next attach without needing the card free.
  */
-static unsigned int wait_ready_ms = 60000;
+static unsigned int wait_ready_ms = 100000;
 module_param(wait_ready_ms, uint, 0644);
 MODULE_PARM_DESC(wait_ready_ms,
 		 "Total budget (ms) for the backing-off readiness retry at probe before giving up "
-		 "(default 60000). A warm device answers the first attempt and never spends it.");
+		 "(default 100000). A warm device answers the first attempt and never spends it.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -1727,11 +1727,12 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		/*
 		 * Readiness retry, with the emphasis on QUIET rather than on frequency.
 		 *
-		 * A device caught mid-wake does not latch the pre-mailbox init, and nothing done over the
-		 * mailbox afterwards recovers it: with hw_init run once at ~1 s, attempts at 0, 25, 50 and
-		 * 75 s all refuse, while an attempt whose hw_init runs at 20 s succeeds at 20 s in — as
-		 * does any later bind or reload, each of which re-runs it. So the retry replays the whole
-		 * init, not just the command.
+		 * Recovering a device caught mid-wake needs TWO things together, and each alone is measured
+		 * useless: a long stretch of being left completely alone, AND a fresh pre-mailbox init
+		 * after it. Re-asking over the mailbox without replaying the init fails at 50 ms, 25 s and
+		 * 180 s spacing; replaying the init every 5 s fails across 13 attempts. Both successes had
+		 * a long quiet followed by a fresh init (20 s and 30 s). So each retry waits out the full
+		 * interval untouched, then re-inits and asks once.
 		 *
 		 * The first command also wedges the mailbox when it fails — it completes but never DMAs a
 		 * response, so the trailing ack is withheld (it must be; acking an unlanded response is

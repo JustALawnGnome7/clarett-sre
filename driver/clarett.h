@@ -498,10 +498,13 @@ struct clarett_model {
  * re-runs hw_init. A device caught mid-wake evidently does not latch those writes, and nothing done
  * afterwards over the mailbox recovers it.
  *
- * So each retry re-runs the whole init and then asks once. The interval only bounds how soon after the
- * device becomes ready we notice.
+ * BOTH ingredients are required, and each alone is measured useless: re-asking over the mailbox without
+ * replaying the init fails at 50 ms, 25 s and 180 s spacing alike, and replaying the init every 5 s
+ * fails across 13 attempts. The two successes both had a LONG quiet followed by a fresh init — 20 s and
+ * 30 s — so the retry does both: leave the device completely alone for this interval, then replay the
+ * init and ask once.
  */
-#define CLARETT_READY_RETRY_MS		5000u
+#define CLARETT_READY_RETRY_MS		30000u
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */

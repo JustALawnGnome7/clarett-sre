@@ -43,15 +43,12 @@ A unit still waking from a cold power-up **cannot answer its first mailbox comma
 failure is self-perpetuating: the command completes (DONE raised) but never DMAs a response, so the
 trailing ack is withheld — as it must be, since acking an unlanded response is what caused the
 manifestation wall — and the device is left holding it unretired, answering it in place of every
-later command. **What recovers it is replaying the pre-mailbox init once the device is awake** — not
-waiting longer before asking, and not leaving longer gaps between asks. Both of those were tried and
-measured on an 8Pre: 50 ms polling never escapes it at any budget (2 s, 10 s, 180 s all refuse
-identically), and neither does spacing attempts 25 s apart (0, 25, 50 and 75 s all refuse). But an
-attempt whose `hw_init` runs at 20 s succeeds at 20 s in, as does any later bind or module reload —
-every one of which replays that init. A device caught mid-wake evidently does not latch those writes,
-and nothing done over the mailbox afterwards fixes it. So the readiness retry re-runs the whole init
-on each attempt, and the interval (`CLARETT_READY_RETRY_MS`) only bounds how soon after the device
-becomes ready we notice.
+later command. **Recovering it needs two things together, and each alone is measured useless on an
+8Pre:** a long stretch of the device being left completely alone, AND a fresh pre-mailbox init after
+it. Re-asking over the mailbox without replaying the init fails at 50 ms, 25 s and 180 s spacing
+alike; replaying the init every 5 s fails across 13 attempts. Both recoveries observed had a long
+quiet followed by a fresh init — 20 s and 30 s. So the readiness retry waits out
+`CLARETT_READY_RETRY_MS` untouched, then re-runs the init and asks once.
 
 If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
 rather than registering a placeholder, and the error names which condition it saw — a wedged
@@ -305,12 +302,14 @@ The operationally relevant ones:
   double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to
   test double/quad speed on a not-yet-confirmed model — the stream width is rate-independent, so verify
   with a known tone (correct pitch on the analogue channel) before trusting a rate on an ADAT model.
-- `wait_ready_ms` (default 60000, runtime-writable) — total budget for the readiness retry at
-  probe, which replays the pre-mailbox init and re-asks every `CLARETT_READY_RETRY_MS` (5 s). A
+- `wait_ready_ms` (default 100000, runtime-writable) — total budget for the readiness retry at
+  probe, which leaves the device untouched for `CLARETT_READY_RETRY_MS` (30 s), then replays the
+  pre-mailbox init and asks once. A
   warm device answers the first attempt in ~90 us and never spends any of it; the budget exists
   for a unit still waking from a cold power-up, which does not latch the init and cannot answer.
-  **The budget only works together with the init replay** — spent on mailbox retries alone it
-  recovers nothing, measured at 2 s, 10 s and 180 s of tight polling and at 25 s spacing alike.
+  **The budget only works with both the quiet and the init replay** — mailbox retries alone
+  recover nothing (2 s, 10 s, 180 s tight polling, 25 s spacing), and init replays alone recover
+  nothing (13 attempts at 5 s).
   Probe is asynchronous so the worst case does not stall the PCI hotplug worker. Writable at runtime because it is read only inside probe and a Thunderbolt device
   re-probes on every power cycle, so a write applies to the next attach without needing a reload.
 - `resp_timeout_ms` (default 100, runtime-writable) — deadline for one command's response DMA to
