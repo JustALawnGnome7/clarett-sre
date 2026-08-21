@@ -86,19 +86,30 @@ MODULE_PARM_DESC(wait_ready_ms,
 		 "(default 100000). A warm device answers the first attempt and never spends it.");
 
 /*
- * Delay before the FIRST readiness attempt, i.e. before the device is touched at all.
+ * Leave the device completely untouched for this long after attach, before the pre-mailbox init.
  *
- * Default 0: a warm device answers immediately, and making every module reload wait would be a poor
- * trade for a case that always works. But an in-probe first attempt lands ~140 ms after enumeration,
- * and it is not known whether touching the device that early does deeper damage than the later touches
- * both observed recoveries had (10 s and 20 s). Set this to test that: with it non-zero the device is
- * left completely untouched for the interval, reproducing the one run where nothing touched it early.
+ * This is the fix for cold-attach failure, and it is a DON'T-TOUCH window rather than a retry: an
+ * interface that has just powered up cannot answer, and asking it too early puts it into a state that
+ * nothing recovers. Measured on an 8Pre, back to back on the same build:
+ *
+ *   settle 0, then attempts at 0/30/60/90 s  -> all refuse; the run is lost
+ *   settle 30 s, then one attempt            -> answers first try, ~90 us
+ *
+ * So the damage is done by the first touch, not by asking too rarely afterwards. Every retry strategy
+ * tried before this — tight polling, 25 s spacing, replaying the init every 5 s — was attempting to
+ * recover from that, and none of them can.
+ *
+ * The floor is between 10 s and 20 s (10 s untouched still fails; 20 s and 30 s both succeed); 30 s is
+ * the value confirmed on this build, and the margin is cheap because nothing useful can happen sooner.
+ * A warm device pays it too — we cannot tell warm from cold without touching, which is the one thing
+ * that must not happen — so pass settle_ms=0 when reloading against a device already known to be up.
  */
-static unsigned int settle_ms;
+static unsigned int settle_ms = 30000;
 module_param(settle_ms, uint, 0644);
 MODULE_PARM_DESC(settle_ms,
-		 "Delay (ms) before the first readiness attempt, leaving the device untouched (default 0). "
-		 "Diagnostic: tests whether an attempt ~140 ms after enumeration is itself harmful.");
+		 "Leave the device untouched for this long (ms) after attach before the first init "
+		 "(default 30000). A cold interface cannot answer, and asking early wedges it "
+		 "unrecoverably. Set 0 when reloading against a device already known to be awake.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -1722,7 +1733,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_setup_irq(c);
 
 	if (settle_ms)
-		msleep(settle_ms);	/* diagnostic: leave the device untouched before the first init */
+		msleep(settle_ms);	/* cold attach: do not touch the device before it can answer */
 	clarett_hw_init(c);
 
 	/*

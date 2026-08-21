@@ -43,12 +43,19 @@ A unit still waking from a cold power-up **cannot answer its first mailbox comma
 failure is self-perpetuating: the command completes (DONE raised) but never DMAs a response, so the
 trailing ack is withheld — as it must be, since acking an unlanded response is what caused the
 manifestation wall — and the device is left holding it unretired, answering it in place of every
-later command. **Recovering it needs two things together, and each alone is measured useless on an
-8Pre:** a long stretch of the device being left completely alone, AND a fresh pre-mailbox init after
-it. Re-asking over the mailbox without replaying the init fails at 50 ms, 25 s and 180 s spacing
-alike; replaying the init every 5 s fails across 13 attempts. Both recoveries observed had a long
-quiet followed by a fresh init — 20 s and 30 s. So the readiness retry waits out
-`CLARETT_READY_RETRY_MS` untouched, then re-runs the init and asks once.
+later command. **Nothing recovers it** — not tight polling, not 25 s spacing, not replaying the init
+every 5 s; all were tried and all fail.
+
+So the driver does not ask early. `settle_ms` (default 30 s) leaves the device **completely
+untouched** after attach, before even the pre-mailbox init. Measured back to back on the same build
+and unit: with no settle and attempts at 0, 30, 60 and 90 s, every one refuses; with a 30 s settle,
+the first attempt answers in ~90 us. The damage is done by the first touch, not by asking too rarely
+afterwards. The floor is between 10 s and 20 s — 10 s untouched still fails, 20 s and 30 s both
+succeed. The retry loop behind it is a backstop only.
+
+There is no way to tell a warm device from a cold one without touching it, which is the one thing
+that must not happen, so a warm reload waits too; pass `settle_ms=0` when the device is known to be
+awake.
 
 If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
 rather than registering a placeholder, and the error names which condition it saw — a wedged
