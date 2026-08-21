@@ -702,41 +702,39 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   cannot answer and asking early wedges it unrecoverably (see the SOLVED entry below); `wait_ready_ms`
   then bounds a backstop retry. If the device never answers, probe **fails loudly (`-ENODEV`, no card
   registered)** instead of the old fake-2Pre placeholder — reload to retry.
-  - **★★★ SOLVED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind the Dock G4) — DO NOT TOUCH A COLD
-    DEVICE. `settle_ms` (default 30 s) is the fix.** A cold-attached unit registers unaided now:
-    `enabling device` 17:05:59.531 → `Clarett 8Pre ... PCM 20/20ch` 17:06:30.073, **first attempt,
-    ~90 us, no retry** — the case that had failed every single time all session.
-    **Root cause: asking the device anything too soon is what breaks it, not how we retry afterwards.**
-    An interface ~140 ms out of power-up cannot answer; the command completes (DONE raised) but never
-    DMAs a response, the trailing ack is withheld — as it must be, since acking an unlanded response is
-    what caused the manifestation wall — and the device is then left holding it unretired, answering it
-    in place of every later command (`rseq` stale, blanket `err=3`). **Once that has happened nothing
-    recovers it.** The decisive A/B, same build, same unit, back to back:
-    | run | result |
+  - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
+    the Dock G4).** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
+    pre-mailbox init. **This is an observation, not a root cause.**
+    **Observed:** an in-probe first touch ~140 ms after enumeration fails reliably; a first touch at 1 s
+    or later has never failed. 3 s is margin over the only failing point measured. When it fails, the
+    command completes (DONE raised) but never DMAs a response; the ack is correctly withheld (acking an
+    unlanded response is what caused the wall), and the device then answers that command in place of
+    every later one — stale `rseq`, blanket `err=3`. **Nothing recovers that**, which is why the fix is
+    a don't-touch window and not a retry.
+    **RULED OUT on hardware — do not retry any of these:**
+    | hypothesis | killed by |
     |---|---|
-    | `settle_ms=0`, attempts at 0/30/60/90 s | all refuse |
-    | `settle_ms=30000`, one attempt | answers first try |
-    - **Everything tried before this was an attempt to undo damage already done, and all of it failed:**
-      50 ms tight polling (2 s, 10 s, 180 s budgets); 25 s spacing between mailbox commands; replaying
-      the pre-mailbox init every 5 s (13 attempts); `clarett_mbox_reset()` writing `0x510`/`0x500` +
-      the DMA address (38 resets). Raising `resp_timeout_ms` to 3 s does not help either — the response
-      is never sent, not late.
-    - **The floor is 10-20 s, bracketed not measured** (10 s untouched still fails; 20 s and 30 s both
-      succeed). 30 s is the confirmed value; the margin is free because nothing useful can happen sooner.
-    - **A warm reload waits too, which is a real cost.** Telling warm from cold needs a signal we do not
-      have — the pre-mailbox surface reads byte-identical either way, and the only probe that would
-      distinguish them is the touch that must not happen. `settle_ms=0` is the escape hatch when the
-      device is known to be awake. A module-init flag will NOT work: probe is asynchronous now.
-    - **★ METHOD — why this took a whole session.** Four builds went into retry tuning before the answer
-      turned out to be *don't ask*. Every experiment varied HOW WE RETRY; none varied WHETHER WE TOUCH IT
-      AT ALL, because the first attempt looks free — on a warm device it always succeeds. Each successive
-      theory (timing before the first command / quiet between commands / init replay) was confounded the
-      same way: every successful run happened to share an unexamined step, namely that nothing had touched
-      the device early. **Two ingredients were also tested only separately, never together** (long quiet,
-      fresh init) which burned two more builds. And three drafted conclusions were withdrawn when the
-      operator supplied a step absent from the pasted log — a power cycle done to free a busy `rmmod`, and
-      an `rmmod` that had failed. **Reconstruct the operator's actions, not just the kernel log, before
-      attributing a recovery**; the log records what the device did, never what was done to it.
+    | recover the wedge by retrying | tight polling at 2/10/180 s budgets; 25 s spacing; replaying the init every 5 s (13 attempts); both combined |
+    | reset the mailbox (`0x510`/`0x500` + DMA addr) | 38 resets, refused identically |
+    | the response is merely late | `resp_timeout_ms=3000`: 3.002 s elapsed with nothing, next command answered in 84 us |
+    | device wake time from power-up | a 1 s delay after enumeration passes 4/4 |
+    | unstable/flapping enumeration | 3/3 flapped runs PASSED |
+    **THE UNEXPLAINED ASYMMETRY — start here if it resurfaces:** a manual sysfs bind has **never** failed
+    (5/5, including at 1 s) while the automatic probe failed consistently with no settle. Same device,
+    same timing window, different invocation path. That is not a timing question.
+    - Every probe pays the wait, including a reload or sysfs rebind: unbinding disables the PCI device
+      (`clarett_remove` + devres) and re-enabling brings it back in whatever state a fresh attach is in.
+      An attempt to skip it for devices present at module load was **reverted** — a rebind 32 s after a
+      good registration failed on its first command, command register visibly going `0000 -> 0002`.
+    - **★ METHOD — six hypotheses died in one session, each killed by the next measurement.** Every
+      experiment varied HOW WE RETRY; none varied WHETHER WE TOUCH IT AT ALL, because the first attempt
+      looks free (on a warm device it always succeeds). Two ingredients were also tested only separately,
+      never together. And three drafted conclusions were withdrawn when the operator supplied a step
+      absent from the pasted log — a power cycle done to free a busy `rmmod`, and an `rmmod` that had
+      failed. **Reconstruct the operator's actions, not just the kernel log, before attributing a
+      recovery.** Also: **the rig cannot resolve this further** — manual power cycles, one run at a time,
+      on a chain that flaps unpredictably, cannot distinguish 4/4 from 4/5. Characterising the remaining
+      asymmetry needs scripted power control and run counts, not more one-off bisection.
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:

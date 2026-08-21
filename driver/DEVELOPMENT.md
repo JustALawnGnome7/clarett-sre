@@ -46,19 +46,24 @@ manifestation wall — and the device is left holding it unretired, answering it
 later command. **Nothing recovers it** — not tight polling, not 25 s spacing, not replaying the init
 every 5 s; all were tried and all fail.
 
-So the driver does not ask early. `settle_ms` (default 30 s) leaves the device **completely
-untouched** after attach, before even the pre-mailbox init. Measured back to back on the same build
-and unit: with no settle and attempts at 0, 30, 60 and 90 s, every one refuses; with a 30 s settle,
-the first attempt answers in ~90 us. The damage is done by the first touch, not by asking too rarely
-afterwards. The floor is between 10 s and 20 s — 10 s untouched still fails, 20 s and 30 s both
-succeed. The retry loop behind it is a backstop only.
+So the driver does not ask early. `settle_ms` (default 3 s) leaves the device **untouched** after
+attach, before even the pre-mailbox init.
 
-**Every probe pays it**, including a reload or sysfs rebind against a device that was working seconds
-before. Skipping it for devices already on the bus at module load was tried and reverted: presence
-looks like a safe proxy for "awake" and is not. Unbinding disables the PCI device and re-enabling
-brings it back cold — a rebind 32 s after a good registration failed on its first command, with the
-command register visibly going `0000 -> 0002` again. Nor can readiness be tested first, since testing
-it is the touch that breaks it. `settle_ms=0` skips the wait when you know the device has been up and
+**This is an observation, not a diagnosis.** An in-probe first touch ~140 ms after enumeration fails
+reliably; a first touch at 1 s or later has not failed in any run. 3 s is margin over the only
+failing point ever measured. The mechanism is not established, and a long list of plausible ones has
+been eliminated on hardware — recovering the wedge by retrying (tight polling at 2/10/180 s budgets,
+25 s spacing, replaying the init every 5 s, and both combined), resetting the mailbox via
+`0x510`/`0x500` plus the DMA address, raising the response deadline to 3 s, device wake time from
+power-up (a 1 s delay passes 4/4), and unstable enumeration (3/3 flapped runs passed). None of those
+is worth retrying.
+
+One asymmetry is unexplained and is where to resume: a manual sysfs bind has never failed, 5/5
+including at 1 s, while the automatic probe failed consistently with no settle — same device, same
+timing window, different invocation path.
+
+Every probe pays the wait, including a reload or sysfs rebind, since unbinding disables the PCI
+device and re-enabling brings it back in whatever state a fresh attach is in. `settle_ms=0` skips the wait when you know the device has been up and
 untouched.
 
 If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)

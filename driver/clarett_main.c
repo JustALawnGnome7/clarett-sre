@@ -86,35 +86,38 @@ MODULE_PARM_DESC(wait_ready_ms,
 		 "(default 100000). A warm device answers the first attempt and never spends it.");
 
 /*
- * Leave the device completely untouched for this long after attach, before the pre-mailbox init.
+ * Leave the device untouched for this long after attach, before the pre-mailbox init.
  *
- * This is the fix for cold-attach failure, and it is a DON'T-TOUCH window rather than a retry: an
- * interface that has just powered up cannot answer, and asking it too early puts it into a state that
- * nothing recovers. Measured on an 8Pre, back to back on the same build:
+ * WHAT IS OBSERVED, and it is less than a diagnosis: an in-probe first touch ~140 ms after enumeration
+ * fails reliably, and a first touch at 1 s or later has not failed in any run. 3 s is margin over the
+ * only failing point ever measured, not a tuned value — the mechanism is NOT established.
  *
- *   settle 0, then attempts at 0/30/60/90 s  -> all refuse; the run is lost
- *   settle 30 s, then one attempt            -> answers first try, ~90 us
+ * When it does fail, the command completes (DONE raised) but never DMAs a response; the trailing ack is
+ * withheld — it must be, since acking an unlanded response is what caused the manifestation wall — and
+ * the device is then left holding it unretired, answering it in place of every later command (stale
+ * rseq, blanket err=3). Nothing recovers that, which is why this is a don't-touch window and not a
+ * retry.
  *
- * So the damage is done by the first touch, not by asking too rarely afterwards. Every retry strategy
- * tried before this — tight polling, 25 s spacing, replaying the init every 5 s — was attempting to
- * recover from that, and none of them can.
+ * RULED OUT, each on hardware, so none of these is worth trying again: recovering the wedge by retrying
+ * (tight polling at 2/10/180 s budgets, 25 s spacing, replaying this init every 5 s, and the two
+ * combined); resetting the mailbox via 0x510/0x500 + the DMA address (38 resets); raising the response
+ * deadline to 3 s (the response is never sent, not late); device wake time from power-up (a 1 s delay
+ * passes 4/4); and an unstable enumeration (3/3 runs flapped and passed).
  *
- * The floor is between 10 s and 20 s (10 s untouched still fails; 20 s and 30 s both succeed); 30 s is
- * the value confirmed on this build, and the margin is cheap because nothing useful can happen sooner.
- * EVERY probe pays it, including a reload or sysfs rebind against a device that was working seconds
- * earlier. An attempt to skip it for devices already on the bus at module load was tried and REVERTED:
- * presence looks like a safe proxy for "awake" and is not. Unbinding disables the PCI device
- * (clarett_remove plus the devres release) and re-enabling brings it back COLD — a rebind 32 s after a
- * good registration failed on its first command, with the command register visibly going 0000 -> 0002
- * again. Pass settle_ms=0 only when you know the device has been up and untouched.
+ * One asymmetry remains unexplained and is the place to start if this resurfaces: a manual sysfs bind
+ * has never failed, 5/5 including at 1 s, while the automatic probe failed consistently without any
+ * settle — same device, same timing window, different invocation path.
+ *
+ * Every probe pays it, including a reload or sysfs rebind: unbinding disables the PCI device and
+ * re-enabling brings it back in whatever state a fresh attach is in.
  */
-static unsigned int settle_ms = 30000;
+static unsigned int settle_ms = 3000;
 module_param(settle_ms, uint, 0644);
 MODULE_PARM_DESC(settle_ms,
 		 "Leave the device untouched for this long (ms) after attach before the first init "
-		 "(default 30000). A cold interface cannot answer, and asking early wedges it "
-		 "unrecoverably. Paid by every probe, including a reload — an unbind disables the device "
-		 "and it comes back cold. Set 0 only when the device is known to be awake.");
+		 "(default 3000). Touching the device ~140 ms after enumeration wedges it unrecoverably; "
+		 "a first touch at 1 s or later has not failed. Margin over the observed failure, not a "
+		 "tuned value — the mechanism is not established. 0 disables the wait.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
