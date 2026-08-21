@@ -695,15 +695,43 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     2000 ms is retained solely to absorb a genuine cold-attach race; `wait_ready_ms` is now runtime-
     writable (0644) since it is read only in probe and a TB device re-probes on every power cycle —
     tunable without an rmmod that a running audio server would block anyway.
-  - **What is NOT yet explained: why the same unit sometimes registers.** Successes and failures on the
-    same 8PreX, same session, same cable: registered at 15:01:48 and 15:09:26, refused at 14:58:11,
-    14:58:56, 15:07:47, 15:18:19 and 15:20:55. Both successes followed a reload with PipeWire/fcp-server
-    stopped, which matches [[clarett-session-collapse-recovery]] — **but that is NOT established here**,
-    because the 15:20:55 failure had no card registered at all (the prior probe had refused), so no
-    client could have been holding a session to re-collapse. Elapsed time is ruled out (above). Device
-    power-cycling is ruled out as a *fix* (15:07:47 refused seconds after one). **Next instrument is
-    `resp_trace=1`** for per-command `seq`/`rseq`/`err` telemetry — this rig reproduces readily and has
-    no ~44 s MMIO blackout, so it is a cleaner platform for the onset hunt than the ASRock.
+  - **★★★ ROOT CAUSE FOUND — A TIMED-OUT COMMAND #0 WEDGES THE MAILBOX, AND THE WEDGE IS OURS
+    (Aug 21 2026, 8Pre, EliteBook 640 G11 behind the Dock G4, `resp_trace=1` + `dyndbg='+p'`
+    side-by-side capture).** The refusal is not the device being slow, not being unready, and not a
+    client re-collapsing it. It is `clarett_fcp()`'s own timeout path.
+    | | FAILING (hotplug, ~1 s after power-up) | WORKING (module reload) |
+    |---|---|---|
+    | `seq=0` DONE | **1306 us** | 102 us |
+    | `seq=0` response | **never landed** (100 ms `CLARETT_MBOX_TIMEOUT_MS`) | landed 152 us, `err=0 size=24` |
+    | later commands | `rseq=0` on ALL of seq=1..39, `err=3`, `size=0` | `rseq` tracks `seq` (1, 2, ...) |
+    **Mechanism:** a second after power-up the device is still waking, so command #0 completes ~13x
+    slower than normal and its response DMA misses the 100 ms window. `clarett_mailbox.c` then
+    deliberately withholds the trailing ack (`/* on timeout: no ack — the vendor never acks an
+    incomplete command */`), so **command #0 is never retired** and the device refuses everything
+    afterwards with `err=3` while still answering as command #0. The readiness poll then fires 39 more
+    commands into an already-wedged mailbox.
+    **Why `rseq` is the proof:** in the healthy capture `rseq` follows `seq` exactly, so `rseq=0`
+    forever in the failing one really does mean "stuck on command #0" — it is not that error responses
+    carry seq 0.
+    **This explains every observation of the day:** identical refusal at 2 s / 10 s / 180 s (polling a
+    wedged mailbox); power-cycling never helping (probe re-runs ~1 s later and re-creates the wedge);
+    a module reload always helping (probe re-runs `clarett_hw_init()`, whose `0x510`/`0x500`
+    device-enable writes reset the mailbox state machine). The device was ready the whole time.
+    **It is the mirror image of the wall crossing**: that fixed acking too EARLY; this is never acking
+    at ALL. The "vendor never acks an incomplete command" premise is true but vacuous — under MMIO
+    trapping the vendor never HAD an incomplete command.
+    - **Strongly supports the [[clarett-session-collapse-recovery]] hypothesis**, which predicted
+      exactly this: "a command whose response never lands leaves the mailbox reading responses against
+      the wrong command — opcode echoes, payload zeros, CAP_READ denies the category that just
+      answered". Now directly observed, on a host with **no** MMIO blackout. The ASRock's ~48 ms
+      blackout remains a plausible *trigger* there (any command whose response is swallowed wedges the
+      session the same way), but the blackout is no longer needed to explain collapse.
+    - **OPEN before fixing:** is command #0's response merely LATE (would a longer per-command deadline
+      catch it?) or never sent at all? `CLARETT_MBOX_TIMEOUT_MS` is a compile-time 100 ms, so this
+      needs a build to test. That answer picks the fix: a first-command grace period, versus resetting
+      the mailbox (re-running the `0x510`/`0x500` device-enable) before each readiness retry. **Do NOT
+      simply ack on timeout** — that is precisely the premature ack the crossing forbade, and a late
+      response would then land against an already-acked command.
   - **METHOD NOTE (three wrong readings in one session, all from incomplete sequences).** A "power cycle
     fixed it" and a "stopping the clients fixed it" conclusion were both drafted and both withdrawn once
     the operator supplied a step that had not been in the pasted log — a power cycle done to free a busy
