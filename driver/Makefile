@@ -14,12 +14,13 @@ else
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-# The ALSA cores this module links against. insmod does NOT resolve dependencies — it loads
-# exactly the file named — so loading the .ko in place needs these resident first. snd-pcm and
-# snd-hwdep are usually already up (any onboard HD-Audio card pulls them in), but snd-rawmidi
-# is only loaded when something needs MIDI, so a machine with no MIDI device fails with
-# "Unknown symbol snd_rawmidi_*". Either use `make load`, or install and use modprobe.
-ALSA_DEPS := snd-pcm snd-hwdep snd-rawmidi
+# insmod does NOT resolve dependencies — it loads exactly the file named — so loading the .ko
+# in place needs the modules it links against resident first. snd-pcm and snd-hwdep are usually
+# already up (any onboard HD-Audio card pulls them in), but snd-rawmidi is only loaded once
+# something needs MIDI, so a machine with no MIDI device fails with "Unknown symbol
+# snd_rawmidi_*". Read the list out of the built module rather than keeping a second copy here,
+# so it stays right when the module gains or drops a dependency.
+MODDEPS = $(shell modinfo -F depends $(CURDIR)/snd-clarett.ko 2>/dev/null | tr ',' ' ')
 
 .PHONY: all clean modules_install load unload
 
@@ -38,7 +39,7 @@ modules_install:
 load:
 	@test -f $(CURDIR)/snd-clarett.ko || \
 		{ echo "snd-clarett.ko not built — run 'make' first (as yourself, not root)"; exit 1; }
-	modprobe $(ALSA_DEPS)
+	$(if $(strip $(MODDEPS)),modprobe $(MODDEPS))
 	insmod $(CURDIR)/snd-clarett.ko $(ARGS)
 
 unload:
