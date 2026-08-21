@@ -692,9 +692,12 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     **HARDWARE-CONFIRMED on the 2Pre (Aug 20 2026):** loads with no arm, model auto-detected, one info
     line, fcp-server adopts the hwdep (so the flash-persisted session really is enough for the control
     plane), 60 s duplex at cadence 4 clocks 44997/45000 periods with `late=0`, 10 duplex start/stop cycles
-    clean, `rmmod` clean. **Still untested:** the unknown-geometry `-ENODEV` path (every test used a model
-    the table knows), a genuinely never-armed unit, and 4Pre/8Pre/8PreX — the **8PreX matters most**, since
-    its geometry pair is XML-derived and it is now the model that fails hardest if that pair is wrong.
+    clean, `rmmod` clean. **8Pre ALSO CONFIRMED (Aug 21 2026, EliteBook 640 G11 behind the Dock G4):**
+    `Clarett 8Pre: ... FCP hwdep, PCM 20/20ch, MIDI`, card `1 [C8Pre]`, one info line — so the `{20,20}`
+    geometry pair is right and detection picks it correctly.
+    **Still untested:** the unknown-geometry `-ENODEV` path (every test used a model the table knows), a
+    genuinely never-armed unit, and 4Pre/8PreX — the **8PreX matters most**, since its geometry pair is
+    XML-derived and it is now the model that fails hardest if that pair is wrong.
   - History: probe used to ALWAYS arm (July 23), after an "is it already armed?" detection proved
     unworkable — every host-visible surface (`CAP_READ`, a `GET_DATA` echo, the pre-mailbox block) reads
     *identically* fresh-vs-armed, so probe skipped the bring-up on exactly the devices that needed it
