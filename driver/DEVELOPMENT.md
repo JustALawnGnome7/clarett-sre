@@ -53,13 +53,9 @@ the first attempt answers in ~90 us. The damage is done by the first touch, not 
 afterwards. The floor is between 10 s and 20 s — 10 s untouched still fails, 20 s and 30 s both
 succeed. The retry loop behind it is a backstop only.
 
-The settle is only paid by a device that **attached after the driver loaded**. The driver records
-which matching devices are already on the bus before it registers, so hotplug and udev-triggered
-autoload settle (the device just powered up) while an `insmod` against a running device and a sysfs
-unbind/rebind do not. That sidesteps the fact that a device's readiness cannot be tested without
-touching it — we are not asking whether it is awake, only whether it predates us. It is a heuristic:
-an `insmod` within seconds of plugging in still skips the settle and fails, and the probe error says
-how to recover. `settle_ms=0` disables it entirely.
+There is no way to tell a warm device from a cold one without touching it, which is the one thing
+that must not happen, so a warm reload waits too; pass `settle_ms=0` when the device is known to be
+awake.
 
 If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
 rather than registering a placeholder, and the error names which condition it saw — a wedged
