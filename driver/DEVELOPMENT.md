@@ -300,9 +300,11 @@ The operationally relevant ones:
   inside probe and a Thunderbolt device re-probes on every power cycle, so a write applies to the
   next attach without needing to reload (which an audio server holding the card would block).
 
-Several parameters are A/B levers retained from localizing the control-plane crossing (e.g.
-`resp_prefill`, `premailbox_reads`, `early_msi`, `mmio_dilate_us`) and from the data-plane
-bring-up; their `MODULE_PARM_DESC` strings carry the detail.
+A few parameters are A/B levers retained from localizing the control-plane crossing —
+`legacy_mbox_cycle`, which reproducibly re-creates the wall and is therefore the negative
+control for re-verifying the gated ack on new hardware, and `premailbox_reads`, which still has
+an observable effect on the device. Their `MODULE_PARM_DESC` strings carry the detail. The rest
+were removed once the questions they tested were settled; git history has them if one reopens.
 
 ## Settings persistence (internals)
 

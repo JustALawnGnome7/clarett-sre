@@ -127,14 +127,6 @@ MODULE_PARM_DESC(dma_bits,
 		 "engine's burst-then-stall is sensitive to buffer address. Long shot: PTR advances at "
 		 "0xffe00000 with no fault, so the high address is not obviously the blocker.");
 
-static bool early_msi = true;
-module_param(early_msi, bool, 0444);
-MODULE_PARM_DESC(early_msi,
-		 "Enable MSI in the device's config space BEFORE any BAR access, matching the vendor's "
-		 "attach order (cold trace: MSI enable precedes the first pre-mailbox BAR write). The old "
-		 "order left MSI off through the whole arm + seed — a device-visible pre-command-#0 "
-		 "difference. Default 1; set 0 for the old late enable (A/B).");
-
 static bool monitor_enables = true;
 module_param(monitor_enables, bool, 0444);
 MODULE_PARM_DESC(monitor_enables,
@@ -173,16 +165,6 @@ MODULE_PARM_DESC(error_probe,
 		 "Off by default (sends junk commands). One-shot at probe. MUST be combined with meter_poll_ms=0: the "
 		 "meter-poll worker otherwise races the probe on the shared resp_buf and c->seq (its GET_METER "
 		 "responses land in the buffer and it bumps the seq), corrupting per-command attribution.");
-
-static bool premailbox_causes = true;
-module_param(premailbox_causes, bool, 0444);
-MODULE_PARM_DESC(premailbox_causes,
-		 "Within premailbox_reads, gate the four READ-TO-CLEAR cause-block reads (0x100/0x200/0x300/"
-		 "0x400). Bisection lever for the finding that premailbox_reads=1 makes the Analogue-2 "
-		 "gain LED flash red at probe (first-ever physical response). The info/version reads are "
-		 "side-effect-free; the cause-block reads are read-to-clear, so they are the prime suspect. Set 0 "
-		 "(with premailbox_reads=1) to drop just the cause reads and see if the LED flash stops — isolating "
-		 "whether a read-to-clear is the trigger. Default true.");
 
 static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; chosen by clarett_detect_model() */
 
@@ -273,36 +255,14 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 	return NULL;
 }
 
-/*
- * Timing exercise: every "known-good" vendor trace was captured under
- * x-no-mmap MMIO trapping, which dilates every BAR access to ~20 us; our replay issues
- * the same byte sequence at native speed (~100 ns/access). The trace records the byte
- * order, not which host actions were semantically conditioned on asynchronous device
- * events — in the dilated environment those events had always completed. This lever
- * re-creates the dilated timing wholesale: delay after EVERY BAR access. If the wall
- * moves under dilation, bisect which access needs the time. udelay (not usleep):
- * clarett_wl/rl run in the ISR too.
- */
-static uint mmio_dilate_us;
-module_param(mmio_dilate_us, uint, 0444);
-MODULE_PARM_DESC(mmio_dilate_us,
-		 "Delay (us) after every BAR access, re-creating the MMIO-trap dilation (~20) every "
-		 "working vendor capture executed under. 0 = native speed (default).");
-
 void clarett_wl(struct clarett *c, u32 off, u32 val)
 {
 	writel(val, c->bar0 + off);
-	if (mmio_dilate_us)
-		udelay(mmio_dilate_us);
 }
 
 u32 clarett_rl(struct clarett *c, u32 off)
 {
-	u32 val = readl(c->bar0 + off);
-
-	if (mmio_dilate_us)
-		udelay(mmio_dilate_us);
-	return val;
+	return readl(c->bar0 + off);
 }
 
 static void clarett_hw_init(struct clarett *c)
@@ -351,13 +311,14 @@ static void clarett_hw_init(struct clarett *c)
 		usleep_range(1850, 1950);		/* ~1.85 ms */
 		clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
 		usleep_range(3200, 3350);		/* ~3.22 ms */
-		if (premailbox_causes) {
+		{
 			/*
-			 * Read-to-clear cause blocks — CONFIRMED trigger of the Analogue-2 gain LED flash
-			 * (premailbox_causes=0 → no flash). These are read-to-clear, so on a cold boot they
-			 * report (and clear) whatever the device latched at power-on. Log the values: the
-			 * pending cause here is the physical event the device signals, cleared by this read.
-			 * Vendor order is 0x100, 0x300, 0x200, 0x400.
+			 * Read-to-clear cause blocks, in the vendor's order (0x100, 0x300, 0x200, 0x400).
+			 * These are the confirmed trigger of the Analogue-2 gain LED flash at probe — the
+			 * device's first-ever physical response — isolated to the read-to-clear itself, since
+			 * dropping just these reads stops the flash while the info/version reads do not. On a
+			 * cold boot they report (and clear) whatever the device latched at power-on, so the
+			 * logged value is the physical event being cleared.
 			 */
 			u32 c100 = readl(bar + REG_IRQ0_CAUSE);
 			u32 c300 = readl(bar + STREAM_BLK1);
@@ -368,8 +329,6 @@ static void clarett_hw_init(struct clarett *c)
 			dev_dbg(&c->pci->dev,
 				"pre-mailbox causes: 0x100=0x%08x 0x300=0x%08x 0x200=0x%08x 0x400=0x%08x 0x500=0x%08x\n",
 				c100, c300, c200, c400, c500);
-		} else {
-			readl(bar + 0x500);
 		}
 		usleep_range(8220, 8400);		/* ~8.22 ms */
 		r58c_b = readl(bar + 0x58c);
@@ -1745,10 +1704,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * so the device never sees a session start from a host without an interrupt path.
 	 * Handlers hook immediately too: with the vendor mailbox cycle the completion is
 	 * MSI-paced from command #0 of the arm (the notify path stays gated on ctl_ready). */
-	if (early_msi) {
-		clarett_enable_msi(c);
-		clarett_setup_irq(c);
-	}
+	clarett_enable_msi(c);
+	clarett_setup_irq(c);
 
 	clarett_hw_init(c);
 
@@ -1906,10 +1863,6 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		dev_warn(&pci->dev, "Clock Source control create failed (%d)\n", err);
 	err = 0;
 
-	if (!early_msi) {
-		clarett_enable_msi(c);	/* old order, for A/B */
-		clarett_setup_irq(c);
-	}
 	WRITE_ONCE(c->ctl_ready, true);	/* controls exist; the ISR notify path may fire */
 
 	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. Both

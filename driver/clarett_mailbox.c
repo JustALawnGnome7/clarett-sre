@@ -17,30 +17,6 @@
 #include <linux/string.h>
 #include "clarett.h"
 
-/*
- * Manifestation-wall A/B — per-command response-buffer hygiene. The device provably reacts
- * to host DMA-buffer *contents* (the 0xAA RX pre-fill was the lone difference
- * that made the engine clock), and this buffer is the only host address the device knows at
- * init. FC's 4 KB common buffer arrives zeroed from Windows; ours is zeroed at alloc but then
- * holds the previous response between commands. -1 = leave it alone (baseline); 0..255 = fill
- * the whole buffer with that byte before every submit (0 mirrors FC's fresh common buffer;
- * 170/0xAA restores the emptiness instrument — any byte still 0xAA after completion was
- * not written by the device).
- */
-static int resp_prefill = -1;
-module_param(resp_prefill, int, 0444);
-MODULE_PARM_DESC(resp_prefill,
-	"Fill the response DMA buffer with this byte before each command (-1=off/baseline, 0=zero like FC's fresh buffer, 170=0xAA emptiness marker).");
-
-static bool mbox_err_read;
-module_param(mbox_err_read, bool, 0444);
-MODULE_PARM_DESC(mbox_err_read,
-	"Read MBOX_ERROR (0x8028) after each command completion. The vendor driver NEVER reads any "
-	"mailbox register (cold trace: zero mailbox reads across the whole bring-up), and our read "
-	"lands while the device is still DMAing its async response — the sole per-command BAR-surface "
-	"difference from the vendor. Default 0 = vendor-faithful (no read); 1 restores "
-	"the old readback for A/B.");
-
 static bool legacy_mbox_cycle;
 module_param(legacy_mbox_cycle, bool, 0444);
 MODULE_PARM_DESC(legacy_mbox_cycle,
@@ -130,7 +106,7 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 			 u8 *resp_out, u16 resp_len)
 {
 	unsigned long deadline;
-	u32 cause = 0, first_cause = 0, fcperr = 0, resp_echo = 0, fcp_status = 0;
+	u32 cause = 0, first_cause = 0, resp_echo = 0, fcp_status = 0;
 	ktime_t t_submit;
 	s64 done_us = -1, land_us = -1;
 	int i, ret = 0, polls = 0;
@@ -155,10 +131,6 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 	if (legacy_mbox_cycle)
 		clarett_wl(c, REG_DOORBELL, DOORBELL_ACK);
 
-	if (resp_prefill >= 0) {
-		memset(c->resp_buf, resp_prefill & 0xff, c->resp_size);
-		dma_wmb();	/* fill visible to the device before the doorbell submit */
-	}
 	/* zero the response header so clarett_resp_wait can't match a stale echo
 	 * (the arm repeats opcodes back-to-back, CONFIG_PUSH x122) */
 	memset(c->resp_buf, 0, FCP_RESP_DATA_OFF);
@@ -275,18 +247,14 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 		/* on timeout: no ack — the vendor never acks an incomplete command */
 	}
 
-	/* Vendor-faithful default: NO mailbox read here. FC never reads any mailbox register;
-	 * this read raced the device's async response DMA on every command since day one
-	 * (fcperr always read 0 for us anyway — the real error channel is resp+8 in the DMA
-	 * buffer). Lever mbox_err_read=1 restores it. */
-	if (mbox_err_read)
-		fcperr = clarett_rl(c, REG_MBOX + MBOX_ERROR);
+	/* No mailbox read here, matching the vendor, which never reads any mailbox register. The real
+	 * error channel is resp+8 in the DMA buffer; a read here would race the device's response DMA. */
 
 	/* Per-transaction trace. dev_dbg (not dev_info): the GET_METER heartbeat runs at ~24 Hz, so
 	 * info-level here would flood the log. Enable via dynamic debug when diagnosing the mailbox. */
 	dev_dbg(&c->pci->dev,
-		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d fcperr=0x%08x status=0x%08x\n",
-		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcperr, fcp_status);
+		"FCP op=0x%06x seq=%u first_cause=0x%08x polls=%d done=%d status=0x%08x\n",
+		opcode, c->seq, first_cause, polls, !!(cause & IRQ_DONE_BIT), fcp_status);
 
 	if (resp_trace) {
 		const u8 *r = c->resp_buf;
@@ -314,8 +282,6 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 
 	if (!(cause & IRQ_DONE_BIT))
 		ret = -ETIMEDOUT;
-	else if (fcperr)
-		ret = -EIO;
 	/*
 	 * NOTE: fcp_status (resp+8) is NOT a clean pass/fail on the Clarett — INIT_1 re-run on an
 	 * already-armed device returns a nonzero status yet the command works (INIT_2 still answers
