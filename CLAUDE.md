@@ -320,6 +320,28 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `journalctl -k`. If it interferes, mask the correctable reporting on that one device; do **not** use
     `pci=noaer`, which blinds AER machine-wide. If a storm ever does land on the audio leg, reseat, try the
     other port, and test `pcie_aspm=off` (L0s/L1 exit on a marginal link is a common source).
+- **★ THE THUNDERBOLT FABRIC WEDGES AFTER HEAVY PLUG CYCLING — REPLUG THE DOCK, NOT THE DEVICE
+  (Aug 21 2026, EliteBook 640 G11 + Dock G4 + Apple adapter + 8Pre; seen twice in one session).**
+  Signature: the unit IS found and named, then torn down before it can be authorized, so **`boltctl
+  list` shows nothing and `lspci -d 1cb5:0002` is empty** — which looks like the device failing to
+  negotiate, and is not:
+  ```
+  thunderbolt 0-301: new device found ... Focusrite Clarett8Pre
+  thunderbolt 0000:00:0d.2: 301:1: hop deactivation failed for hop 1, index 8
+  thunderbolt 0000:00:0d.2: PCIe Down path activation failed: -107      (-ENOTCONN)
+  thunderbolt 0000:00:0d.2: 301:2: PCIe tunnel activation failed, aborting
+  thunderbolt 0-301: device disconnected
+  ```
+  A **stale path is left in the HOST controller's fabric state** (`0000:00:0d.2`, the NHI): the driver
+  tries to deactivate hop 1 before building the new tunnel, that fails, and the PCIe path is never
+  created. It retries on a ~5 min cadence, failing identically each time. **Because the state is
+  host-side, power-cycling the interface and reseating the adapter change NOTHING** — the fix is to
+  **unplug the dock from the host** for ~30 s (confirmed sufficient), or reboot. Avoid
+  `modprobe -r thunderbolt`: it drops the dock too and is likelier to wedge things further.
+  Provoked by hot-swapping units (8PreX <-> 8Pre) and repeated abrupt power cycles — i.e. by exactly
+  the kind of bring-up testing this project does. **Consequence for measurement: check the chain is
+  stable before trusting ANY probe-timing result** — a device that vanishes 574 ms after appearing
+  fails readiness for reasons unrelated to the driver, and one capture was lost to precisely that.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
