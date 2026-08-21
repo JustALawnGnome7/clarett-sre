@@ -86,6 +86,21 @@ MODULE_PARM_DESC(wait_ready_ms,
 		 "(default 100000). A warm device answers the first attempt and never spends it.");
 
 /*
+ * Delay before the FIRST readiness attempt, i.e. before the device is touched at all.
+ *
+ * Default 0: a warm device answers immediately, and making every module reload wait would be a poor
+ * trade for a case that always works. But an in-probe first attempt lands ~140 ms after enumeration,
+ * and it is not known whether touching the device that early does deeper damage than the later touches
+ * both observed recoveries had (10 s and 20 s). Set this to test that: with it non-zero the device is
+ * left completely untouched for the interval, reproducing the one run where nothing touched it early.
+ */
+static unsigned int settle_ms;
+module_param(settle_ms, uint, 0644);
+MODULE_PARM_DESC(settle_ms,
+		 "Delay (ms) before the first readiness attempt, leaving the device untouched (default 0). "
+		 "Diagnostic: tests whether an attempt ~140 ms after enumeration is itself harmful.");
+
+/*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
  * alignment by 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our
  * RX buffer was ONE contiguous coherent region, so the engine streamed across fragment boundaries and the
@@ -1706,6 +1721,8 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_enable_msi(c);
 	clarett_setup_irq(c);
 
+	if (settle_ms)
+		msleep(settle_ms);	/* diagnostic: leave the device untouched before the first init */
 	clarett_hw_init(c);
 
 	/*
