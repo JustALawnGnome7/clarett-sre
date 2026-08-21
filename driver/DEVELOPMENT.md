@@ -291,8 +291,10 @@ The operationally relevant ones:
   double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to
   test double/quad speed on a not-yet-confirmed model — the stream width is rate-independent, so verify
   with a known tone (correct pitch on the analogue channel) before trusting a rate on an ADAT model.
-- `wait_ready_ms` (default 2000) — settle budget to wait for the flash-persisted session to
-  answer at probe before giving up. A cold Thunderbolt attach can race device readiness.
+- `wait_ready_ms` (default 10000) — settle budget to wait for the flash-persisted session to
+  answer at probe before giving up. A cold Thunderbolt attach can race device readiness, and a dock
+  in the chain makes it more likely. Costs nothing on a healthy device: the poll returns as soon as
+  the device answers, so the budget is only ever spent on one that is not talking.
 
 Several parameters are A/B levers retained from localizing the control-plane crossing (e.g.
 `resp_prefill`, `premailbox_reads`, `early_msi`, `mmio_dilate_us`) and from the data-plane

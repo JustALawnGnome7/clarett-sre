@@ -675,11 +675,20 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   loaded with no arm: model auto-detected, meters live, Inst/Line relay switching). So the ~232-command
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
-  (GET_7.1, quietly) for up to `wait_ready_ms` (2000) until the flash-persisted session answers, detects
-  the model from it, and leaves routing untouched. A cold Thunderbolt attach can race device readiness
-  (command #0's response may not land — see [[clarett-session-collapse-recovery]]); the poll absorbs it.
-  If the device never answers, probe **fails loudly (`-ENODEV`, no card registered)** instead of the old
-  fake-2Pre placeholder — reload to retry. `wait_ready_ms` tunes the settle budget.
+  (GET_7.1, quietly) for up to `wait_ready_ms` (**10000 as of Aug 21 2026, was 2000**) until the
+  flash-persisted session answers, detects the model from it, and leaves routing untouched. A cold
+  Thunderbolt attach can race device readiness (command #0's response may not land — see
+  [[clarett-session-collapse-recovery]]); the poll absorbs it. If the device never answers, probe
+  **fails loudly (`-ENODEV`, no card registered)** instead of the old fake-2Pre placeholder — reload to
+  retry. `wait_ready_ms` tunes the settle budget.
+  - **Why 10 s:** an 8PreX cold-attached behind a Thunderbolt dock refused at the 2 s budget
+    (`FCP op=0x007001 seq=0: response never landed; ack withheld` → `status=3 size=0 raw playback=0
+    capture=0` → `device did not become ready`). The budget is free on a healthy device — the poll
+    returns the moment GET_7.1 answers — so it is only ever spent on a device that is not talking, and
+    10 s stays well inside udev's own event timeout. **NOTE the 8PreX case is not a clean A/B**: that
+    load also followed a failed PCIe tunnel activation and a replug, so it is not proven that 2 s alone
+    was the problem. Raised because the cost of being wrong is asymmetric, not because the race was
+    isolated. **A recurrence at 10 s is the signal that something else is going on.**
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:

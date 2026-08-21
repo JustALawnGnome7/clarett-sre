@@ -134,11 +134,22 @@ MODULE_PARM_DESC(base_hi,
  * attention; a used device usually just needs a moment, so reload to retry.
  */
 
-static unsigned int wait_ready_ms = 2000;
+/*
+ * Settle budget for the readiness poll. This costs nothing on a healthy device — the poll returns as soon
+ * as GET_7.1 answers — so it is only ever spent on a device that is not (yet) talking, and the failure it
+ * guards against is worse than the wait: probe refuses to register, and the user has to notice and reload.
+ *
+ * Raised from 2 s after a cold attach behind a Thunderbolt dock refused at the old budget. Longer chains
+ * take longer to settle, and each extra hop adds a place for the race to happen. 10 s stays well inside
+ * udev's own event timeout, so a device that never answers still fails long before anything upstream
+ * gives up on us.
+ */
+static unsigned int wait_ready_ms = 10000;
 module_param(wait_ready_ms, uint, 0444);
 MODULE_PARM_DESC(wait_ready_ms,
 		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
-		 "up (default 2000). A cold Thunderbolt attach can race device readiness.");
+		 "up (default 10000). A cold Thunderbolt attach can race device readiness, and a dock in the "
+		 "chain makes that more likely.");
 
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
