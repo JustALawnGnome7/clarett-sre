@@ -101,15 +101,62 @@ MODULE_PARM_DESC(wait_ready_ms,
  *
  * The floor is between 10 s and 20 s (10 s untouched still fails; 20 s and 30 s both succeed); 30 s is
  * the value confirmed on this build, and the margin is cheap because nothing useful can happen sooner.
- * A warm device pays it too — we cannot tell warm from cold without touching, which is the one thing
- * that must not happen — so pass settle_ms=0 when reloading against a device already known to be up.
+ * Only a device that attached AFTER the driver loaded pays it — see clarett_device_was_awake(), which
+ * is how a warm reload avoids the wait without anyone having to touch the device to find out.
  */
 static unsigned int settle_ms = 30000;
 module_param(settle_ms, uint, 0644);
 MODULE_PARM_DESC(settle_ms,
 		 "Leave the device untouched for this long (ms) after attach before the first init "
 		 "(default 30000). A cold interface cannot answer, and asking early wedges it "
-		 "unrecoverably. Set 0 when reloading against a device already known to be awake.");
+		 "unrecoverably. Only applied to a device that attached AFTER the driver loaded; set 0 to "
+		 "disable it entirely.");
+
+/*
+ * Which matching devices were already on the bus when the driver registered.
+ *
+ * settle_ms must not be paid by a device that is demonstrably already awake, and the only way to know
+ * that without touching it — the one thing that breaks a cold unit — is to notice it was there before
+ * we were. A device present at module load has been enumerated at least as long as it took to load the
+ * module; one that appears afterwards has just arrived and is cold.
+ *
+ * That covers the paths that matter: hotplug and udev-triggered autoload settle (correct, the device
+ * just powered up), while an insmod against a running device and a sysfs unbind/rebind do not (correct,
+ * and it is the whole development loop). It is a heuristic, not a readiness test: insmod within seconds
+ * of plugging in still skips the settle and will fail, which the probe error already tells the user how
+ * to recover from.
+ *
+ * A flag flipped after pci_register_driver() would NOT work — probe is asynchronous, so the initial
+ * scan's probes complete after it returns and would race the flip. Capturing the set beforehand cannot.
+ */
+static u32 clarett_present_at_load[8];
+static unsigned int clarett_n_present_at_load;
+
+static void clarett_note_present_devices(void)
+{
+	struct pci_dev *pd = NULL;
+
+	while ((pd = pci_get_device(PCI_VENDOR_FOCUSRITE, PCI_DEVICE_CLARETT, pd))) {
+		if (clarett_n_present_at_load == ARRAY_SIZE(clarett_present_at_load)) {
+			pci_dev_put(pd);
+			break;
+		}
+		clarett_present_at_load[clarett_n_present_at_load++] =
+			(pci_domain_nr(pd->bus) << 16) | (pd->bus->number << 8) | pd->devfn;
+	}
+}
+
+static bool clarett_device_was_awake(struct pci_dev *pci)
+{
+	u32 id = (pci_domain_nr(pci->bus) << 16) | (pci->bus->number << 8) | pci->devfn;
+	unsigned int i;
+
+	for (i = 0; i < clarett_n_present_at_load; i++)
+		if (clarett_present_at_load[i] == id)
+			return true;
+	return false;
+}
+
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -1732,8 +1779,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_enable_msi(c);
 	clarett_setup_irq(c);
 
-	if (settle_ms)
-		msleep(settle_ms);	/* cold attach: do not touch the device before it can answer */
+	if (settle_ms && !clarett_device_was_awake(pci)) {
+		/* Arrived after we loaded, so it has just attached: do not touch it before it can answer. */
+		dev_dbg(&pci->dev, "cold attach: settling %u ms before first contact\n", settle_ms);
+		msleep(settle_ms);
+	}
 	clarett_hw_init(c);
 
 	/*
@@ -2422,7 +2472,19 @@ static struct pci_driver clarett_driver = {
 	.remove = clarett_remove,
 	.shutdown = clarett_shutdown,
 };
-module_pci_driver(clarett_driver);
+static int __init clarett_module_init(void)
+{
+	clarett_note_present_devices();		/* before registering: probe must be able to ask */
+	return pci_register_driver(&clarett_driver);
+}
+
+static void __exit clarett_module_exit(void)
+{
+	pci_unregister_driver(&clarett_driver);
+}
+
+module_init(clarett_module_init);
+module_exit(clarett_module_exit);
 
 MODULE_DESCRIPTION("Focusrite Clarett (Thunderbolt) audio interface driver");
 MODULE_AUTHOR("Miles Ramage <miles.ramage@yahoo.com>");
