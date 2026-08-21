@@ -79,7 +79,9 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
 - PCI ID **1cb5:0002**, class Multimedia audio controller.
 - **Single 64 KB MMIO BAR0** = entire register interface (control mailbox + DMA
   control). Audio samples move by bus-master DMA, not through the BAR.
-- **4 MSI vectors**; MSI-driven (`DisINTx+`). PCIe Gen1 x1. Dummy serial.
+- **4 MSI vectors**; MSI-driven (`DisINTx+`). PCIe Gen1 x1. **Dummy serial AND dummy firmware-version
+  words** — an 8Pre and an 8PreX report byte-identical `serial`/`fw app`/`fpga`, so none of the three
+  identifies a unit or a model (Aug 21 2026; see the detection bullet under Driver limitations).
 - FPGA-based Thunderbolt front-end (firmware has App + FPGA segments).
 
 ## Protocol — FCP (Focusrite Control Protocol)
@@ -692,12 +694,20 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     **HARDWARE-CONFIRMED on the 2Pre (Aug 20 2026):** loads with no arm, model auto-detected, one info
     line, fcp-server adopts the hwdep (so the flash-persisted session really is enough for the control
     plane), 60 s duplex at cadence 4 clocks 44997/45000 periods with `late=0`, 10 duplex start/stop cycles
-    clean, `rmmod` clean. **8Pre ALSO CONFIRMED (Aug 21 2026, EliteBook 640 G11 behind the Dock G4):**
-    `Clarett 8Pre: ... FCP hwdep, PCM 20/20ch, MIDI`, card `1 [C8Pre]`, one info line — so the `{20,20}`
-    geometry pair is right and detection picks it correctly.
+    clean, `rmmod` clean. **8Pre AND 8PreX ALSO CONFIRMED (Aug 21 2026, EliteBook 640 G11 behind the
+    Dock G4):** `Clarett 8Pre: ... PCM 20/20ch, MIDI` / card `1 [C8Pre]`, and
+    `Clarett 8PreX: ... PCM 28/28ch, MIDI` / card `1 [C8PreX]`, one info line each. **The 8PreX result is
+    the important one — its `{28,28}` pair was XML-derived and had never touched hardware, and it is
+    correct.** Detection-only is now validated on 2Pre, 8Pre and 8PreX.
     **Still untested:** the unknown-geometry `-ENODEV` path (every test used a model the table knows), a
-    genuinely never-armed unit, and 4Pre/8PreX — the **8PreX matters most**, since its geometry pair is
-    XML-derived and it is now the model that fails hardest if that pair is wrong.
+    genuinely never-armed unit, and the 4Pre — lowest risk of the four, since its pair came from a real
+    capture rather than the XML.
+  - **★ SERIAL AND FIRMWARE-VERSION WORDS ARE CONSTANTS, NOT PER-UNIT DATA (Aug 21 2026).** An 8Pre and an
+    8PreX print byte-identical identity: `serial 000012345678abcd fw app 0x04061973 fpga 0x18101966` on
+    both (the fw words read as dates — 04/06/1973, 18/10/1966). So the "dummy serial" in the hardware
+    facts extends to the version words: **none of these fields can identify a unit or distinguish a
+    model**, and nothing may key off them. Independently justifies geometry detection being the only path,
+    and rules out fw-version-gated feature detection if that is ever tempting.
   - History: probe used to ALWAYS arm (July 23), after an "is it already armed?" detection proved
     unworkable — every host-visible surface (`CAP_READ`, a `GET_DATA` echo, the pre-mailbox block) reads
     *identically* fresh-vs-armed, so probe skipped the bring-up on exactly the devices that needed it
