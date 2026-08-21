@@ -135,21 +135,16 @@ MODULE_PARM_DESC(base_hi,
  */
 
 /*
- * Settle budget for the readiness poll. This costs nothing on a healthy device — the poll returns as soon
- * as GET_7.1 answers — so it is only ever spent on a device that is not (yet) talking, and the failure it
- * guards against is worse than the wait: probe refuses to register, and the user has to notice and reload.
- *
- * Raised from 2 s after a cold attach behind a Thunderbolt dock refused at the old budget. Longer chains
- * take longer to settle, and each extra hop adds a place for the race to happen. 10 s stays well inside
- * udev's own event timeout, so a device that never answers still fails long before anything upstream
- * gives up on us.
+ * Settle budget for the readiness poll, absorbing a cold attach that races device readiness. Free on a
+ * healthy device — the poll returns as soon as GET_7.1 answers. Writable at runtime because it is read
+ * only inside probe and a Thunderbolt device re-probes on every power cycle, so a write applies to the
+ * next attach without needing the card free.
  */
-static unsigned int wait_ready_ms = 10000;
-module_param(wait_ready_ms, uint, 0444);
+static unsigned int wait_ready_ms = 2000;
+module_param(wait_ready_ms, uint, 0644);
 MODULE_PARM_DESC(wait_ready_ms,
 		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
-		 "up (default 10000). A cold Thunderbolt attach can race device readiness, and a dock in the "
-		 "chain makes that more likely.");
+		 "up (default 2000).");
 
 static int force_flat = -1;
 module_param(force_flat, int, 0444);
@@ -1959,8 +1954,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 			 */
 			dev_err(&pci->dev,
 				"device did not become ready within %u ms (GET_7.1 refused / no response) — refusing to register. "
-				"A device self-arms from flash, so this is usually a cold attach that needed a moment: "
-				"reload the module to retry.\n",
+				"Reload to retry; if it repeats, stop fcp-server and PipeWire first.\n",
 				wait_ready_ms);
 			err = -ENODEV;
 			goto err_free;

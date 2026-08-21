@@ -675,20 +675,40 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   loaded with no arm: model auto-detected, meters live, Inst/Line relay switching). So the ~232-command
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
-  (GET_7.1, quietly) for up to `wait_ready_ms` (**10000 as of Aug 21 2026, was 2000**) until the
+  (GET_7.1, quietly) for up to `wait_ready_ms` (2000) until the
   flash-persisted session answers, detects the model from it, and leaves routing untouched. A cold
   Thunderbolt attach can race device readiness (command #0's response may not land — see
   [[clarett-session-collapse-recovery]]); the poll absorbs it. If the device never answers, probe
   **fails loudly (`-ENODEV`, no card registered)** instead of the old fake-2Pre placeholder — reload to
   retry. `wait_ready_ms` tunes the settle budget.
-  - **Why 10 s:** an 8PreX cold-attached behind a Thunderbolt dock refused at the 2 s budget
-    (`FCP op=0x007001 seq=0: response never landed; ack withheld` → `status=3 size=0 raw playback=0
-    capture=0` → `device did not become ready`). The budget is free on a healthy device — the poll
-    returns the moment GET_7.1 answers — so it is only ever spent on a device that is not talking, and
-    10 s stays well inside udev's own event timeout. **NOTE the 8PreX case is not a clean A/B**: that
-    load also followed a failed PCIe tunnel activation and a replug, so it is not proven that 2 s alone
-    was the problem. Raised because the cost of being wrong is asymmetric, not because the race was
-    isolated. **A recurrence at 10 s is the signal that something else is going on.**
+  - **★★ THE REFUSAL IS NOT A TIMING PROBLEM — MEASURED AND CLOSED (Aug 21 2026, 8PreX, EliteBook 640
+    G11 behind the Dock G4). Do not raise `wait_ready_ms` to chase it.** The budget was briefly raised
+    2000 → 10000 on a slow-settle hypothesis and reverted the same day once measured:
+    | budget | result |
+    |---|---|
+    | 2000 ms | refused (twice) |
+    | 10000 ms | refused (twice) |
+    | **180000 ms** | **refused** — on a unit already powered **~2.5 min before probe started**, i.e. ~5.5 min of device uptime, GET_7.1's response never landing once |
+    Symptom is identical at every budget: `FCP op=0x007001 seq=0: response never landed; ack withheld`
+    → `GET_7.1 bad response (status=3 size=0 raw playback=0 capture=0)` → refusal. **A refused session
+    stays refused for as long as you poll it**, so a longer budget buys only a slower failure report.
+    2000 ms is retained solely to absorb a genuine cold-attach race; `wait_ready_ms` is now runtime-
+    writable (0644) since it is read only in probe and a TB device re-probes on every power cycle —
+    tunable without an rmmod that a running audio server would block anyway.
+  - **What is NOT yet explained: why the same unit sometimes registers.** Successes and failures on the
+    same 8PreX, same session, same cable: registered at 15:01:48 and 15:09:26, refused at 14:58:11,
+    14:58:56, 15:07:47, 15:18:19 and 15:20:55. Both successes followed a reload with PipeWire/fcp-server
+    stopped, which matches [[clarett-session-collapse-recovery]] — **but that is NOT established here**,
+    because the 15:20:55 failure had no card registered at all (the prior probe had refused), so no
+    client could have been holding a session to re-collapse. Elapsed time is ruled out (above). Device
+    power-cycling is ruled out as a *fix* (15:07:47 refused seconds after one). **Next instrument is
+    `resp_trace=1`** for per-command `seq`/`rseq`/`err` telemetry — this rig reproduces readily and has
+    no ~44 s MMIO blackout, so it is a cleaner platform for the onset hunt than the ASRock.
+  - **METHOD NOTE (three wrong readings in one session, all from incomplete sequences).** A "power cycle
+    fixed it" and a "stopping the clients fixed it" conclusion were both drafted and both withdrawn once
+    the operator supplied a step that had not been in the pasted log — a power cycle done to free a busy
+    `rmmod`, and an `rmmod` that had failed. **Reconstruct the operator's actions, not just the kernel
+    log, before attributing a recovery**; the log records what the device did, never what was done to it.
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:
