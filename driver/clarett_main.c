@@ -35,29 +35,12 @@ MODULE_PARM_DESC(stream_probe,
 		 "Data-plane experiment: after bring-up, program the ring registers with a driver "
 		 "buffer and watch for vec1/vec2 IRQs + DMA-pointer movement (off by default).");
 
-static bool blk1_only;
-module_param(blk1_only, bool, 0444);
-MODULE_PARM_DESC(blk1_only,
-		 "Engine-probe isolation: configure ONLY ring block 1 (0x300, capture) and enable it via "
-		 "0x30c, leaving block 0 (0x200) untouched. Isolates whether the capture writes are block 1's.");
-
 static bool enable_pcm = true;
 module_param(enable_pcm, bool, 0444);
 MODULE_PARM_DESC(enable_pcm,
 		 "Register the PCM devices (playback + capture, S32_LE @48k, descriptor-ring engine driven "
 		 "by the 0x300 servicer). Default on — hardware-confirmed capture and full-duplex playback on "
 		 "the 2Pre. Set 0 for a mixer-only card, or when using stream_probe (mutually exclusive).");
-
-static int rekick;
-module_param(rekick, int, 0444);
-MODULE_PARM_DESC(rekick,
-		 "Stall re-kick when 0x300 freezes mid-stream (the one-ring-pass stall): 0=off, "
-		 "1=rewrite 0x110 arm, 2=rewrite ring bases + 0x110, 3=rewrite 0x20c enable + 0x110, "
-		 "4=re-issue activate=5 stream commit (mailbox).");
-
-static int rekick_ms = 20;
-module_param(rekick_ms, int, 0444);
-MODULE_PARM_DESC(rekick_ms, "Stall threshold for rekick: ms with no new 0x300 period before kicking.");
 
 static int tx_trace;
 module_param(tx_trace, int, 0644);
@@ -67,49 +50,6 @@ MODULE_PARM_DESC(tx_trace,
 		 "(pcm_frames). N = the value (e.g. tx_trace=32 logs one line per 32 periods; 1 = every "
 		 "period). Reveals whether the engine consumes TX faster than our fill (the 8PreX playback "
 		 "rate/tearing hypothesis). Writable at runtime via /sys/module/snd_clarett/parameters.");
-
-/*
- * The vendor's arm ritual. EVERY vendor stream capture — 2Pre, 4Pre, 8PreX —
- * opens with exactly FOUR throwaway arms ~13 ms apart, each held ~2 ms then torn down without ever
- * raising a period, followed by a MULTI-SECOND window in which the host touches the BAR not at all,
- * followed by one more arm, byte-identical to the four, which streams. Same bases, same geometry,
- * same 14 writes. Since the register program is provably identical between the arms that fail and
- * the arm that works, the difference is either elapsed time or host-RAM contents — the only two
- * channels an MMIO trace cannot see. These knobs replay the ritual so the time half can be tested.
- */
-static int arm_pre;
-module_param(arm_pre, int, 0644);
-MODULE_PARM_DESC(arm_pre,
-		 "Throwaway arm/teardown cycles to run before the real arm, mimicking the vendor's four "
-		 "(0 = off, the historical behaviour; 4 = vendor-faithful).");
-
-static int arm_hold_us = 2000;
-module_param(arm_hold_us, int, 0644);
-MODULE_PARM_DESC(arm_hold_us, "How long each arm_pre throwaway arm is held before teardown (vendor: ~1500-2000 us).");
-
-static int arm_gap_ms = 13;
-module_param(arm_gap_ms, int, 0644);
-MODULE_PARM_DESC(arm_gap_ms, "Gap between arm_pre throwaway arms (vendor: 12-25 ms).");
-
-/*
- * The BASE_HI question. EVERY vendor arm, on all three models, in all five
- * captures, writes 0x214 = 2 AND 0x314 = 2. We write upper_32_bits() of our own bus address, which
- * with the default 32-bit mask is always 0. Two readings, never separated:
- *   (a) a genuine address high word — the VM's rings really did live above 8 GB; or
- *   (b) a FIELD (mode/ownership/tag) that happens to read 2, in which case we have been writing 0
- *       into a required register on every arm we have ever done.
- * Reading (b) is not idle: the 8PreX RAM dump found the per-ENTRY high words differing by direction
- * (TX 2, RX 1) within one session, which is odd for an address and natural for a tag.
- * Set base_hi >= 0 to force the value. If it is an address, forcing 2 sends the table fetch to
- * 0x2_xxxxxxxx and the IOMMU logs a fault / PTR never advances; if it is a field, the engine keeps
- * fetching our table normally. Either outcome settles it.
- */
-static int base_hi = -1;
-module_param(base_hi, int, 0644);
-MODULE_PARM_DESC(base_hi,
-		 "Override the value written to the ring BASE_HI registers 0x214/0x314 (-1 = the real "
-		 "upper 32 bits of the bus address, the historical behaviour; 2 = what every vendor "
-		 "capture writes). Discriminates address-high-word from flags-field.");
 
 /*
  * Buffer-mode override. The engine dereferences the ring contents at 0x210/0x310
@@ -146,12 +86,6 @@ MODULE_PARM_DESC(wait_ready_ms,
 		 "Settle budget (ms) to wait for the flash-persisted session to answer at probe before giving "
 		 "up (default 2000).");
 
-static int force_flat = -1;
-module_param(force_flat, int, 0444);
-MODULE_PARM_DESC(force_flat,
-		 "Override buffer mode: -1 = model default (descriptor for all current models), 0 = force "
-		 "descriptor table, 1 = force flat sample ring (faults on a zeroed ring).");
-
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
  * alignment by 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our
@@ -175,12 +109,6 @@ MODULE_PARM_DESC(tx_frag_pad,
 		 "0 = contiguous (the old back-to-back TX ring that folded 28ch->4 on the 8PreX), "
 		 ">0 = audio bytes + this padding. The working RX path and the vendor TX ring are both "
 		 "non-contiguous; this makes our TX match.");
-
-static int arm_settle_ms;
-module_param(arm_settle_ms, int, 0644);
-MODULE_PARM_DESC(arm_settle_ms,
-		 "Quiet wait before the final arm, with the engine torn down and the BAR untouched, "
-		 "mimicking the vendor's 3.1 s (2Pre) / 5.9 s (8PreX) / 3.0 s (4Pre) pre-stream window.");
 
 static int meter_poll_ms = CLARETT_METER_POLL_MS;
 module_param(meter_poll_ms, int, 0444);
@@ -729,39 +657,6 @@ static void clarett_stream_report(struct work_struct *work)
  * there is wide margin to slow this down once the counter->frame mapping is pinned).
  */
 /*
- * Stall re-kick (experiment, module param `rekick`). The engine streams exactly one ring pass (~248
- * periods) then freezes even under continuous ACKing — Focusrite Control arms once and streams for
- * minutes, so the engine *can* wrap; we are missing whatever lets it. A FULL re-arm does NOT restart a
- * stalled engine (tested: re-arm after a pass => 0 periods), so try lighter nudges that don't disable
- * it. Re-writing the ring bases re-fetches the descriptor table from the top; 0x110 re-arms the period
- * IRQ. Methods are swept by `rekick` to find one (if any) that resumes the counter.
- */
-static void clarett_stream_rekick(struct clarett *c)
-{
-	void __iomem *bar = c->bar0;
-
-	switch (rekick) {
-	case 4:	/* re-issue the stream-start commit (mailbox); heavier than a register poke */
-		clarett_data_cmd(c, 5);
-		break;
-	case 2:	/* rewrite both ring bases (rewind descriptor walk) then re-arm */
-		writel(readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_HI), bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);
-		writel(readl(bar + STREAM_BLK0 + STREAM_OFF_BASE_LO), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO);
-		writel(readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_HI), bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);
-		writel(readl(bar + STREAM_BLK1 + STREAM_OFF_BASE_LO), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO);
-		writel(0x7, bar + REG_STREAM_IRQ_ARM);
-		break;
-	case 3:	/* rewrite global enable then re-arm */
-		writel(1, bar + STREAM_BLK0 + STREAM_OFF_CTRL);
-		writel(0x7, bar + REG_STREAM_IRQ_ARM);
-		break;
-	default: /* 1: just re-arm the period IRQ */
-		writel(0x7, bar + REG_STREAM_IRQ_ARM);
-		break;
-	}
-}
-
-/*
  * Log one servicer telemetry line at info if the window was BAD, else at debug. The healthy case is
  * the common case and it repeats every 2 s for as long as a stream is open — which, with enable_pcm
  * on, is "as long as the machine is up" (PipeWire adopts the card and holds a PCM). See the
@@ -780,12 +675,11 @@ static int clarett_stream_service(void *data)
 	struct clarett *c = data;
 	void __iomem *bar = c->bar0;
 	unsigned long next_log = jiffies + msecs_to_jiffies(2000);
-	unsigned long last_tick = jiffies;
-	u32 wraps = 0, rekicks = 0, bad_reads = 0;
+	u32 wraps = 0, bad_reads = 0;
 	u32 bad_or = 0;		/* cumulative OR of every rejected 0x300 sample (badbits) */
 	u32 overruns = 0;	/* events flagged CLARETT_CTR_OVERRUN (device saw a missed ack) */
 	/* Previous window's values of the cumulative counters, so a window can tell whether IT was bad. */
-	u32 prev_rekicks = 0, prev_bad_reads = 0, prev_overruns = 0;
+	u32 prev_bad_reads = 0, prev_overruns = 0;
 	/* Run-wide worst case, for the one-line summary at stop (the windows reset their own maxima). */
 	u64 run_gap_max_us = 0, run_read_us_max = 0;
 	u32 run_late = 0, run_step_max = 0;
@@ -959,7 +853,6 @@ static int clarett_stream_service(void *data)
 				c->stream_ctr_step = step;
 			c->stream_ctr = ctr;
 			seen = true;
-			last_tick = jiffies;
 
 			{
 				ktime_t now = ktime_get();
@@ -987,37 +880,23 @@ static int clarett_stream_service(void *data)
 
 			atomic_inc(&c->stream_periods);
 			clarett_pcm_tick(c, step * CLARETT_CTR_FRAMES);	/* advance by real captured frames (no-op if idle) */
-		} else if (rekick && seen &&
-			   time_after(jiffies, last_tick + msecs_to_jiffies(rekick_ms))) {
-			/* Stalled mid-stream: counter frozen for rekick_ms while still ACKing. Nudge it. */
-			if (!rekicks)
-				dev_info(&c->pci->dev,
-					 "stall dump: caps=%08x irq0=%08x blk0=%08x blk1=%08x p0=%08x p1=%08x info=%08x (0xffffffff == dead/off-bus)\n",
-					 readl(bar + REG_CAPS), readl(bar + REG_IRQ0_CAUSE),
-					 readl(bar + STREAM_BLK0), readl(bar + STREAM_BLK1),
-					 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
-					 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
-					 readl(bar + REG_INFO));
-			clarett_stream_rekick(c);
-			rekicks++;
-			last_tick = jiffies;		/* don't re-kick until another rekick_ms elapses */
 		}
 		if (time_after(jiffies, next_log)) {
 			/*
 			 * DEFAULT-QUIET. This line used to be unconditional dev_info, i.e. one kernel-log line
 			 * every 2 s forever on any machine running PipeWire. Print at info only when the window
 			 * saw something actually wrong — a late tick (how the ~42 ms platform freeze presents),
-			 * a device-side period overrun, a rejected sample, or a rekick — and leave the healthy
+			 * a device-side period overrun, or a rejected sample — and leave the healthy
 			 * case to dynamic debug. To get every window back without also enabling the ~24 Hz
 			 * mailbox trace, match this statement by its format:
 			 *   echo 'format "stream-svc:" +p' >/sys/kernel/debug/dynamic_debug/control
 			 */
-			bool bad = gap_late || rekicks != prev_rekicks ||
-				   bad_reads != prev_bad_reads || overruns != prev_overruns;
+			bool bad = gap_late || bad_reads != prev_bad_reads ||
+				   overruns != prev_overruns;
 
 			clarett_svc_log(c, bad,
-				 "stream-svc: periods=%d ctr=0x%x wraps=%u rekicks=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u\n",
-				 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
+				 "stream-svc: periods=%d ctr=0x%x wraps=%u gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u\n",
+				 atomic_read(&c->stream_periods), c->stream_ctr, wraps,
 				 gap_max_us, read_us_max, gap_late, step_max, bad_reads, bad_or, overruns);
 
 			if (gap_max_us > run_gap_max_us)
@@ -1027,7 +906,6 @@ static int clarett_stream_service(void *data)
 			if (step_max > run_step_max)
 				run_step_max = step_max;
 			run_late += gap_late;
-			prev_rekicks = rekicks;
 			prev_bad_reads = bad_reads;
 			prev_overruns = overruns;
 
@@ -1053,10 +931,10 @@ static int clarett_stream_service(void *data)
 	 * had anything wrong with it, so a clean session leaves the log untouched from arm to teardown.
 	 * PTR tells whether the engine walked the descriptor table at all — the thing ctr=0 leaves open.
 	 */
-	clarett_svc_log(c, run_late || rekicks || bad_reads || overruns,
-		 "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u rekicks=%u ptr0=0x%x ptr1=0x%x; "
+	clarett_svc_log(c, run_late || bad_reads || overruns,
+		 "stream-svc: stopped (periods=%d ctr=0x%x wraps=%u ptr0=0x%x ptr1=0x%x; "
 		 "run gapmax=%lluus readmax=%lluus late=%u stepmax=0x%x badreads=%u badbits=0x%08x overrun=%u)\n",
-		 atomic_read(&c->stream_periods), c->stream_ctr, wraps, rekicks,
+		 atomic_read(&c->stream_periods), c->stream_ctr, wraps,
 		 readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
 		 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR),
 		 run_gap_max_us, run_read_us_max, run_late, run_step_max,
@@ -1067,7 +945,7 @@ static int clarett_stream_service(void *data)
 /*
  * Arm the data-plane engine over caller-provided descriptor-table bases.
  * r0 = block-0 (TX/playback) table base, r1 = block-1 (RX/capture) table base; pass 0 to skip a block
- * (capture-only uses r0=0, the proven blk1_only config). Replays SET_CLOCK, the 12-register stream
+ * Replays SET_CLOCK, the 12-register stream
  * arm (base-before-enable), and the DATA_CMD{5} commit. Sleeps (mailbox FCP) — call from prepare or
  * probe context, never from the atomic PCM trigger. Leaves the engine armed-and-committed but paused:
  * it prefills a few descriptors and waits for the servicer to ACK 0x300 (gated by stream_run).
@@ -1098,7 +976,7 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 		writel(c->model->playback_channels, bar + STREAM_BLK0 + STREAM_OFF_CHANS); /* 0x204 */
 		writel(clarett_period_bytes(c->model->playback_channels),
 		       bar + STREAM_BLK0 + STREAM_OFF_SIZE);				  /* 0x208 period */
-		writel(base_hi >= 0 ? base_hi : upper_32_bits(r0),
+		writel(upper_32_bits(r0),
 		       bar + STREAM_BLK0 + STREAM_OFF_BASE_HI);			  /* 0x214 */
 		writel(lower_32_bits(r0), bar + STREAM_BLK0 + STREAM_OFF_BASE_LO); /* 0x210 (low last) */
 	}
@@ -1106,7 +984,7 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 		writel(c->model->capture_channels, bar + STREAM_BLK1 + STREAM_OFF_CHANS);  /* 0x304 */
 		writel(clarett_period_bytes(c->model->capture_channels),
 		       bar + STREAM_BLK1 + STREAM_OFF_SIZE);				  /* 0x308 period */
-		writel(base_hi >= 0 ? base_hi : upper_32_bits(r1),
+		writel(upper_32_bits(r1),
 		       bar + STREAM_BLK1 + STREAM_OFF_BASE_HI);			  /* 0x314 */
 		writel(lower_32_bits(r1), bar + STREAM_BLK1 + STREAM_OFF_BASE_LO); /* 0x310 */
 	}
@@ -1117,53 +995,10 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 	c->stream_on = true;
 }
 
-/*
- * Tear an armed engine back down the way the vendor does between its throwaway arms: stop the period
- * IRQ, sweep the five cause blocks (read-to-clear), write the cause block back, then read the per-block
- * status/PTR words. Deliberately NOT clarett_engine_stop() — that one also stops the servicer kthread
- * and clears 0x20c/0x108, which the vendor does not do here. No mailbox command can be in flight (the
- * handshake has finished), so writing 0x100 cannot eat a DONE bit.
- */
-static void clarett_engine_quiesce(struct clarett *c)
-{
-	void __iomem *bar = c->bar0;
-
-	writel(0, bar + REG_STREAM_IRQ_ARM);		/* 0x110 = 0 */
-	readl(bar + REG_CAPS);
-	readl(bar + REG_IRQ0_CAUSE);
-	readl(bar + STREAM_BLK1);
-	readl(bar + STREAM_BLK0);
-	readl(bar + REG_NOTIFY_CAUSE);
-	readl(bar + 0x500);
-	writel(0xf, bar + REG_IRQ0_CAUSE);
-	c->stream_on = false;
-}
-
-/*
- * Arm the engine, optionally preceded by the vendor's arm ritual (see arm_pre/arm_settle_ms). The
- * throwaway arms program the identical 14 registers and are torn down without being serviced, exactly
- * as the vendor's four are; the settle window then leaves the BAR untouched. Sleeps — process context
- * only, which is where every caller already is.
- */
+/* Arm the engine. Sleeps — process context only, which is where every caller already is. */
 void clarett_engine_arm(struct clarett *c, dma_addr_t r0, dma_addr_t r1)
 {
 	void __iomem *bar = c->bar0;
-	int i;
-
-	for (i = 0; i < arm_pre; i++) {
-		clarett_engine_program(c, r0, r1);
-		if (arm_hold_us > 0)
-			usleep_range(arm_hold_us, arm_hold_us + 500);
-		clarett_engine_quiesce(c);
-		if (arm_gap_ms > 0)
-			msleep(arm_gap_ms);
-	}
-	if (arm_pre)
-		dev_info(&c->pci->dev, "arm ritual: %d throwaway arms done (ptr0=0x%x ptr1=0x%x), settling %d ms\n",
-			 arm_pre, readl(bar + STREAM_BLK0 + STREAM_OFF_PTR),
-			 readl(bar + STREAM_BLK1 + STREAM_OFF_PTR), arm_settle_ms);
-	if (arm_settle_ms > 0)
-		msleep(arm_settle_ms);
 
 	clarett_engine_program(c, r0, r1);
 
@@ -1282,8 +1117,8 @@ int clarett_engine_start(struct clarett *c)
 	r0 = c->stream_dma;		/* block-0 descriptor-table base */
 	r1 = c->stream_dma + ring;	/* block-1 descriptor-table base */
 
-	/* Arm+commit the engine (SET_CLOCK, 12-register sequence, DATA_CMD{5}); blk1_only skips block 0. */
-	clarett_engine_arm(c, blk1_only ? 0 : r0, r1);
+	/* Arm+commit the engine (SET_CLOCK, 12-register sequence, DATA_CMD{5}). */
+	clarett_engine_arm(c, r0, r1);
 	WRITE_ONCE(c->stream_run, true);	/* probe streams immediately — no PCM trigger to gate it */
 	clarett_engine_run(c);
 
@@ -1349,7 +1184,7 @@ void clarett_engine_stop(struct clarett *c)
 		kthread_stop(svc);			/* stop acking 0x300 before the engine is torn down */
 	cancel_delayed_work_sync(&c->stream_report);
 	writel(0, c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);	/* disable ring 0 */
-	writel(0, c->bar0 + STREAM_BLK1 + STREAM_OFF_CTRL);	/* disable ring 1 (blk1_only path) */
+	writel(0, c->bar0 + STREAM_BLK1 + STREAM_OFF_CTRL);	/* disable ring 1 */
 	writel(0, c->bar0 + REG_STREAM_IRQ_ARM);
 	writel(0, c->bar0 + REG_STREAM_IRQ_CFG);
 	readl(c->bar0 + STREAM_BLK0 + STREAM_OFF_CTRL);		/* flush posted writes */
@@ -1977,8 +1812,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		/* Nothing arms the device, so its flash-persisted routing stands untouched. */
 	}
 
-	/* Effective buffer mode: the model default, overridable by force_flat for experiments. */
-	c->flat_buffer = force_flat >= 0 ? force_flat : c->model->flat_buffer;
+	c->flat_buffer = c->model->flat_buffer;
 	/* RX fragment slot stride: default = page-safe pow2 (fixes the even-channel drift);
 	 * 0 = contiguous (old); >0 = audio + manual padding. */
 	{
@@ -2410,8 +2244,7 @@ static const struct clarett_model clarett_2pre = {
 						 * clarett_frag_bytes() per direction */
 	/* Descriptor mode: the "2Pre wants flat" hypothesis was falsified on hardware — the engine
 	 * dereferences the ring as a table, so a flat ring faults writing a 16-frame fragment to GPA 0. The
-	 * 2Pre "flat audio" RAM dump was the fragment buffers, not the table. flat_buffer stays false; re-test
-	 * only via force_flat=1 after the pre-arm pmemsave shows the real seed. */
+	 * 2Pre "flat audio" RAM dump was the fragment buffers, not the table. flat_buffer stays false. */
 	.stream_tx_ids = clarett_2pre_stream_tx,
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
 	.stream_rx_ids = clarett_2pre_stream_rx,

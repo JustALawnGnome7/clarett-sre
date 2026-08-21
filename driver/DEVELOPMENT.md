@@ -245,8 +245,8 @@ snd_clarett 0000:0a:00.0: Clarett 2Pre (auto-detected): serial 0000000012345678 
 The levels mean:
 
 - **info** — the probe summary above, and a `stream-svc:` line for any 2-second window (or any
-  stream) in which something went wrong: a late servicer tick, a device-side period overrun, a
-  rejected `0x300` sample, or a rekick. Silence during playback is the healthy state; a dropout
+  stream) in which something went wrong: a late servicer tick, a device-side period overrun, or a
+  rejected `0x300` sample. Silence during playback is the healthy state; a dropout
   announces itself.
 - **warn** — degraded but working: a short MSI vector count, a subsystem that failed to register,
   a config-shadow seed failure, a transiently unreachable link.
@@ -274,7 +274,7 @@ echo 'func clarett_stream_service +p' | sudo tee /sys/kernel/debug/dynamic_debug
 `sudo make load ARGS="dyndbg='+p'"`.
 
 The remaining `dev_info` sites all sit behind an opt-in module parameter (`stream_probe`,
-`error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`), so
+`error_probe`, `seed_dump`, `resp_trace`, `tx_trace`), so
 enabling one of those still prints at info as before.
 
 ## Module parameters

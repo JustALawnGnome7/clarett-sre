@@ -610,7 +610,7 @@ struct clarett {
 	 * the engine runs (vec1/vec2 period IRQs + DMA pointer advancing). See clarett_engine_start().
 	 */
 	bool stream_on;
-	bool flat_buffer;		/* effective buffer mode (model default, overridable by force_flat) */
+	bool flat_buffer;		/* effective buffer mode (from the model; false on all current models) */
 	u32 rx_slot;			/* RX descriptor fragment SLOT stride in bytes (>= audio bytes/fragment).
 					 * = audio bytes when contiguous (rx_frag_pad=0); larger to break buffer
 					 * contiguity (scatter-gather experiment for the page-drift glitch). */
