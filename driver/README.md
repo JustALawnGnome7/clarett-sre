@@ -77,10 +77,31 @@ The whole Clarett line is **Thunderbolt 2**, which takes a little setup to reach
 
 ```sh
 make                        # builds snd-clarett.ko against the running kernel
-sudo insmod snd-clarett.ko  # auto-binds PCI 1cb5:0002
+sudo make load              # loads it (auto-binds PCI 1cb5:0002)
 ```
 
-Build against another tree with `make KDIR=/path/to/kernel`.
+Build against another tree with `make KDIR=/path/to/kernel`, and pass module parameters with
+`sudo make load ARGS='enable_pcm=0'`.
+
+To install it permanently instead, so it loads by name and survives across sessions:
+
+```sh
+sudo make modules_install   # installs under /lib/modules/$(uname -r) and runs depmod
+sudo modprobe snd-clarett
+```
+
+**Do not use a bare `insmod snd-clarett.ko`.** `insmod` loads exactly the file you name and does
+not resolve dependencies, and this module links against `snd-pcm`, `snd-hwdep` and `snd-rawmidi`.
+The first two are normally already loaded by whatever drives your onboard audio, but
+`snd-rawmidi` only appears once something needs MIDI — so on a machine with no MIDI device
+present, `insmod` fails with:
+
+```
+snd_clarett: Unknown symbol snd_rawmidi_receive (err -2)
+```
+
+That is a missing dependency, not a broken build. `make load` pulls the three in first;
+`modprobe` resolves them itself once the module is installed.
 
 ## Using it
 
@@ -103,7 +124,7 @@ device itself — it reports its own stream geometry, which is unique per model.
 nothing to configure:
 
 ```sh
-sudo insmod snd-clarett.ko
+sudo make load
 ```
 
 The driver logs which model it found:
@@ -157,7 +178,7 @@ sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
 - **Rarely, no card appears right after a cold Thunderbolt attach** — if the driver loads before
   the interface has finished coming up, it waits briefly and, if the device still isn't
   responding, refuses to register rather than come up half-working (it logs *"device did not
-  become ready"*). Just reload the module (`rmmod snd_clarett; insmod snd-clarett.ko`) — the
+  become ready"*). Just reload the module (`sudo make unload && sudo make load`) — the
   device settles within a moment.
 
 ## How it works / contributing

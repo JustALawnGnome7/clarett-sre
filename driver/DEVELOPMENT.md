@@ -187,9 +187,11 @@ free for `snd-clarett` to claim:
 2. Unbind from `vfio-pci` and let `snd-clarett` bind:
    ```sh
    echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind
-   sudo insmod snd-clarett.ko
+   sudo make load
    echo 0000:09:00.0 | sudo tee /sys/bus/pci/drivers/snd-clarett/bind   # if not auto-bound
    ```
+   `make load` rather than a bare `insmod`, because `insmod` does not resolve dependencies and
+   this module needs `snd-pcm`, `snd-hwdep` and `snd-rawmidi` resident (see README).
    (Also remove any `vfio-pci.ids=` / `driver_override` or modprobe binding that re-grabs the
    device at boot.)
 3. Verify with `amixer -c <n> contents`, then test a control:
@@ -269,7 +271,7 @@ echo 'func clarett_stream_service +p' | sudo tee /sys/kernel/debug/dynamic_debug
 ```
 
 `-p` in place of `+p` turns them off again. To catch probe-time lines, pass it at load instead:
-`insmod snd-clarett.ko dyndbg='+p'`.
+`sudo make load ARGS="dyndbg='+p'"`.
 
 The remaining `dev_info` sites all sit behind an opt-in module parameter (`stream_probe`,
 `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`), so
