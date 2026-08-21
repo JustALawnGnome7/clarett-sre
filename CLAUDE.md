@@ -289,17 +289,29 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   front-end" above: the TB layer is an Intel DSL2210 and the FPGA is a PCIe endpoint *behind* it.
   Irrelevant for bandwidth (worst case in the line, 8PreX 28in+28out S32 @192 kHz, is ~344 Mb/s both
   directions).
-- **Correctable `BadDLLP` AER bursts on the dock's downstream port are EXPECTED and benign (Aug 21 2026,
-  EliteBook 640 G11 + Dock G4 + Apple adapter + 8Pre).** `pcieport 0000:03:04.0: ... [ 7] BadDLLP`, a few
-  in one second, means a Data Link Layer Packet failed CRC at that port; the link layer retransmits and
-  nothing is lost — that is what *Correctable* means. The reported ID is the port that **detected** it, so
-  the marginal signalling is on the link *below* it (here the leg toward the Clarett's DSL2210, over a TB4
-  dock and an active TB3→TB2 adapter at TB1 rates — about as awkward as a PCIe link gets). A burst at
-  link-up is normal. What would matter is a SUSTAINED rate, which costs retransmission latency and would
-  surface as stream jitter, not as errors: check `/sys/bus/pci/devices/<port>/aer_dev_correctable` for the
-  cumulative count and compare `LnkSta` against `LnkCap` for a trained-down link. If it ever is continuous,
-  try the other port, reseat, and `pcie_aspm=off` (L0s/L1 exit on a marginal link is a common source);
-  do **not** use `pci=noaer`, which hides the reporting without changing the link.
+- **★ A `BadDLLP` AER STORM ON THIS RIG IS THE DOCK'S OWN NIC LEG, NOT THE AUDIO CHAIN — and the ONLY way
+  to tell is the sysfs parentage (Aug 21 2026, EliteBook 640 G11 + HP Dock G4 + Apple adapter + 8Pre).**
+  `pcieport 0000:03:04.0: ... [ 7] BadDLLP`, ~45/s sustained, 37.6k cumulative, surviving a clean reboot
+  with everything attached. **Measured per-port after a reboot: `03:00.0`/`03:01.0`/`03:02.0`/`03:03.0` all
+  read `BadDLLP=0` while `03:04.0` alone read 12621 — and the Clarett hangs off `03:01.0`,** so its leg is
+  provably clean (`05:00.0` also runs at its full rated 2.5 GT/s x4). `03:04.0` leads to the dock's
+  internal `I225-LMvP` Ethernet. Nothing to do with the device, the adapter, or the driver.
+  - **The check that resolves it in one line:** `readlink -f /sys/bus/pci/devices/<clarett bdf>` prints the
+    literal parent chain, naming which downstream port the device is actually behind. Then read
+    `aer_dev_correctable` on *every* sibling port — a reboot gives a zeroed baseline, so one climbing port
+    stands out immediately.
+  - **Two dead ends worth not repeating.** (1) Reasoning from the `lspci` listing ORDER: the ports and the
+    device appear adjacent, which suggests but does not establish parentage. (2) Comparing `LnkSta` against
+    `LnkCap`, or comparing the two ends of a link against each other: **PCIe over a Thunderbolt tunnel is
+    SYNTHESISED, not negotiated over wire**, so the two ends legitimately disagree (here `03:04.0` read
+    5 GT/s x1 against `05:00.0`'s 2.5 GT/s x4) and a mismatch proves nothing either way.
+  - **Meaning:** correctable = the link layer retransmitted and nothing was lost. The cost is retransmit
+    latency, which on this project would surface as stream jitter, never as corrupt audio — so the arbiter
+    is the servicer telemetry (`late`/`gapmax`/`badreads`), not the AER count. The real cost here is **log
+    noise**: 6050 AER lines can bury a `stream-badread`, a `WARN_ON_ONCE` splat or a probe error in
+    `journalctl -k`. If it interferes, mask the correctable reporting on that one device; do **not** use
+    `pci=noaer`, which blinds AER machine-wide. If a storm ever does land on the audio leg, reseat, try the
+    other port, and test `pcie_aspm=off` (L0s/L1 exit on a marginal link is a common source).
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
