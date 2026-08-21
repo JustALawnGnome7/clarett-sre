@@ -264,22 +264,42 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   kernel arguments are ASRock-specific too** — not needed on the EliteBook, which enumerates the Clarett
   with stock parameters. Try stock first; those arguments work around firmware that under-allocates bus
   numbers behind the Apple TB3→TB2 adapter's bridge, they are not a device requirement.
-- **A TB4 HOST NEEDS AN INTERMEDIATE TB3 DOCK for the Apple TB3→TB2 adapter (Aug 19 2026).** An **HP
-  EliteBook 640 G11** (integrated Thunderbolt 4, Core Ultra) will **not** enumerate a Clarett through the
-  Apple adapter plugged in directly; putting an **HP TB3 dock** between host and adapter makes it work. The
-  legacy TB1/TB2 link negotiation the active adapter needs lives in **discrete** TB3 controller silicon, and
-  Intel's integrated TB4 host ports dropped it — the dock terminates the TB4 link at its own discrete
-  controller and re-originates a downstream port that still speaks legacy, so the handshake happens
-  dock↔adapter, never host↔adapter. (The 840 G5 above is discrete TB3, which is why it takes the adapter
-  directly.) Secure Boot off, stock `pci=` parameters, no security-level change needed.
+- **A TB4 HOST NEEDS AN INTERMEDIATE DOCK for the Apple TB3→TB2 adapter — and the dock's controller must
+  be DISCRETE, not its Thunderbolt generation (Aug 19 2026; corrected Aug 21 2026).** An **HP EliteBook
+  640 G11** (integrated Thunderbolt 4, Core Ultra) will **not** enumerate a Clarett through the Apple
+  adapter plugged in directly; putting a dock between host and adapter makes it work. **The dock does NOT
+  have to be TB3: an HP Thunderbolt Dock G4 — a TB4 dock, Goshen Ridge `[8086:0b26]` — carries the adapter
+  fine (user-confirmed both directions on the same dock: direct fails, via-dock works).** So the earlier
+  "needs a TB3 dock" was too narrow. The property that matters is that the link terminates at a **discrete**
+  Thunderbolt controller which re-originates a downstream port still speaking legacy TB1/TB2, so the
+  handshake happens dock↔adapter and never host↔adapter; Intel's **integrated** TB4 host ports (Meteor
+  Lake / Core Ultra) dropped that. Discrete TB3 (Alpine Ridge) and discrete TB4 (Goshen Ridge) both work.
+  (The 840 G5 above has a discrete TB3 host controller, which is why it takes the adapter directly.)
+  Secure Boot off, stock `pci=` parameters, no security-level change needed.
+  **NOTE the Aug 19 record identified the dock's bridges as `DSL6540 Alpine Ridge 4C` where the same rig
+  now reads Goshen Ridge** — so either a second dock was in use then, or that identification was wrong and
+  a genuinely TB3 dock has never actually been tested here (only inferred). Either way the corrected claim
+  stands, because the failing and working legs were both re-run on the G4.
   **`boltctl` saying `authorized` is NOT enough — `lspci -nn -d 1cb5:` is the check that the PCIe tunnel
   actually came up**, and behind a dock plus a legacy adapter that is where a chain falls down.
-  Bridge chain also identifies the device's own Thunderbolt controller: host → **DSL6540 Alpine Ridge 4C**
-  (the dock) → **DSL2210 "Port Ridge 1C"** (upstream + 2 downstream ports = the unit's in/thru jacks) →
-  the `1cb5:0002` endpoint. So the **10 Gb/s single-lane link is the Clarett's own TB1-class controller, not
-  a dock penalty**, and it refines "FPGA-based Thunderbolt front-end" above: the TB layer is an Intel
-  DSL2210 and the FPGA is a PCIe endpoint *behind* it. Irrelevant for bandwidth (worst case in the line,
-  8PreX 28in+28out S32 @192 kHz, is ~344 Mb/s both directions).
+  Bridge chain also identifies the device's own Thunderbolt controller: host root port → **dock switch**
+  (upstream bridge + several downstream bridges) → **DSL2210 "Port Ridge 1C"** (upstream + 2 downstream
+  ports = the unit's in/thru jacks) → the `1cb5:0002` endpoint. So the **10 Gb/s single-lane link is the
+  Clarett's own TB1-class controller, not a dock penalty**, and it refines "FPGA-based Thunderbolt
+  front-end" above: the TB layer is an Intel DSL2210 and the FPGA is a PCIe endpoint *behind* it.
+  Irrelevant for bandwidth (worst case in the line, 8PreX 28in+28out S32 @192 kHz, is ~344 Mb/s both
+  directions).
+- **Correctable `BadDLLP` AER bursts on the dock's downstream port are EXPECTED and benign (Aug 21 2026,
+  EliteBook 640 G11 + Dock G4 + Apple adapter + 8Pre).** `pcieport 0000:03:04.0: ... [ 7] BadDLLP`, a few
+  in one second, means a Data Link Layer Packet failed CRC at that port; the link layer retransmits and
+  nothing is lost — that is what *Correctable* means. The reported ID is the port that **detected** it, so
+  the marginal signalling is on the link *below* it (here the leg toward the Clarett's DSL2210, over a TB4
+  dock and an active TB3→TB2 adapter at TB1 rates — about as awkward as a PCIe link gets). A burst at
+  link-up is normal. What would matter is a SUSTAINED rate, which costs retransmission latency and would
+  surface as stream jitter, not as errors: check `/sys/bus/pci/devices/<port>/aer_dev_correctable` for the
+  cumulative count and compare `LnkSta` against `LnkCap` for a trained-down link. If it ever is continuous,
+  try the other port, reseat, and `pcie_aspm=off` (L0s/L1 exit on a marginal link is a common source);
+  do **not** use `pci=noaer`, which hides the reporting without changing the link.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
