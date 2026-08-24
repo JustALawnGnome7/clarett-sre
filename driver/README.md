@@ -103,6 +103,41 @@ snd_clarett: Unknown symbol snd_rawmidi_receive (err -2)
 That is a missing dependency, not a broken build. `make load` pulls the three in first;
 `modprobe` resolves them itself once the module is installed.
 
+### Keeping it installed across kernel upgrades
+
+`make modules_install` puts the module under the kernel it was built against and nowhere
+else, so the next kernel update leaves you with no driver until you rebuild by hand. For
+anything other than a quick test, install it through a system that rebuilds it for you.
+
+**DKMS** — works the same on Fedora, Debian/Ubuntu and Arch, and can sign the module for
+Secure Boot:
+
+```sh
+sudo dnf install dkms        # or: apt install dkms / pacman -S dkms
+sudo make dkms-install       # registers the source and builds for the running kernel
+sudo modprobe snd-clarett
+```
+
+It rebuilds automatically on every kernel install from then on. Check with
+`dkms status snd-clarett`, and undo the whole thing with `sudo make dkms-uninstall`.
+
+**RPM (Fedora)** — `packaging/` holds two specs: `snd-clarett-kmod.spec`, which produces
+the Fedora-native `akmod-snd-clarett` (and per-kernel `kmod-snd-clarett-<kernel>`
+packages), and `snd-clarett-dkms.spec`, which wraps the DKMS route above in an RPM. Build
+instructions are in the header of each. `make dist` produces the source tarball both
+consume.
+
+Either route makes the module load on its own when the interface appears, through the
+PCI id alias — no `modprobe` and no udev rule needed once it is installed.
+
+### Secure Boot
+
+The module is unsigned, so on a machine with Secure Boot enabled the kernel will refuse to
+load it (`Key was rejected by service`). Either turn Secure Boot off in your firmware, or
+enrol a Machine Owner Key and sign with it. DKMS is the easier path for the second: recent
+versions generate and sign with a MOK automatically, leaving you to enrol it once with
+`sudo mokutil --import /var/lib/dkms/mok.pub` and confirm at the next reboot.
+
 ## Using it
 
 ### Controls — mixer, routing, preamps, metering
