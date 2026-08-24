@@ -3,16 +3,42 @@
 #   make KDIR=...         # build against a specific kernel tree
 #   make modules_install  # install + depmod, so `modprobe snd-clarett` works (needs root)
 #   make load             # load in place, pulling in the ALSA modules it needs
+#   make dkms-install     # register with DKMS so it rebuilds on every kernel upgrade
+#   make dist             # source tarball, the input to the RPM packaging
 #   make clean
+
+# Named once, for both halves of this file: the kbuild half turns it into the object
+# list, the packaging half into the tarball/DKMS payload. Adding a source file here is
+# the only edit either needs.
+CLARETT_SRCS := clarett_main.c clarett_mailbox.c clarett_pcm.c clarett_hwdep.c clarett_midi.c
+CLARETT_HDRS := clarett.h clarett_fcp_uapi.h
 
 ifneq ($(KERNELRELEASE),)
 
 obj-m := snd-clarett.o
-snd-clarett-objs := clarett_main.o clarett_mailbox.o clarett_pcm.o clarett_hwdep.o clarett_midi.o
+snd-clarett-objs := $(CLARETT_SRCS:.c=.o)
+
+# CLARETT_VERSION is handed down by the outer half below, which reads it out of
+# dkms.conf. Anything that invokes kbuild directly (rather than through this file's
+# `all` target) won't set it, and a module that quietly reports a version it did not
+# come from is worse than one that admits it doesn't know — hence the explicit
+# unknown marker rather than a plausible-looking default.
+CLARETT_VERSION ?= 0.0.0-unknown
+ccflags-y += -DCLARETT_VERSION=\"$(CLARETT_VERSION)\"
 
 else
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
+
+# dkms.conf owns the version (see the comment there). Parse rather than duplicate, so
+# there is exactly one place to bump and no way for the compiled-in MODULE_VERSION to
+# disagree with the package that shipped it.
+PKGNAME := snd-clarett
+CLARETT_VERSION := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"$$/\1/p' $(CURDIR)/dkms.conf)
+
+DISTFILES := $(CLARETT_SRCS) $(CLARETT_HDRS) Makefile dkms.conf README.md DEVELOPMENT.md
+TARBALL   := $(PKGNAME)-$(CLARETT_VERSION).tar.gz
+DKMS_SRC  := /usr/src/$(PKGNAME)-$(CLARETT_VERSION)
 
 # insmod does NOT resolve dependencies — it loads exactly the file named — so loading the .ko
 # in place needs the modules it links against resident first. snd-pcm and snd-hwdep are usually
@@ -28,13 +54,17 @@ KDIR ?= /lib/modules/$(shell uname -r)/build
 # module, and the missing one only surfaces later as "Unknown symbol" from insmod.
 MODDEPS = $(shell modinfo -F depends $(CURDIR)/snd-clarett.ko 2>/dev/null | tr ',' ' ')
 
-.PHONY: all clean modules_install load unload
+.PHONY: all clean modules_install load unload version dist dkms-install dkms-uninstall
 
 all:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
+	$(MAKE) -C $(KDIR) M=$(CURDIR) CLARETT_VERSION=$(CLARETT_VERSION) modules
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+	rm -f $(PKGNAME)-*.tar.gz
+
+version:
+	@echo $(CLARETT_VERSION)
 
 modules_install:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules_install
@@ -50,5 +80,34 @@ load:
 
 unload:
 	rmmod snd_clarett
+
+# Source tarball named the way rpmbuild expects (%{name}-%{version}/ prefix inside), so
+# packaging/snd-clarett-kmod.spec can consume it unmodified. Only the files needed to
+# build and understand the module go in — no build artefacts, no capture logs.
+dist:
+	@test -n "$(CLARETT_VERSION)" || { echo "no PACKAGE_VERSION in dkms.conf"; exit 1; }
+	tar --transform 's,^,$(PKGNAME)-$(CLARETT_VERSION)/,' \
+	    --owner=0 --group=0 --numeric-owner --sort=name \
+	    -czf $(TARBALL) $(DISTFILES)
+	@echo "wrote $(TARBALL)"
+
+# DKMS wants the source under /usr/src/<name>-<version>/ and finds it by that exact name,
+# so the copy and the registration both key off CLARETT_VERSION. Needs root.
+dkms-install:
+	@command -v dkms >/dev/null || \
+		{ echo "dkms is not installed (Fedora: dnf install dkms)"; exit 1; }
+	install -d $(DKMS_SRC)
+	cp -t $(DKMS_SRC) $(DISTFILES)
+	@# `dkms add` fails rather than no-ops when the version is already registered, and
+	@# --force is not portable across dkms 2.x/3.x — so ask first.
+	@dkms status -m $(PKGNAME) -v $(CLARETT_VERSION) | grep -q . || \
+		dkms add -m $(PKGNAME) -v $(CLARETT_VERSION)
+	dkms build -m $(PKGNAME) -v $(CLARETT_VERSION)
+	dkms install -m $(PKGNAME) -v $(CLARETT_VERSION) --force
+	@echo "installed: modprobe snd-clarett now works, and rebuilds on kernel upgrade"
+
+dkms-uninstall:
+	-dkms remove -m $(PKGNAME) -v $(CLARETT_VERSION) --all
+	rm -rf $(DKMS_SRC)
 
 endif

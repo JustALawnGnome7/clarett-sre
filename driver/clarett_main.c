@@ -2432,6 +2432,18 @@ static struct pci_driver clarett_driver = {
 };
 module_pci_driver(clarett_driver);
 
+/*
+ * Defined on the compiler command line by the Makefile, which reads it out of dkms.conf so
+ * the version in `modinfo` is the version of the package that shipped the module. The
+ * fallback is deliberately not a plausible number: it marks a build that came in through
+ * some other path (a bare kbuild invocation), where claiming a real version would send a
+ * bug report chasing the wrong tree.
+ */
+#ifndef CLARETT_VERSION
+#define CLARETT_VERSION "0.0.0-unknown"
+#endif
+
 MODULE_DESCRIPTION("Focusrite Clarett (Thunderbolt) audio interface driver");
 MODULE_AUTHOR("Miles Ramage <miles.ramage@yahoo.com>");
+MODULE_VERSION(CLARETT_VERSION);
 MODULE_LICENSE("GPL");
