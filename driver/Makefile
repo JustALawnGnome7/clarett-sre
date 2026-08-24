@@ -13,7 +13,19 @@
 CLARETT_SRCS := clarett_main.c clarett_mailbox.c clarett_pcm.c clarett_hwdep.c clarett_midi.c
 CLARETT_HDRS := clarett.h clarett_fcp_uapi.h
 
-ifneq ($(KERNELRELEASE),)
+# Kbuild includes this file with `obj` set (along with src, M and KERNELRELEASE); a direct
+# `make` has none of them.
+#
+# Testing KERNELRELEASE instead — the usual idiom, and what this used to do — is wrong here.
+# DKMS rewrites the leading `make` of its MAKE[0] into `make -jN KERNELRELEASE=<kver>` and
+# invokes the Makefile DIRECTLY, so the KERNELRELEASE test sends it into the kbuild half,
+# which defines variables and declares no targets:
+#
+#     make[1]: *** No targets.  Stop.
+#
+# `obj` tells the two apart, because only kbuild sets it. Verified by printing all four in
+# both invocations.
+ifneq ($(obj),)
 
 obj-m := snd-clarett.o
 snd-clarett-objs := $(CLARETT_SRCS:.c=.o)
