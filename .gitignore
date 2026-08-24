@@ -11,6 +11,9 @@ driver/Module.symvers
 driver/.module-common.o
 driver/.tmp_versions/
 
+# Source tarballs from `make -C driver dist` (the input to the RPM specs)
+driver/*.tar.gz
+
 # Scratch capture/diagnostic dumps captured while iterating in driver/
 # (real captures belong in captures/; see CLAUDE.md repo layout).
 driver/*.log
