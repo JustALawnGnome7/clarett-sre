@@ -237,9 +237,28 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     build-for-current-kernels path, which requires `--repo` **and** the
     `buildsys-build-<repo>-kerneldevpkgs` helper — RPM Fusion build-farm infrastructure. Use
     `--define 'buildforkernels akmod'` (the end-user package) or `--define "kernels $(uname -r)"`.
-  - **UNTESTED so far:** the actual `dkms build/install` run (dkms is not installed on this box, so
-    only the guard path and `dkms.conf` parsing were exercised), installing the akmod and letting the
-    `akmods` service rebuild across a real kernel upgrade, and DKMS MOK auto-signing under Secure Boot.
+  - **★ DKMS VERIFIED END TO END (dkms 3.4.1, Fedora 44):** `sudo make -C driver dkms-install` builds,
+    **signs with an auto-generated MOK** (`/var/lib/dkms/mok.{key,pub}`; `modinfo` shows
+    `signer: DKMS module signing key`), installs to **`/lib/modules/<kver>/extra/snd-clarett.ko.xz`**
+    (Fedora overrides `DEST_MODULE_LOCATION`, as dkms.conf says), runs depmod, and
+    `modprobe --show-depends` then resolves the whole chain **including `snd-rawmidi`** — the
+    dependency that made a bare `insmod` fail. `dkms status` = installed; installed module = `0.1.0`.
+    `dkms-uninstall` backs it all out cleanly.
+  - **★★ THE TRAP THAT BROKE THE FIRST DKMS RUN — `KERNELRELEASE` CANNOT TELL YOU KBUILD IS CALLING.**
+    `ifneq ($(KERNELRELEASE),)` is *the* conventional out-of-tree idiom and it is **wrong under DKMS**:
+    dkms rewrites the leading `make` of `MAKE[0]` into `make -jN KERNELRELEASE=<kver>` and invokes the
+    Makefile **directly** (`/usr/sbin/dkms` line ~1603, unconditional), so the test passes, make enters
+    the kbuild half, and dies with `make[1]: *** No targets.  Stop.` Measured discriminator:
+    | invocation | KERNELRELEASE | obj | src | M |
+    |---|---|---|---|---|
+    | kbuild include | set | `.` | `./.` | `/…/driver` |
+    | DKMS direct | set | *empty* | *empty* | *empty* |
+    **Only kbuild sets `obj`** — that is the test the Makefile now uses. Reproduce the dkms invocation
+    without dkms: `make -j16 KERNELRELEASE=$(uname -r) KDIR=/lib/modules/$(uname -r)/build`.
+  - **`CLEAN` is deprecated in dkms 3.x** (accepts only `true` silently) — dkms builds in a fresh copy
+    of the source, so it is simply omitted from dkms.conf.
+  - **STILL UNTESTED:** installing the akmod and letting the `akmods` service rebuild across a real
+    kernel upgrade; MOK *enrolment* under Secure Boot (the signing works, `mokutil --import` untested).
   - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
     (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
     copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
