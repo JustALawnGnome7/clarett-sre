@@ -74,6 +74,8 @@ and by the akmod. Installed as a dependency of those; there is no reason to inst
 its own.
 
 %files -n %{name}-common
+%license %{kmod_name}-%{version}/LICENSE
+%license %{kmod_name}-%{version}/LICENSES/Linux-syscall-note.txt
 %doc %{kmod_name}-%{version}/README.md
 %doc %{kmod_name}-%{version}/DEVELOPMENT.md
 

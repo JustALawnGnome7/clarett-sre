@@ -73,5 +73,6 @@ dkms install -m %{module_name} -v %{version} --force || :
 dkms remove -m %{module_name} -v %{version} --all --rpm_safe_upgrade || :
 
 %files
+%license LICENSE LICENSES/Linux-syscall-note.txt
 %doc README.md DEVELOPMENT.md
 %{_usrsrc}/%{module_name}-%{version}

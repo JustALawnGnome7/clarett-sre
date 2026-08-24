@@ -240,11 +240,24 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   - **UNTESTED so far:** the actual `dkms build/install` run (dkms is not installed on this box, so
     only the guard path and `dkms.conf` parsing were exercised), installing the akmod and letting the
     `akmods` service rebuild across a real kernel upgrade, and DKMS MOK auto-signing under Secure Boot.
-  - **OPEN before a 0.1.0 tag:** no `LICENSE` file exists (SPDX headers say `GPL-2.0-only`; the specs
-    declare it) — drop in the verbatim kernel `LICENSES/preferred/GPL-2.0` text before publishing the
-    submodule. And the specs carry **no `%changelog`**, deliberately: entries are dated, and
-    `driver/` is under the no-dates rule. Decide at first release whether a *release* date is exempt
-    (it is not an RE observation date) or whether the changelog lives outside `driver/`.
+  - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
+    (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
+    copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
+    `driver/LICENSES/Linux-syscall-note.txt` holds the exception that `clarett_fcp_uapi.h`'s
+    `GPL-2.0 WITH Linux-syscall-note` tag refers to — taken verbatim from a real `linux-headers`
+    tree, and byte-identical (modulo a trailing newline) to alsa-scarlett-gui's copy, whose flat
+    REUSE-style `LICENSES/<id>.txt` layout this matches. Both RPMs register both files via `%license`.
+    - **`MODULE_LICENSE("GPL")` is CORRECT alongside SPDX `GPL-2.0-only` — do not "fix" it.**
+      `include/linux/module.h` documents `"GPL"` as *[GNU Public License v2]* and states outright
+      that for module loading the only/or-later distinction "is completely irrelevant and does
+      neither replace the proper license identifiers in the corresponding source file nor amends
+      them in any way". Its sole job is Proprietary flagging and `EXPORT_SYMBOL_GPL` binding.
+      Likewise the uapi header's `GPL-2.0` (rather than `GPL-2.0-only`) is deliberate kernel uapi
+      idiom; the kernel's own `LICENSES/preferred/GPL-2.0` lists both spellings as valid.
+  - **OPEN before a 0.1.0 tag:** the specs carry **no `%changelog`**, deliberately — entries are
+    dated, and `driver/` is under the no-dates rule. Decide at first release whether a *release*
+    date is exempt (it is not an RE observation date) or whether the changelog lives outside
+    `driver/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
 - **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
   WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
   copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +

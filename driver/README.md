@@ -220,3 +220,18 @@ sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
 
 The design, the FCP protocol, model detection, the module parameters, and the
 reverse-engineering history are documented in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
+
+## License
+
+**GPL-2.0-only.** The full text is in [LICENSE](LICENSE); every source file carries an
+`SPDX-License-Identifier` saying which terms apply to it.
+
+The one exception is `clarett_fcp_uapi.h`, the header describing the hwdep ioctl interface,
+which is `GPL-2.0 WITH Linux-syscall-note` — the same terms the kernel puts on its own uapi
+headers, so that a userspace program using this interface is not made a derived work by
+including it. That exception's text is in
+[LICENSES/Linux-syscall-note.txt](LICENSES/Linux-syscall-note.txt).
+
+This driver was produced by clean-room reverse engineering. It is not affiliated with,
+endorsed by, or supported by Focusrite, and no vendor driver code was disassembled or
+copied in building it.

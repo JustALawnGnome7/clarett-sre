@@ -36,7 +36,10 @@ KDIR ?= /lib/modules/$(shell uname -r)/build
 PKGNAME := snd-clarett
 CLARETT_VERSION := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"$$/\1/p' $(CURDIR)/dkms.conf)
 
-DISTFILES := $(CLARETT_SRCS) $(CLARETT_HDRS) Makefile dkms.conf README.md DEVELOPMENT.md
+# LICENSES/ is a directory (holding the Linux-syscall-note exception that clarett_fcp_uapi.h's
+# SPDX tag refers to), so anything consuming DISTFILES has to recurse — hence `cp -r` below.
+DISTFILES := $(CLARETT_SRCS) $(CLARETT_HDRS) Makefile dkms.conf \
+             LICENSE LICENSES README.md DEVELOPMENT.md
 TARBALL   := $(PKGNAME)-$(CLARETT_VERSION).tar.gz
 DKMS_SRC  := /usr/src/$(PKGNAME)-$(CLARETT_VERSION)
 
@@ -97,7 +100,7 @@ dkms-install:
 	@command -v dkms >/dev/null || \
 		{ echo "dkms is not installed (Fedora: dnf install dkms)"; exit 1; }
 	install -d $(DKMS_SRC)
-	cp -t $(DKMS_SRC) $(DISTFILES)
+	cp -r -t $(DKMS_SRC) $(DISTFILES)
 	@# `dkms add` fails rather than no-ops when the version is already registered, and
 	@# --force is not portable across dkms 2.x/3.x — so ask first.
 	@dkms status -m $(PKGNAME) -v $(CLARETT_VERSION) | grep -q . || \
