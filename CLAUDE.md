@@ -159,6 +159,10 @@ driver/                               Out-of-tree module `snd-clarett` (hwdep tr
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_hwdep.c (the FCP hwdep ABI — the only control surface), clarett_pcm.c (capture PCM,
   enable_pcm=1), Makefile, README.md
+  dkms.conf                           THE version (PACKAGE_VERSION) — the Makefile parses it out and
+                                      compiles it in as MODULE_VERSION. Bump it here and nowhere else.
+  packaging/*.spec                    Fedora RPM: snd-clarett-kmod.spec (kmodtool -> akmod + per-kernel
+                                      kmod) and snd-clarett-dkms.spec. Build recipes in each header.
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
 wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) — do not hand-edit.
@@ -212,6 +216,35 @@ sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
 sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server,
                                   # WirePlumber drop-in -> conf.d. `make help`.
 ```
+- **★ PACKAGING (Aug 24 2026) — DKMS + Fedora akmod, both built and verified locally.** `make -C driver`
+  and `modules_install` are dev-only: the module lands under one kernel and vanishes at the next
+  update. The two supported routes are `sudo make -C driver dkms-install` and the RPM specs in
+  `driver/packaging/`. **`driver/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
+  `driver/Makefile` parses it out, passes it to kbuild, and it is compiled in as `MODULE_VERSION`
+  (`-DCLARETT_VERSION`), so `modinfo snd-clarett` names exactly one tree; a build that bypasses the
+  Makefile reports `0.0.0-unknown` on purpose. Verified end to end: the module inside the built kmod
+  RPM reports `0.1.0`. The specs live under `driver/` (not a repo-root `packaging/`) so the directory
+  stays self-packaging when it becomes the public submodule.
+  - **Three kmodtool traps, each of which cost a failed build** — all fixed in the spec, don't
+    re-discover them: (1) kmodtool emits `Requires: %{name}-common` on **every** kmod/akmod subpackage,
+    so without a `-common` subpackage the RPMs build and then **fail to install**; (2) an akmod build
+    compiles nothing, so the debugsource package is empty and rpmbuild **errors** — hence
+    `%global debug_package %{nil}`; (3) `%akmod_install` re-invokes `rpmbuild -bs` against
+    `%{_specdir}/%{name}.spec`, so **the spec must be copied to `~/rpmbuild/SPECS/` first**, not built
+    in place.
+  - **A bare `rpmbuild -bb` on the kmod spec CANNOT work on an ordinary Fedora box** and this is not a
+    spec bug: with neither `buildforkernels` nor `kernels` defined, kmodtool takes its
+    build-for-current-kernels path, which requires `--repo` **and** the
+    `buildsys-build-<repo>-kerneldevpkgs` helper — RPM Fusion build-farm infrastructure. Use
+    `--define 'buildforkernels akmod'` (the end-user package) or `--define "kernels $(uname -r)"`.
+  - **UNTESTED so far:** the actual `dkms build/install` run (dkms is not installed on this box, so
+    only the guard path and `dkms.conf` parsing were exercised), installing the akmod and letting the
+    `akmods` service rebuild across a real kernel upgrade, and DKMS MOK auto-signing under Secure Boot.
+  - **OPEN before a 0.1.0 tag:** no `LICENSE` file exists (SPDX headers say `GPL-2.0-only`; the specs
+    declare it) — drop in the verbatim kernel `LICENSES/preferred/GPL-2.0` text before publishing the
+    submodule. And the specs carry **no `%changelog`**, deliberately: entries are dated, and
+    `driver/` is under the no-dates rule. Decide at first release whether a *release* date is exempt
+    (it is not an RE observation date) or whether the changelog lives outside `driver/`.
 - **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
   WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
   copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +
