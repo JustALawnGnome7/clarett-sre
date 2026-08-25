@@ -315,9 +315,37 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `_should_reset_crashkernel()` = `auto_reset_crashkernel != no` **AND** `systemctl is-enabled kdump`,
     so disabling the service also stops `crashkernel=` being re-added to new kernels. Tradeoff worth
     stating: that gives up vmcore capture on the box where this driver has panicked hosts before.
-  - **STILL UNTESTED:** installing the akmod and letting the `akmods` service rebuild across a real
-    kernel upgrade; the **in-dnf-transaction** DKMS rebuild (as opposed to the boot-time one verified
-    above); MOK *enrolment* under Secure Boot (the signing works, `mokutil --import` untested).
+  - **★ THE AKMOD ROUTE IS VERIFIED ACROSS A REAL KERNEL UPGRADE TOO (Aug 25 2026, fedora-dsk,
+    7.1.9 -> 7.1.10, 8Pre attached).** DKMS was uninstalled first (see the path clash below), the akmod
+    built from `packaging/snd-clarett-kmod.spec` with `--define 'buildforkernels akmod'`, and the
+    timeline out of `rpm -q --qf %{INSTALLTIME:date}` + `journalctl -u akmods` is unambiguous:
+    | 22:02:29 | `akmod-snd-clarett` installed (running 7.1.9) |
+    | 22:02:32 | `kmod-snd-clarett-7.1.9` built, 3 s later, at install time |
+    | 22:06:08 | `kernel-core-7.1.10` installed — **no kmod produced** |
+    | 22:08:38 | reboot |
+    | 22:08:47-22:09:00 | `akmods.service`: "Building and installing snd-clarett-kmod [OK]" |
+    Result: per-kernel `kmod-snd-clarett-7.1.9` **and** `-7.1.10` both installed, and the module
+    autoloaded and bound on the PCI modalias exactly as the DKMS install had.
+    - **THE REBUILD IS BOOT-TIME BY DESIGN, NOT IN-TRANSACTION** — `akmods.service` is literally
+      "Builds and install new kmods from akmod packages" at boot. So the old "in-dnf-transaction
+      rebuild" TODO was **mis-framed for akmods**: there is nothing missing to test. (DKMS's own
+      in-transaction behaviour stays unobserved rather than disproven — our DKMS run had the new kernel
+      on disk *before* the module was registered, so no transaction hook could have fired for it.)
+    - **AKMOD MODULES ARE SIGNED as well**, with akmods' own locally generated key
+      (`signer: fedora-dsk_1787627251_951c93b9`) — a different mechanism from DKMS's
+      `/var/lib/dkms/mok.*` but the same outcome, and the same un-enrolled-MOK taint line.
+    - **THE TWO ROUTES MUST NOT BE INSTALLED TOGETHER — different paths, both in depmod's search
+      path:** akmod installs to `extra/snd-clarett/snd-clarett.ko.xz` (kmodtool's per-module
+      `%{kmodinstdir_postfix}` subdirectory), DKMS to a flat `extra/snd-clarett.ko.xz`. Uninstall one
+      before installing the other; `modinfo -n snd-clarett` names which one actually wins.
+    - **The partial-kernel check (below) WORKED when applied:** the upgrade was driven as
+      `dnf upgrade kernel kernel-devel`, and naming `kernel` is what makes it safe — the metapackage
+      requires `kernel-core-uname-r`, `kernel-modules-uname-r`, `kernel-modules-core-uname-r` and
+      (matched) `kernel-modules-extra`. All five landed at 7.1.10, 7.1.7 evicted cleanly. **Note
+      `akmods` carries the same `(kernel-devel-matched if kernel-core)` rich dep that `dkms` does**, so
+      its install transaction needs the same read-before-yes.
+  - **STILL UNTESTED:** MOK *enrolment* under Secure Boot — both routes sign, but `mokutil --import`
+    and a Secure Boot-enabled load remain unexercised.
   - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
     (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
     copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
