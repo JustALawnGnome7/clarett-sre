@@ -265,6 +265,23 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `kernel-install` hook could not fire for it and the rebuild came from **`dkms.service` at boot**.
     The in-dnf-transaction variant is still untested — do that one on the next kernel with the driver
     already registered.
+  - **★ THE PACKAGED INSTALL AUTOLOADS AND PROBES ON REAL HARDWARE (Aug 25 2026, fedora-dsk 7.1.9,
+    8Pre).** First end-to-end confirmation of the *packaged* path, as opposed to `insmod`: plugging the
+    interface in loaded the driver with **no `modprobe`, no udev rule and no `modules-load.d` entry**,
+    then probed and registered the card — `card 4 [C8Pre]`, bound at `0000:1a:00.0`, `initstate: live`,
+    module `0.1.0` (the DKMS copy), `refcnt: 2` (PipeWire holding a PCM). The chain, each link verified:
+    `MODULE_DEVICE_TABLE(pci,…)` → alias `pci:v00001CB5d00000002sv*sd*bc*sc*i*` in the `.ko` →
+    `modules.alias` (written by depmod **during the dkms install**) → the device's own modalias
+    `pci:v00001CB5d00000002sv00001CB5sd00000002bc04sc01i00` → udev's kmod builtin. `insmod` never got
+    this because the module was not in the module path and depmod had never indexed it.
+    Probe timing on that attach: `enabling device` → model line was **3 s**, i.e. `settle_ms` working as
+    designed, first attempt.
+    **Two taint lines are normal here and neither indicates a fault.** `loading out-of-tree module
+    taints kernel` is flag `O`, unavoidable for any out-of-tree module. `module verification failed:
+    signature and/or required key missing` does **NOT** mean unsigned — `modinfo` shows
+    `signer: DKMS module signing key`; it means the kernel has no *trusted* key to check that signature
+    against because the MOK is not enrolled. Secure Boot is off, so it loads and taints with `E`.
+    Enrolling the MOK removes the line (and is what would let it load at all under Secure Boot).
   - **★★ `dnf install dkms` INSTALLS A PARTIAL KERNEL THAT BOOTS BROKEN — CHECK THE TRANSACTION
     (Aug 25 2026; cost a broken boot on fedora-dsk).** Fedora's `dkms` carries a rich dep
     `(kernel-devel-matched if kernel-core)`, which resolves to `kernel-devel` + **`kernel-core`** — and
