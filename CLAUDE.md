@@ -257,8 +257,50 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     without dkms: `make -j16 KERNELRELEASE=$(uname -r) KDIR=/lib/modules/$(uname -r)/build`.
   - **`CLEAN` is deprecated in dkms 3.x** (accepts only `true` silently) — dkms builds in a fresh copy
     of the source, so it is simply omitted from dkms.conf.
+  - **★ DKMS SURVIVES A REAL KERNEL UPGRADE — VERIFIED (Aug 25 2026, fedora-dsk, 7.1.8 -> 7.1.9).**
+    Registered on 7.1.8, rebooted into 7.1.9, and `dkms status` came back with **two lines, both
+    `installed`**; the new module sits at `/lib/modules/7.1.9-200.fc44.x86_64/extra/snd-clarett.ko.xz`,
+    reports `0.1.0`, and is signed with the host's own DKMS MOK. Note **which** autoinstall path this
+    exercised: 7.1.9 was already on disk before the driver was registered, so the in-transaction
+    `kernel-install` hook could not fire for it and the rebuild came from **`dkms.service` at boot**.
+    The in-dnf-transaction variant is still untested — do that one on the next kernel with the driver
+    already registered.
+  - **★★ `dnf install dkms` INSTALLS A PARTIAL KERNEL THAT BOOTS BROKEN — CHECK THE TRANSACTION
+    (Aug 25 2026; cost a broken boot on fedora-dsk).** Fedora's `dkms` carries a rich dep
+    `(kernel-devel-matched if kernel-core)`, which resolves to `kernel-devel` + **`kernel-core`** — and
+    **nothing in that chain requires `kernel`, `kernel-modules` or `kernel-modules-extra`**. If the
+    three-kernel `installonly_limit` also evicts the oldest kernel in the same transaction, the lists
+    come out asymmetric: six packages removed at the old version, four installed at the new one.
+    `kernel-install` still writes a BLS entry for the half-installed kernel **and makes it the
+    default**, so the next reboot lands on it.
+    **Symptom:** boots, but 800x600 with no network — every DRM driver (`amdgpu`/`nouveau`/`i915`) and
+    `atlantic`/`iwlwifi`/`mac80211` live in `kernel-modules`; only `igb`/`e1000e`/`r8169`/`igc` are in
+    `kernel-modules-core`, so a plain gigabit port may still work while 10GbE and Wi-Fi do not.
+    **The check, before saying yes to any transaction that touches a kernel:** every package removed at
+    the old version must have a counterpart installed at the new one. `rpm -q kernel kernel-core
+    kernel-modules kernel-modules-core | sort` confirms it afterwards.
+    **Recovery:** do NOT try to fix it from the broken system (no network). Pick the previous kernel from
+    the GRUB menu (Esc / hold Shift), then install the missing packages **version-pinned** —
+    `sudo dnf install kernel-<ver> kernel-modules-<ver> kernel-modules-extra-<ver>`, because a bare
+    `dnf install kernel` resolves to whatever is newest and leaves the broken entry as the default —
+    then `sudo dracut -f --kver <ver>` to rebuild its initramfs with the drivers now present.
+    **Unrelated, so don't chase them:** disabling kdump, deleting `/boot/*kdump.img`, and
+    `grubby --remove-args=crashkernel` had nothing to do with it, nor did the DKMS install, which only
+    ever writes to `/usr/src` and `/lib/modules/<kver>/extra`.
+  - **A tight `/boot` is a live constraint on this work (fedora-dsk: 974 MB, was 96% full).** The
+    transaction above first failed outright with *"needs 33MB more space on the /boot filesystem"* —
+    rpm installs before it erases, so it cannot rely on the eviction it is about to perform. Biggest
+    win there was **orphaned kdump initramfs images for kernels no longer installed** (~57 MB each;
+    three of them), a known Fedora wart where `kdumpctl`'s images outlive their kernel. Disabling
+    kdump entirely (`systemctl disable --now kdump.service`) stops new ones: `60-kdump.install` does
+    **nothing** on `add` ("kdump initramfs is strictly host only and managed by kdump service"), so the
+    service is the only creator, and `92-crashkernel.install` is gated on
+    `_should_reset_crashkernel()` = `auto_reset_crashkernel != no` **AND** `systemctl is-enabled kdump`,
+    so disabling the service also stops `crashkernel=` being re-added to new kernels. Tradeoff worth
+    stating: that gives up vmcore capture on the box where this driver has panicked hosts before.
   - **STILL UNTESTED:** installing the akmod and letting the `akmods` service rebuild across a real
-    kernel upgrade; MOK *enrolment* under Secure Boot (the signing works, `mokutil --import` untested).
+    kernel upgrade; the **in-dnf-transaction** DKMS rebuild (as opposed to the boot-time one verified
+    above); MOK *enrolment* under Secure Boot (the signing works, `mokutil --import` untested).
   - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
     (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
     copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
