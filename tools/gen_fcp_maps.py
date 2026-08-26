@@ -543,7 +543,8 @@ for slug, spec in MODELS.items():
     # control for any of them on this line, so nothing but us ever writes them — and the firmware
     # version is static. See spec/provenance/clarett-control-plane.md and the config-ownership notes.
     members = OD()
-    members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0, note="PLACEHOLDER offset; see _todo")
+    members["versionStageRelease"] = member(0, "uint32", nd=0, nc=0,
+                                            note="Placeholder offset; see _limitations")
     members["muteSwitch"] = member(24, "bool", nd=2, note="monitor mute @ 24; activate 2. 1 = muted, 0 = unmuted (trace-confirmed, and confirmed on a 2Pre) - no inversion, same as dim @ 28")
     members["dimSwitch"]  = member(28, "bool", nd=2, note="monitor dim @ 28; activate 2")
     # The monitor section's 8-bit gain, which is where the front-panel knob's position shows up:
@@ -659,54 +660,54 @@ for slug, spec in MODELS.items():
         add_rate_meter_indices(slug, dev_dests)
 
     devmap = OD()
-    devmap["_note"] = (f"DRAFT — hand-authored device-map for the {spec['name']} (Thunderbolt), paired with "
-                       f"fcp-alsa-map-{slug}.json for fcp-server. Loaded from file so fcp-server can create "
-                       "controls when the device's own DEVMAP_READ (0x80000d) is unavailable/silent. NOT a "
-                       "substitute for the device-provided devmap: offsets/types are carried from the "
-                       "snd-clarett driver (see _todo). Replace with the /tmp/fcp-devmap-" + slug + "-*.json "
-                       "dump once DEVMAP_READ works.")
+    devmap["_note"] = (f"Device map for the Clarett {spec['name']} (Thunderbolt). This model does not answer "
+                       "DEVMAP_READ (0x80000d), so it cannot describe itself: this file is its description, "
+                       "loaded from DATADIR by fcp_devmap_read_from_file(). Paired with "
+                       f"fcp-alsa-map-{slug}.json, which carries the presentation layer. Keyed on the model "
+                       "slug published at /proc/asound/card<N>/clarett rather than a USB product id, because "
+                       "every model in the line shares PCI id 1cb5:0002.")
     devmap["_schema"] = ("structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, "
                          "notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,"
                          "outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read "
                          "offset = member.offset + index*width, and index+1 fills the %d in the alsa-map name.")
-    devmap["_provenance"] = ("Offsets from the snd-clarett driver + spec/provenance/clarett-control-plane.md: air @ 174+i, "
-                             "mode @ 166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. "
-                             "Clean-room: authored from our own interface facts, not any vendor devmap.")
-    devmap["_todo"] = [
-        "Replace wholesale with the device-provided devmap once DEVMAP_READ answers.",
-        "versionStageRelease.offset is a PLACEHOLDER (real firmware-version location unknown).",
-        "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server "
-        "sends it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without "
-        "it the write stages but does not manifest. muteSwitch is active-low (device byte 1 = unmuted), "
-        "handled in the alsa-map with invert/invert-base 1.",
-        "air/mode reads at 174+i / 166+i returned non-zero, plausible values on hardware (contradicting "
-        "the earlier 'reads back 0' caveat); still unverified whether they track physical state live.",
-        "outputVolume is a strided array; physical-outputs index onto the real gains (pairs at base+{0,1}, "
-        "pairs step by 4). Consequence: the alsa-map output names come out sparse (from index+1), a cosmetic "
-        "artifact of the layout, to be fixed with the real devmap.",
-        "Output mute offsets are not yet captured, so output mute is omitted (here and in the alsa-map).",
-        "peak-index is on DESTINATIONS on every model now (the Clarett meters destinations, not "
-        "sources), each carrying _peak-index-provenance: \"measured\" (one signal source at a time), "
-        "\"block-measured\" (a set lit together, so the set is measured but the order within it is "
-        "not), \"stride\" (continuing a measured block), or \"inferred\". Slot order is NOT "
-        "transferable across this line, so each model was measured with tools/fcp_meter_watch.c. "
-        "peak-index-m / peak-index-h are the SAME channel's slot at double / quad speed: the array "
-        "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in that "
-        "rate's destination table and everything after a removed entry shifts down. A destination "
-        "absent at a speed carries no key for it. Measured on an 8Pre (Mixer Input 01 = 40/32/28 at "
-        "48/96/192 kHz) and derived from the [XML] pin-m/pin-h overrides for the rest. Note fcp-server "
-        "rejects any peak-index >= the slot count the device reports via fcp_meter_info(), which is "
-        "why the local build raises that bound (see the fcp-support snd_clarett branch).",
-        "notify-client masks are guesses (the TB device does not expose the FCP notification word; the driver "
-        "relays a wildcard ~0).",
-        "sources/destinations are derived from the band-0 SET_MUX table in the driver's bring-up blob "
-        "(tools/gen_fcp_maps.py parses clarett_arm_<model>.h), so the router-pins are exactly what the "
-        "device reports via GET_MUX after our arm. Pin meaning is DIRECTION-SCOPED and per-model: 0x408 "
-        "is S/PDIF-in as a source but Monitor Out 1 as a destination, the 2Pre reaches S/PDIF input at "
-        "0x186/0x187 (where the 8PreX has S/PDIF output), and its analogue inputs are 0x400/0x402, "
-        "skipping 0x401. Never copy a pin table between models.",
-        "router-pin is emitted as a DECIMAL string because fcp-server parses it with atoi(); if a "
-        "device-provided devmap ever turns up using hex strings, that parse silently yields 0.",
+    devmap["_provenance"] = ("Authored from the snd-clarett driver's own interface facts: air @ 174+i, mode @ "
+                             "166+i (0=Mic/1=Line/2=Inst), output gains strided at 32, mute @ 24, dim @ 73. "
+                             "Clean-room: reverse-engineered from black-box observation of the hardware and "
+                             "Focusrite's published device descriptors, never from a vendor device map or "
+                             "driver.")
+    devmap["_limitations"] = [
+        "versionStageRelease.offset is a placeholder: the firmware version's location in the appspace has "
+        "not been identified, so the Firmware Version control displays a meaningless value. It is present "
+        "because fcp-server requires that control for its socket-path TLV and lock handshake.",
+        "notify-device carries the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server sends "
+        "it via DATA_NOTIFY after the write): air=7, mode=6, gain=1, monitor mute/dim=2. Without it a write "
+        "stages but never takes effect. muteSwitch is active-low (device byte 1 = unmuted), handled in the "
+        "alsa-map with invert/invert-base 1.",
+        "air and mode read back plausible values, but whether they track the hardware's live state has not "
+        "been confirmed. These models have no front-panel control over either, so the host is normally the "
+        "only writer.",
+        "outputVolume is a strided array and physical-outputs index onto the real gains (pairs at "
+        "base+{0,1}, pairs stepping by 4), so the generated output names are sparsely numbered. Cosmetic.",
+        "Output mute is omitted: its offset has not been identified. Master mute and dim are present.",
+        "notify-client masks are approximate. The Thunderbolt device does not expose the FCP notification "
+        "word, so the driver relays a wildcard and every notification refreshes every control.",
+        "peak-index sits on DESTINATIONS, not sources: this line meters its router destinations. Each "
+        "carries a _peak-index-provenance marker — \"measured\" (that channel driven alone), "
+        "\"block-measured\" (a set lit together, so the set is placed but the order within it is not), "
+        "\"stride\" (continuing a measured block), or \"inferred\". Slot order does not transfer between "
+        "models; each was measured on hardware.",
+        "peak-index-m and peak-index-h are the same channel's slot at double and quad speed. The array "
+        "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in THAT rate's "
+        "destination table and everything after a removed entry shifts down; a destination absent at a "
+        "speed carries no key for it. Measured on an 8Pre (Mixer Input 01 = slot 40/32/28 at 48/96/192 "
+        "kHz) and derived from the vendor descriptors' pin-m/pin-h overrides elsewhere.",
+        "sources and destinations carry the router pins the device reports through GET_MUX. Pin meaning is "
+        "DIRECTION-SCOPED and per-model: 0x408 is S/PDIF in as a source but Monitor Out 1 as a "
+        "destination, the 2Pre reaches S/PDIF input at 0x186/0x187 where the 8PreX has S/PDIF output, and "
+        "the 2Pre's analogue inputs are 0x400/0x402, skipping 0x401. A pin table is never transferable "
+        "between models.",
+        "router-pin is a DECIMAL string because fcp-server parses it with atoi(); a hex string would "
+        "silently parse as 0.",
     ]
     devmap["structs"] = OD(APP_SPACE=OD(members=members))
     devmap["device-specification"] = OD([("physical-inputs", phys_in), ("physical-outputs", phys_out)])
@@ -735,45 +736,36 @@ for slug, spec in MODELS.items():
                                             values=ENUM_LABELS[kind])
 
     alsamap = OD()
-    alsamap["_note"] = (f"DRAFT — hand-authored ALSA control map for the {spec['name']} (Thunderbolt), paired "
-                        f"with fcp-devmap-{slug}.json. Presentation layer: control names/types/ranges/enum "
-                        "labels (matching the driver's scarlett2-parity set); offsets + bindings live in the "
-                        "devmap. Scoped to a confident slice: preamp air/mode, output levels, master mute/dim.")
-    alsamap["_provenance"] = ("Names/types from the snd-clarett in-kernel control set + the shipped "
-                              "fcp-alsa-map-821d.json schema. Clean-room: no vendor map.")
-    alsamap["_todo"] = [
-        "Routing sources/sinks are generated from the model's band-0 SET_MUX bring-up table. LIMITATION: "
-        "the SOURCE list is the set of pins that table actually routes, which is the factory-default "
-        "patch, NOT the device's full source inventory — e.g. the 8PreX only ever routes Mix C-F, so "
-        "Mix A/B and Mix G-P are absent as selectable sources, and only some PCM playback pins appear. "
-        "Widening it means asserting pins we have not observed the device accept; verify on the bench "
-        "(pick a destination, try a pin outside the list, confirm GET_MUX reflects it) before adding.",
-        "The Clarett 8Pre is the exception to the note above, in both directions. It has no capture at "
-        "all, so its band-0 routing is CONSTRUCTED (the driver arms its own captured routing from "
-        "clarett_arm_8pre.h): the capture half is the 4Pre's, whose input "
-        "geometry is identical, and the output half is authored. Its source list is therefore not "
-        "table-derived either — it is the hardware's full inventory from the XML, which is what the "
-        "other models' lists should eventually become. That construction predates any 8Pre hardware, but "
-        "the unit has since been exercised extensively: its meter map was measured, and the per-rate "
-        "peak-index-m/-h compaction was measured on it too.",
-        "output-group-sources / output-link are not emitted: those drive the Scarlett 4th gen's output "
-        "group controls, which this line does not appear to have.",
-        "Add output mute once its offset is captured (omitted; see the devmap _todo).",
-        "Add global masterVolume + firmware-version once backing members/offsets are confirmed (masterVolume "
-        "overlaps output 0/1 at 32/33, so it is left out of this slice to avoid double-driving one offset).",
-        "Output level uses \"invert\": true, which REQUIRES the Stage-2 fcp-server patch (value_invert in "
-        "struct control_props; device = invert-base - alsa). The device stores unsigned attenuation "
-        "(0 = unity, 127 = -127 dB) where the Scarlett 4th gen stores signed dB. On an unpatched "
-        "fcp-server the key is ignored, every reading lands outside [-127, 0], and the resulting "
-        "snd_ctl_elem_write EINVAL repeats on every notification refresh.",
-        "Firmware Version reads the versionStageRelease PLACEHOLDER offset, so its displayed value is "
-        "meaningless — it exists because fcp-server needs the control for its socket-path TLV + lock "
-        "handshake. Point it at the real firmware-version location once that is found in the appspace.",
-        "Mode: the device byte is 0=Mic/1=Line/2=Inst line-wide, but only the 8PreX (separate XLR + 1/4\" "
-        "jacks) can select Mic in software. The combo-jack models (2Pre/4Pre/8Pre) auto-select Mic from the "
-        "jack, so their enum is Line/Inst carrying explicit values 1/2 — which REQUIRES the fcp-server patch "
-        "accepting {name, value} entries in input-controls; on an unpatched server the names parse as an "
-        "index-valued enum and Line/Inst would write 0/1.",
+    alsamap["_note"] = (f"ALSA control map for the Clarett {spec['name']} (Thunderbolt), paired with "
+                        f"fcp-devmap-{slug}.json. Presentation layer only — control names, types, ranges and "
+                        "enum labels; offsets and bindings live in the devmap. Covers the preamp air and "
+                        "mode switches, output levels, and master mute and dim.")
+    alsamap["_provenance"] = ("Control names and types follow the snd-clarett driver's control set and the "
+                              "schema of the shipped fcp-alsa-map-821d.json. Clean-room: no vendor map was "
+                              "used.")
+    alsamap["_limitations"] = [
+        "The SOURCE list is the set of router pins this model is observed to route, which is the "
+        "factory-default patch rather than the hardware's full inventory — the 8PreX, for instance, routes "
+        "only Mix C-F, so Mix A/B and Mix G-P do not appear as selectable sources, and only some PCM "
+        "playback pins do. Widening it would mean asserting pins the device has not been seen to accept. "
+        "The 8Pre is the exception: its list is the full inventory from the vendor descriptors.",
+        "output-group-sources and output-link are not emitted. Those drive the Scarlett 4th gen's output "
+        "group controls, which this line does not have.",
+        "Output mute is omitted because its offset has not been identified. Master mute and dim are "
+        "present.",
+        "Global masterVolume is omitted: it overlaps outputs 1 and 2 at offsets 32/33, and driving one "
+        "offset from two controls would make them fight.",
+        "Firmware Version reads a placeholder offset, so its value is meaningless. It exists because "
+        "fcp-server requires the control for its socket-path TLV and lock handshake.",
+        "Output level uses \"invert\": true. This device stores unsigned attenuation (0 = unity, 127 = "
+        "-127 dB) where the Scarlett 4th gen stores signed dB, so the map needs device = invert-base - "
+        "alsa to present an ascending-dB control. Without invert support every reading lands outside "
+        "[-127, 0] and the resulting snd_ctl_elem_write EINVAL repeats on each notification refresh.",
+        "Mode carries explicit device values. The byte is 0=Mic/1=Line/2=Inst line-wide, but only the "
+        "8PreX (separate XLR and 1/4\" jacks) can select Mic in software; the combo-jack models auto-select "
+        "Mic from the jack, so their enum is Line/Inst with explicit values 1 and 2. Without support for "
+        "{name, value} entries these parse as an index-valued enum and Line/Inst write 0/1 — i.e. Mic and "
+        "Line.",
     ]
     alsamap["input-controls"] = input_controls
     # The Scarlett 4th gen (fcp-alsa-map-821d) stores volume as a signed dB byte, so its map can say
