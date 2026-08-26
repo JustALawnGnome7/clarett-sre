@@ -692,10 +692,10 @@ for slug, spec in MODELS.items():
         "notify-client masks are approximate. The Thunderbolt device does not expose the FCP notification "
         "word, so the driver relays a wildcard and every notification refreshes every control.",
         "peak-index sits on DESTINATIONS, not sources: this line meters its router destinations. Each "
-        "carries a _peak-index-provenance marker — \"measured\" (that channel driven alone), "
-        "\"block-measured\" (a set lit together, so the set is placed but the order within it is not), "
-        "\"stride\" (continuing a measured block), or \"inferred\". Slot order does not transfer between "
-        "models; each was measured on hardware.",
+        "carries a _peak-index-provenance marker — \"measured\" (that destination read directly on "
+        "hardware), \"stride\" (filled between measured anchors in a contiguous block), or "
+        "\"reinterpreted\" (re-attributed from an earlier measurement taken under different routing). "
+        "Slot order does not transfer between models; each model was measured on its own hardware.",
         "peak-index-m and peak-index-h are the same channel's slot at double and quad speed. The array "
         "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in THAT rate's "
         "destination table and everything after a removed entry shifts down; a destination absent at a "
