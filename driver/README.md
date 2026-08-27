@@ -202,7 +202,12 @@ route** — playback is silent until you wire a PCM source to a physical output 
 
 ### MIDI
 
-The interface's DIN MIDI ports appear as a standard ALSA rawmidi device.
+The interface's DIN MIDI ports appear as a standard ALSA rawmidi device. Every MIDI message type tested
+passes through byte-for-byte in both directions, including Timing Clock, Active Sensing, transport
+commands, Song Position Pointer, MIDI Time Code and SysEx of arbitrary length.
+
+If you use `amidi` to check MIDI input, pass `-a` and `-c`. Without them it discards Active Sensing
+(`FEh`) and Clock (`F8h`) from what it prints, which looks exactly like the interface dropping them.
 
 ## Settings persistence
 

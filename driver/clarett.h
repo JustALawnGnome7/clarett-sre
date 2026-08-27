@@ -49,15 +49,22 @@ struct snd_rawmidi_substream;
  * bytes with a byte-count in the top byte; an RX read returns one byte with bit24 (MIDI_RX_VALID) set, or
  * 0 when the RX FIFO is empty. RX is interrupt-driven — the shared IRQ summary REG_MIDI_STATUS low byte
  * carries a MIDI-RX-pending code (observed 0x0a); the driver drains REG_MIDI_DATA, then writes
- * MIDI_IRQ_ACK_VAL to REG_MIDI_ACK to clear it. See clarett_midi.c.
+ * MIDI_IRQ_ACK_VAL to REG_MIDI_ACK to clear it. REG_MIDI_STATUS also carries the TX flow-control bit
+ * MIDI_TX_READY, which must gate every TX write. See clarett_midi.c.
  */
-#define REG_MIDI_STATUS          0x500   /* IRQ summary (low byte 0x0a = MIDI RX pending); also read by servicer */
+#define REG_MIDI_STATUS          0x500   /* IRQ summary (low byte 0x0a = MIDI RX pending) + MIDI_TX_READY */
 #define REG_MIDI_ACK             0x504   /* write MIDI_IRQ_ACK_VAL to clear the MIDI RX interrupt */
 #define REG_MIDI_DATA            0x58c   /* TX: (count<<24)|(b2<<16)|(b1<<8)|b0 ; RX: (valid<<24)|byte */
 #define MIDI_RX_VALID            0x01000000u  /* bit24 of a REG_MIDI_DATA read: a byte is present */
 #define MIDI_RX_BYTE_MASK        0x000000ffu
 #define MIDI_IRQ_ACK_VAL         0x8          /* -> REG_MIDI_ACK to clear the MIDI RX interrupt */
 #define MIDI_TX_COUNT_SHIFT      24           /* TX packed word: byte count (1..3) in bits 24-31 */
+/*
+ * bit16 of REG_MIDI_STATUS: the TX FIFO can accept another packed word. It clears when the FIFO is
+ * full, and a word written while it is clear is DISCARDED — silently tearing the outgoing byte
+ * stream. The FIFO drains at the MIDI wire rate, so this is the only backpressure available.
+ */
+#define MIDI_TX_READY            0x00010000u
 
 /*
  * Data-plane streaming registers (recovered from a streaming capture).
