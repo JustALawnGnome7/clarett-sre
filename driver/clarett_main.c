@@ -143,14 +143,6 @@ MODULE_PARM_DESC(tx_frag_pad,
 		 ">0 = audio bytes + this padding. The working RX path and the vendor TX ring are both "
 		 "non-contiguous; this makes our TX match.");
 
-static int meter_poll_ms = CLARETT_METER_POLL_MS;
-module_param(meter_poll_ms, int, 0444);
-MODULE_PARM_DESC(meter_poll_ms,
-		 "Period (ms) of the GET_METER heartbeat the device requires to APPLY control writes to "
-		 "hardware. Focusrite Control polls ~every 40 ms continuously; without it our byte-correct "
-		 "writes complete (done=1) but the front-panel preamp/monitor state never moves. Default 40. "
-		 "Set 0 to disable (for A/B testing the hypothesis).");
-
 static int dma_bits = 32;
 module_param(dma_bits, int, 0444);
 MODULE_PARM_DESC(dma_bits,
@@ -195,7 +187,7 @@ MODULE_PARM_DESC(error_probe,
 		 "response's DMA error word (resp+8) + size. If the malformed commands return a DIFFERENT code "
 		 "than the valid one's error=3, the device parses per-command (error=3 = a specific semantic "
 		 "rejection); if ALL return error=3/size=0 identically, it is a blanket out-of-band session refusal. "
-		 "Off by default (sends junk commands). One-shot at probe. MUST be combined with meter_poll_ms=0: the "
+		 "Off by default (sends junk commands). One-shot at probe. The "
 		 "meter-poll worker otherwise races the probe on the shared resp_buf and c->seq (its GET_METER "
 		 "responses land in the buffer and it bumps the seq), corrupting per-command attribution.");
 
@@ -223,7 +215,7 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
 
 /*
  * Ask the device who it is: GET_7.1{band 0} returns {u16 playback_ch, u16 capture_ch}
- * (+16 more bytes, meaning open), a pair unique per model. Runs before the meter heartbeat
+ * (+16 more bytes, meaning open), a pair unique per model. Runs before the meter worker
  * starts, so nothing else touches resp_buf between the (landed-gated) completion and the parse.
  * Returns NULL if the query fails or the pair matches no known model.
  *
@@ -433,8 +425,7 @@ static void clarett_error_probe(struct clarett *c)
 		u8 data[8];
 		u16 len;
 	} cmds[] = {
-		/* Discrimination set — resp+8 status byte across session states (8PreX;
-		 * legacy_mbox_cycle=1 reproducibly forces the premature-ack wall):
+		/* Discrimination set — resp+8 status byte across session states (8PreX):
 		 *   WORKING session: per-command validation, distinct status per failure stage —
 		 *     valid → err=0; bad param (offset out of range / oversized length) → err=1;
 		 *     unsupported category (ESP_DFU 0x009, CAP_READ-disabled) → err=4; unknown opcode or
@@ -485,12 +476,13 @@ static void clarett_error_probe(struct clarett *c)
 		bool landed = false;
 
 		/*
-		 * The device DMAs its response ASYNCHRONOUSLY, a little after the BAR done bit clarett_fcp
-		 * polls — so reading resp_buf immediately races and catches the PREVIOUS command's late
-		 * response. Wait for THIS command's response by matching the echoed opcode (unique per command
-		 * after the memset). NOTE: on a refusal the device writes err=3 and does NOT echo the
-		 * request seq (it writes seq=0), so we match echo ONLY; a timeout is a genuine no-response.
-		 * Requires meter_poll_ms=0 (else the meter worker steals resp_buf / bumps seq).
+		 * On success clarett_fcp() has already matched this command's response on echo plus
+		 * sequence, so resp_buf holds it and the first read below returns straight away.
+		 *
+		 * The loop covers the failure paths. A refusal echoes the opcode but not the sequence, so
+		 * clarett_resp_wait() rejects it and clarett_fcp() reports a timeout; matching echo alone
+		 * here still finds that response, and rseq is read separately so the sequence mismatch
+		 * shows up in the log instead of being hidden by the match.
 		 */
 		memset(c->resp_buf, 0, 32);
 		ret = clarett_fcp(c, cmds[i].opcode, cmds[i].data, cmds[i].len);
@@ -720,28 +712,15 @@ static int clarett_stream_service(void *data)
 		}
 
 		/*
-		 * Cause-register ownership (the fix for control-during-streaming skips + mailbox timeouts).
-		 * The vendor's steady-state sweep reads all five blocks (0x100,0x300,0x200,0x400,0x500), and we
-		 * do too WHEN IDLE — 0x100 asserts bit31 per period (read-to-clear), leaving it unserviced walls
-		 * the session (manifestation-wall class). But 0x100 (mailbox DONE), 0x400 (mailbox COMMAND-PHASE),
-		 * and 0x500 (IRQ summary) belong to the MAILBOX while a command is in flight: the servicer runs at
-		 * ~6.6 kHz, so read-clearing 0x400 mid-command corrupts the device's command-phase handshake — the
-		 * command times out (fcp-server "Connection timed out") and the stall cascades into an audible
-		 * stream skip. So during a command the servicer reads ONLY the stream period blocks it owns
-		 * (0x300/0x200); the mailbox sweep reciprocally skips those two while streaming (clarett_mailbox.c).
-		 * The meter poll and every fcp-server command set cmd_inflight, so the guard covers all of them.
+		 * The servicer owns the stream period blocks (0x300 RX / 0x200 TX). 0x100 is a summary
+		 * of the other blocks — reading it clears nothing, so servicing 0x300 is what retires the
+		 * period cause it reflects. 0x400 belongs to the ISR: it is read-to-clear and carries the
+		 * mailbox handshake.
 		 */
-		bool busy = atomic_read(&c->cmd_inflight);
 		ktime_t rt0 = ktime_get();		/* time the read block: is the blackout inside a readl()? */
 
-		if (!busy)
-			readl(bar + REG_IRQ0_CAUSE);	/* 0x100 per-period cause (bit31) + mailbox DONE */
 		c2 = readl(bar + STREAM_BLK1);		/* 0x300 read-to-clear = period event + counter (owned) */
 		readl(bar + STREAM_BLK0);		/* 0x200 TX cause (owned) */
-		if (!busy) {
-			readl(bar + REG_NOTIFY_CAUSE);	/* 0x400 command-phase/notify — mailbox's during a command */
-			readl(bar + 0x500);		/* 0x500 IRQ summary */
-		}
 		{
 			u64 rus = ktime_us_delta(ktime_get(), rt0);
 
@@ -1207,12 +1186,12 @@ static void clarett_quiesce_dma(struct pci_dev *pci, void __iomem *bar0)
 
 /*
  * MSI handler. One Linux IRQ per MSI vector, dispatched by vector index (dev_id).
- * The device signals control-plane events on vec0; we check the notification cause
- * (0x400) there. We must NOT read the mailbox cause (0x100) — that is read-to-clear
- * and racing clarett_fcp()'s poll would make mailbox commands time out (mailbox
- * completion stays polled). vec1/vec2 are the data-plane period-IRQ suspects — when the
- * engine-start probe is active we just count them (MSI is edge-triggered, so not clearing a
- * cause register can't storm); reading the block cause reg (0x200/0x300) is harmless observation.
+ * vec0 carries the control plane: it is the SOLE reader of the notification cause (0x400), whose
+ * two phase bits complete the mailbox handshake and whose remaining bits are device events. That
+ * register is read-to-clear, so a second reader anywhere destroys what this one needs.
+ * vec1/vec2 are the data-plane period-IRQ suspects — when the engine-start probe is active we just
+ * count them (MSI is edge-triggered, so not clearing a cause register can't storm); reading the
+ * block cause reg (0x200/0x300) is harmless observation.
  * Every vector returns IRQ_HANDLED so the core doesn't disable the MSI as spurious.
  */
 static irqreturn_t clarett_irq(int irq, void *dev_id)
@@ -1229,47 +1208,29 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 		clarett_midi_irq(c);
 
 	if (ic->idx == CLARETT_VEC_EVENT) {
-		bool inflight = atomic_read(&c->cmd_inflight);
+		u32 notify;
 
-		/* Vendor mailbox cycle: a vec0 MSI during a command IS the completion signal. Read
-		 * the mailbox cause here (the vendor sweep's first, MSI-paced 0x100 read) and hand
-		 * the rest of the sweep to the waiting clarett_fcp. An in-command MSI without DONE
-		 * (e.g. a notification) is left to the waiter's timeout/poll fallback. */
-		if (inflight) {
-			u32 cause = readl(c->bar0 + REG_IRQ0_CAUSE);	/* read-to-clear */
-
-			if (cause & IRQ_DONE_BIT) {
-				c->mbox_cause = cause;
-				complete(&c->mbox_done);
-			}
-			return IRQ_HANDLED;
-		}
-
-		{
-		u32 cause = readl(c->bar0 + REG_NOTIFY_CAUSE);	/* 0x400, read-to-clear */
-		u32 ev = cause & NOTIFY_MONITOR_MASK;
-
-		/* vec0 also fires on mailbox-DONE, and 0x400 reads its idle level 0x3 (== NOTIFY_MON_PRIMARY)
-		 * at completion time (see the REG_NOTIFY_CAUSE note in clarett.h). Skipping the notify path
-		 * while our own command is in flight suppresses that self-reflection. NOTE (hardware-confirmed):
-		 * this is minor — the bulk of the "notification retried indefinitely" storm is the
-		 * DEVICE genuinely re-asserting 0x3 (us-scale bursts, inflight=0) because our GET is empty;
-		 * the guard can't stop that. Real front-panel events also arrive in the idle gaps.
-		 * ctl_ready gates snd_ctl_notify: with the handlers now hooked BEFORE the controls
-		 * exist (early IRQ for MSI-paced completion), a pre-controls event must not notify.
+		/*
+		 * Sole reader of both read-to-clear cause registers on this vector, in flight or not,
+		 * so each bit is consumed exactly once and by one owner.
 		 *
-		 * stream_on gate (control-during-streaming skip fix): while the engine streams, vec0 ALSO fires
-		 * on every audio period, and 0x400 reads its idle 0x3 each time — so this path would schedule a
-		 * relay ~per period. The relay is a wildcard (the FCP notify word is not exposed), so fcp-server
-		 * responds by re-reading EVERY control (GET_DATA each), flooding the mailbox and nicking the
-		 * stream (audible skips + command timeouts). The 0x400 signal is a periodic heartbeat, not a real
-		 * change, so suppress the relay entirely while streaming; genuine front-panel changes (the monitor
-		 * knob) during playback are rare and picked up once streaming stops. */
-		if (ev && READ_ONCE(c->ctl_ready) && !READ_ONCE(c->stream_on)) {
-			atomic_or(ev, &c->notify_bits);
-			schedule_work(&c->notify_work);
-		}
-		}
+		 * 0x100 carries mailbox DONE. 0x400 carries the per-command phase bits, which complete
+		 * the mailbox's waits, plus the asynchronous device events, which are forwarded.
+		 */
+		/*
+		 * 0x400 is read-to-clear and its two phase bits are the mailbox handshake, so this is
+		 * its only reader: each read consumes what it returns. 0x100 bit29 summarises "0x400
+		 * has bits pending" and is retired by draining 0x400 itself.
+		 */
+		readl(c->bar0 + REG_IRQ0_CAUSE);	/* summary; the value carries nothing extra */
+		notify = readl(c->bar0 + REG_NOTIFY_CAUSE);
+
+		if (notify & NOTIFY_REQ_ACCEPTED)
+			complete(&c->mbox_accepted);
+		if (notify & NOTIFY_RESP_LANDED)
+			complete(&c->mbox_landed);
+
+		clarett_notify_event(c, notify & NOTIFY_EVENT_MASK);
 	} else if (ic->idx == 1 || ic->idx == 2) {	/* data-plane period IRQs (probe) */
 		readl(c->bar0 + (ic->idx == 1 ? STREAM_BLK0 : STREAM_BLK1));   /* read-to-clear/observe */
 		atomic_inc(&c->period_irqs[ic->idx]);
@@ -1298,6 +1259,21 @@ static void clarett_save_work(struct work_struct *work)
 				     FCP_ACTIVATE_PERSIST, err);
 }
 
+/*
+ * Queue device event bits for relay. ctl_ready gates it: the IRQ handlers are hooked before the
+ * controls exist, since the mailbox needs them from its first command, and an event arriving
+ * before that has nothing to notify.
+ */
+void clarett_notify_event(struct clarett *c, u32 ev)
+{
+	if (!ev || !READ_ONCE(c->ctl_ready))
+		return;
+	atomic_or(ev, &c->notify_bits);
+	schedule_work(&c->notify_work);
+}
+
+static bool hw_gain_follow;		/* defined with its module_param below */
+
 static void clarett_notify_work(struct work_struct *work)
 {
 	struct clarett *c = container_of(work, struct clarett, notify_work);
@@ -1307,48 +1283,21 @@ static void clarett_notify_work(struct work_struct *work)
 		return;
 
 	/* Controls live in userspace (fcp-server), so a device notification is simply relayed: it
-	 * re-reads whatever it owns. The driver keeps no control state to refresh, and re-reading the
-	 * monitor region here would only add mailbox traffic competing with fcp-server's own reads. */
+	 * re-reads whatever it owns. The driver keeps no control state of its own to refresh. */
 	clarett_hwdep_notify(c, ev);
+
+	if (hw_gain_follow && (ev & (NOTIFY_EV_MONITOR | NOTIFY_EV_DIM_MUTE)) &&
+	    READ_ONCE(c->ctl_ready))
+		clarett_monitor_sync(c);
 
 	dev_dbg(&c->pci->dev, "async notification handled: 0x%x\n", ev);
 }
 
 /*
- * GET_METER heartbeat. Focusrite Control polls GET_METER continuously while connected, and that poll
- * turns out to be the device's required host heartbeat: without it, control writes complete (done=1,
- * fcperr=0) but never reach hardware (front-panel state frozen). We replay FC's exact 8-byte payload
- * (pad=0, num_meters=0x30=48, magic=1) and re-arm ourselves every meter_poll_ms. The response is
- * discarded: fcp-server owns the meter control and issues its own GET_METER through the hwdep.
- * Self-requeuing delayed_work; cancelled at remove.
+ * Level-meter cache refresh, at Focusrite Control's rate. Issues FC's 8-byte GET_METER payload
+ * (pad=0, num_meters=0x30=48, magic=1) into the cache the meter control serves, so a GUI reading
+ * meters costs no device traffic of its own. Self-requeuing delayed_work; cancelled at remove.
  */
-/*
- * Monitor-region change poll — the "knob is frozen while streaming" fix.
- *
- * The 0x400 notification relay is suppressed for the duration of a stream (the stream_on gate in
- * clarett_irq): vec0 also fires on every audio period, 0x400 reads its idle 0x3 each time, and the
- * relay is a wildcard, so fcp-server would answer each period by re-reading EVERY control — which
- * floods the mailbox and nicks the stream. The gate's premise was that front-panel moves during
- * playback are rare; with enable_pcm on by default that is false, because PipeWire adopts the card
- * and holds a PCM open more or less permanently, so the knob stops tracking essentially always.
- *
- * So do what the wildcard relay cannot: read the monitor region ourselves at the meter rate and
- * relay only when the bytes actually CHANGE. Cost is one GET_DATA per tick beside the GET_METER the
- * heartbeat already issues at that same rate during streaming; a steady state with nobody touching
- * the unit relays nothing at all. The region (24, len 92) covers the monitor mute/dim flags and the
- * master volume pair at 32/33 — the same bytes the notify refresh trusts to read back live.
- *
- * The poll runs whether or not audio is streaming: the relay it feeds is only needed while streaming
- * (outside a stream the 0x400 relay is live and does that job), but clarett_hw_gain_follow() hangs
- * off the same change detection and has to track the knob at all times.
- */
-static bool monitor_poll = true;
-module_param(monitor_poll, bool, 0644);
-MODULE_PARM_DESC(monitor_poll,
-		 "Poll the monitor config region and act when it changes: relay a notification while "
-		 "streaming, so the front-panel knob keeps tracking (the 0x400 relay is gated off for the "
-		 "duration of a stream), and drive hw_gain_follow. Default on; 0 restores the old "
-		 "behaviour, where the knob is frozen for as long as any PCM is open.");
 
 /*
  * Keep the SW gain of every output under HARDWARE control equal to the front-panel knob.
@@ -1371,7 +1320,7 @@ MODULE_PARM_DESC(monitor_poll,
  * flash on every movement of the knob would wear the NVRAM. Writes are also change-gated, so a
  * stationary knob costs nothing at all.
  *
- * `cfg` is the monitor region as fetched by clarett_monitor_poll — offset MONITOR_CFG_OFFSET, length
+ * `cfg` is the monitor region as fetched by clarett_monitor_sync — offset MONITOR_CFG_OFFSET, length
  * MONITOR_CFG_LEN, which spans the gains, the HW-enable bits and the knob alike.
  */
 static bool hw_gain_follow = true;
@@ -1462,7 +1411,12 @@ void clarett_meter_source_follow(struct clarett *c, u8 source)
 		dev_dbg(&c->pci->dev, "meter-source follow: %s (0x%02x)\n", ms->name, source);
 }
 
-static void clarett_monitor_poll(struct clarett *c)
+/*
+ * Read the monitor config region and mirror the physical knob into the SW gain of every output
+ * under hardware gain control. Driven by monitor notifications, plus once at probe so a fresh load
+ * starts in sync, and by the SW/HW toggle passing through the hwdep.
+ */
+void clarett_monitor_sync(struct clarett *c)
 {
 	u8 buf[MONITOR_CFG_LEN];
 	u8 req[8];		/* GET_DATA {u32 offset, u32 len} */
@@ -1476,7 +1430,7 @@ static void clarett_monitor_poll(struct clarett *c)
 	 * reading c->resp_buf here would race the next command. */
 	err = clarett_fcp_cmd(c, FCP_GET_DATA, req, sizeof(req), buf, sizeof(buf));
 	if (err) {
-		dev_dbg(&c->pci->dev, "monitor poll: GET_DATA failed: %d\n", err);
+		dev_dbg(&c->pci->dev, "monitor sync: GET_DATA failed: %d\n", err);
 		return;
 	}
 
@@ -1488,58 +1442,11 @@ static void clarett_monitor_poll(struct clarett *c)
 	if (!first && !changed)
 		return;
 
-	if (changed) {
-		dev_dbg(&c->pci->dev, "monitor poll: region changed\n");
-		/* Only while streaming: outside one the 0x400 relay is live and notifies for us. */
-		if (READ_ONCE(c->stream_on))
-			clarett_hwdep_notify(c, NOTIFY_MON_PRIMARY);
-	}
+	if (changed)
+		dev_dbg(&c->pci->dev, "monitor sync: region changed\n");
 
-	/* Also on the FIRST poll: the stored SW gains of HW-controlled outputs are whatever the last
-	 * session left behind, so without an initial sync they stay stale until the knob is next
-	 * touched — and a HW->SW toggle before that would jump, which is the case this exists to fix. */
 	if (hw_gain_follow)
 		clarett_hw_gain_follow(c, buf);
-}
-
-static void clarett_meter_work(struct work_struct *work)
-{
-	struct clarett *c = container_of(work, struct clarett, meter_work.work);
-	int delay = meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS;
-	int n = c->hwdep_n_meter_slots;
-
-	if (meter_poll_ms > 0) {
-		if (n > 0 && c->hwdep_meter_levels) {
-			/*
-			 * The meter control exists (fcp-server set the map): make the heartbeat's poll ALSO
-			 * refresh the shared cache and stamp hwdep_meter_polled, so the GUI-facing .get serves
-			 * that cache instead of issuing its own GET_METER per read. This collapses the meter
-			 * traffic to ONE poll rate — the flood of per-read device commands was disrupting the
-			 * stream (skips) and timing out other mailbox commands during playback.
-			 */
-			u8 req[8];		/* {pad:u16=0, num_meters:u16, magic:u32=1} */
-
-			clarett_put_le16(req, 0);
-			clarett_put_le16(req + 2, n);
-			clarett_put_le32(req + 4, 1);
-			mutex_lock(&c->hwdep_lock);
-			if (!clarett_fcp_cmd(c, FCP_GET_METER, req, sizeof(req),
-					     (u8 *)c->hwdep_meter_levels, n * sizeof(__le32)))
-				c->hwdep_meter_polled = jiffies ? jiffies : 1;
-			mutex_unlock(&c->hwdep_lock);
-		} else {
-			/* No meter control yet — the generic heartbeat (the "device needs it" hypothesis). */
-			static const u8 meter_req[8] = { 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00, 0x00 };
-
-			clarett_fcp(c, FCP_GET_METER, meter_req, sizeof(meter_req));
-		}
-
-		/* Runs streaming or not — hw_gain_follow has to track the knob at all times. */
-		if (monitor_poll && READ_ONCE(c->ctl_ready))
-			clarett_monitor_poll(c);
-
-		schedule_delayed_work(&c->meter_work, msecs_to_jiffies(delay));
-	}
 }
 
 /* Allocate MSI vectors. The config-space side effect is the point of doing this early:
@@ -1631,7 +1538,6 @@ static void clarett_card_free(struct snd_card *card)
 	struct clarett *c = card->private_data;
 
 	WRITE_ONCE(c->ctl_ready, false);	/* stop the ISR queueing new notify work */
-	cancel_delayed_work_sync(&c->meter_work);
 	/* Flush a pending debounced persist so a change made within the last CLARETT_SAVE_DELAY_MS
 	 * still reaches NVRAM. Done here — after the meter worker is stopped (it shares the mailbox
 	 * resp_buf) but while the MSI completion path is still hooked — so the DATA_CMD completes
@@ -1693,12 +1599,11 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	mutex_init(&c->hwdep_lock);
 	mutex_init(&c->pcm_lock);
 	init_waitqueue_head(&c->hwdep_notify_wait);
-	init_completion(&c->mbox_done);
+	init_completion(&c->mbox_accepted);
+	init_completion(&c->mbox_landed);
 	INIT_WORK(&c->notify_work, clarett_notify_work);
 	INIT_DELAYED_WORK(&c->save_work, clarett_save_work);
-	INIT_DELAYED_WORK(&c->meter_work, clarett_meter_work);
 	atomic_set(&c->notify_bits, 0);
-	atomic_set(&c->cmd_inflight, 0);
 	INIT_DELAYED_WORK(&c->stream_report, clarett_stream_report);
 	atomic_set(&c->period_irqs[1], 0);
 	atomic_set(&c->period_irqs[2], 0);
@@ -1852,13 +1757,6 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 					      : frag + tx_frag_pad;
 	}
 
-	/* Start the GET_METER heartbeat. FC polls continuously from connect onward; the device
-	 * needs it to apply control writes to hardware. Run it for the rest of probe too, so the
-	 * monitor-enable writes below take effect like a real session. */
-	if (meter_poll_ms > 0)
-		schedule_delayed_work(&c->meter_work,
-				      msecs_to_jiffies(meter_poll_ms > 0 ? meter_poll_ms : CLARETT_METER_POLL_MS));
-
 	/* Seed the shadow from the device so mixer "get" reflects real state at load and the
 	 * enable-byte RMW below is safe. Best-effort: if it fails we skip the enable writes. */
 	seeded = clarett_seed_shadow(c);
@@ -1879,13 +1777,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	}
 
 	/* Diagnostic: characterize the FCP error=3 refusal (blanket session block vs per-command).
-	 * Requires meter_poll_ms=0 so the meter worker doesn't race the shared resp_buf/seq (see param desc). */
-	if (error_probe) {
-		if (meter_poll_ms > 0)
-			dev_warn(&pci->dev,
-				 "error_probe needs meter_poll_ms=0 (meter worker races the shared response buffer); results unreliable\n");
+	 */
+	if (error_probe)
 		clarett_error_probe(c);
-	}
 
 	/* Make Mute/Dim actually affect Monitor Out 1-2 by setting the per-output enable bits: the
 	 * master flag alone does nothing until an output opts in. This is a hardware-side write, so it
@@ -1927,6 +1821,9 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	err = 0;
 
 	WRITE_ONCE(c->ctl_ready, true);	/* controls exist; the ISR notify path may fire */
+
+	if (hw_gain_follow)
+		clarett_monitor_sync(c);
 
 	/* Experimental capture PCM (data-plane bring-up). Owns the engine, so it excludes stream_probe. Both
 	 * models use the per-direction descriptor path (geometry derived from channel counts), so no per-model
@@ -2036,7 +1933,6 @@ static void clarett_remove(struct pci_dev *pci)
 	 * tearing the substream down underneath us.
 	 */
 	WRITE_ONCE(c->ctl_ready, false);	/* no new notify work from the ISR */
-	cancel_delayed_work_sync(&c->meter_work);
 	clarett_engine_stop(c);
 
 	/* Blocks: disconnect → wait for the last userspace handle to close (the final
@@ -2065,7 +1961,6 @@ static void clarett_shutdown(struct pci_dev *pci)
 	if (!card)
 		return;
 	c = card->private_data;
-	cancel_delayed_work_sync(&c->meter_work);
 	clarett_hwdep_free(c);		/* no-op unless the hwdep path armed the relay */
 	/* Persist a just-made change before the reboot tears the device down (mailbox still up). */
 	if (cancel_delayed_work_sync(&c->save_work))
@@ -2394,7 +2289,7 @@ static const struct clarett_model clarett_8pre = {
 	.has_spdif_source = true,
 	.capture_channels = 20,			/* 18 record + 2 loopback. Width HW-confirmed: capture clocks at
 						 * full 20ch with analogue-1 on ch0; per-channel map beyond analogue [XML]. */
-	.playback_channels = 20,		/* [XML] Playback 1-20 (untraced) */
+	.playback_channels = 20,		/* [TRACE] Playback 1-20 (0x007002 speed 0 = 0x14) */
 	.rx_live_mid = 16,			/* ADAT 5-8 -> ch16-19 (pin-m=0x0) gone at double speed. HW-CONFIRMED:
 						 * ADAT 1-4 read clean on ch12-15 at 96k, ch16-19 held stale ring content
 						 * until this cap was applied. */

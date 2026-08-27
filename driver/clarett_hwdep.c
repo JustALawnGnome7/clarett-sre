@@ -75,6 +75,16 @@ static int clarett_hwdep_cmd(struct clarett *c, struct fcp_cmd __user *arg)
 	    clarett_get_le32((const u8 *)data + 4) == 1)
 		clarett_meter_source_follow(c, ((const u8 *)data)[8]);
 
+	/* SW/HW follow: moving an output to hardware gain has to bring its stored SW gain up to the
+	 * knob's position, since the device never writes the knob back. Knob movements arrive as
+	 * monitor notifications; this transition is a host write, and HWEN_ACTIVATE is the DATA_CMD
+	 * that commits it. Trigger on the commit, not on the staging SET_DATA — until the commit the
+	 * device still reports the old enable bits, and the follow would skip the very output that
+	 * just changed. */
+	if (cmd.opcode == FCP_DATA_CMD && cmd.req_size >= 4 &&
+	    clarett_get_le32(data) == HWEN_ACTIVATE)
+		clarett_monitor_sync(c);
+
 	/* Persist fcp-server's config changes to flash. A control change arrives as SET_DATA (stage the
 	 * bytes) + DATA_CMD{activate} (commit live). The device auto-persists only some of its config
 	 * (routing survives a power cycle) and not the rest (output gains, S/PDIF input source revert to
@@ -105,7 +115,7 @@ out:
  *    step0 zeroed; fcp-server only inspects step2, so this is honest, not a fabricated layout.
  *
  *  - We do NOT reset c->seq. fcp.c can zero it because fcp-server is the device's only mailbox
- *    user; here the in-kernel GET_METER heartbeat shares c->seq, so a reset would race it. The
+ *    user; here the in-kernel meter refresh shares c->seq, so a reset would race it. The
  *    device only echoes seq (it does not require a 0 start), and fcp-server never inspects seq,
  *    so continuing the monotonic counter is correct and race-free.
  *
@@ -159,7 +169,7 @@ out:
  * fcp-server owns metering on this path: it reads the device's raw meter count, chooses a
  * channel->slot map, and installs both here. The "Level Meter" control is created on the first
  * SET_METER_MAP; its .get polls GET_METER (the same {pad,num_meters,magic=1} request the in-kernel
- * heartbeat uses) and projects the raw levels through the map. SET_METER_LABELS attaches an
+ * meter worker uses) and projects the raw levels through the map. SET_METER_LABELS attaches an
  * FCP_CHANNEL_LABELS TLV naming each channel. Mirrors sound/usb/fcp.c's meter control.
  *
  * A LEVEL IS 16-BIT, REPLICATED INTO A 32-BIT SLOT `[HW — 4Pre]`. The slot stride is
@@ -445,88 +455,28 @@ static int clarett_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 /*** Notification relay ***/
 
 /*
- * Relay a device notification to a waiting fcp-server (called from clarett_notify_work on the
- * hwdep path). fcp-server's read() returns a u32 bitmask and re-reads every control whose
- * devmap "notify-client" mask intersects it.
+ * Relay device event bits to fcp-server. Same shape as fcp_notify() in sound/usb/fcp.c:
+ * accumulate the bits, wake the reader, and let clarett_hwdep_read() take-and-zero them.
  *
- * Adaptation: the USB FCP device delivers that precise FCP notification bitmask in its interrupt
- * message; this Thunderbolt device only signals *that* a notification occurred, via the 0x400
- * cause register (ev = the monitor-mask cause bits) — the FCP notification word is not exposed on
- * any surface we can read. We therefore deliver an all-categories event (~0) so fcp-server does a
- * correct, if broad, re-read of all notifiable controls. If a real notification word is ever
- * decoded (e.g. a future capture or a DEVMAP field), carry it through here instead of the wildcard.
+ * The accumulate-and-take pair coalesces: a burst collapses into however many reads userspace
+ * performs, at whatever rate it reads.
  */
-/*
- * Minimum gap between notification wakes. Writable at runtime:
- *   echo 0 > /sys/module/snd_clarett/parameters/notify_ms       # no limiting at all
- * Each wake costs userspace a re-read of every control it marks notifiable — ~17 mailbox round
- * trips on a 2Pre (the routing and mixer controls are not notifiable, so they cost nothing), so
- * 20 Hz would be roughly 160 round trips a second.
- *
- * 50 ms rather than something smaller because MEASURED (2Pre): the 0x400 config-change
- * signal is a PERIODIC HEARTBEAT at ~13.4 Hz, not a change event. Counting notifications reaching
- * fcp-server over 10 s gave ~135 at every limiter setting from 50 ms down to 0, ~135 after halving
- * the re-read work per wake, and ~133 while the monitor knob was turned continuously for the whole
- * 10 s. Neither the timer, nor the workload, nor actual device activity moves that number.
- *
- * So the device says "re-read me" on a fixed cadence and says nothing about what changed — which is
- * why the relay is a wildcard, and why front-panel tracking is capped at one update per ~75 ms.
- * 50 ms passes essentially everything on offer while still collapsing a burst; going faster needs
- * the driver to poll the monitor bytes and synthesise a notification on change, not a shorter timer.
- * (The "~30 Hz idle" figure in the older comments here was wrong.)
- */
-static uint notify_ms = 50;
-module_param(notify_ms, uint, 0644);
-MODULE_PARM_DESC(notify_ms,
-		 "Minimum ms between notification wakes to userspace (default 50; 0 = every "
-		 "notification). The device itself only announces at ~13.5 Hz, so lowering this "
-		 "further changes nothing; raise it to cut mailbox traffic.");
-
-/* Coalesced wake: fires ~notify_ms after the FIRST notification of a burst — see the rate-limit
- * note in clarett_hwdep_notify() for why it must not be the last one. */
-static void clarett_hwdep_notify_wake(struct work_struct *work)
+void clarett_hwdep_notify(struct clarett *c, u32 ev)
 {
-	struct clarett *c = container_of(work, struct clarett, hwdep_notify_dwork.work);
-
+	ev &= NOTIFY_EVENT_MASK;
+	if (!c->hwdep_ready || !ev)
+		return;
+	atomic_or(ev, &c->hwdep_notify_event);
 	wake_up_interruptible(&c->hwdep_notify_wait);
 }
 
-void clarett_hwdep_notify(struct clarett *c, u32 ev)
-{
-	/*
-	 * The device asserts the 0x400 config-change notification steadily (~30 Hz idle), and we can
-	 * only relay a wildcard (~0) since the FCP notification word is not exposed — so every wake
-	 * makes fcp-server re-read every control it marks notifiable. Coalesce: set the event now, and
-	 * wake at most once per notify_ms so a storm of idle notifications becomes one re-read.
-	 *
-	 * schedule_delayed_work(), NOT mod_delayed_work(): it is a no-op while the work is already
-	 * queued, so the wake lands 200 ms after the FIRST notification of a burst. mod_delayed_work()
-	 * pushes the deadline out on every arrival, which is a debounce — and against a source that
-	 * never goes idle it never fires at all. That was the bug: the flag was set forever behind a
-	 * wake that never came, so userspace received exactly one notification (whatever was pending
-	 * when it opened the hwdep) and nothing afterwards. Front-panel changes — the monitor knob,
-	 * mute, dim — therefore never reached fcp-server, while the driver logged every one of them.
-	 */
-	if (!c->hwdep_ready)
-		return;
-	atomic_or(~0u, &c->hwdep_notify_event);
-	schedule_delayed_work(&c->hwdep_notify_dwork, msecs_to_jiffies(notify_ms));
-}
-
 /*
- * Stop the relay. MUST run before c is freed: the debounced wake holds a timer pointing at c, and
- * because the device notifies at ~30 Hz idle one is essentially always armed — a surprise removal
- * (the device powered off on its Thunderbolt link) that frees c with the timer live fires
- * wake_up_interruptible() into freed memory. Call after the last thing that can re-arm the dwork
- * (clarett_notify_work), and note the flag also covers probe-error teardowns that never reached
- * clarett_hwdep_init(), where the delayed_work is still all zeroes.
+ * Stop the relay before c is freed. With the timer gone this only has to stop new wakes: a reader
+ * parked in clarett_hwdep_read() is released by card->shutdown, which snd_card_free() sets.
  */
 void clarett_hwdep_free(struct clarett *c)
 {
-	if (!c->hwdep_ready)
-		return;
 	c->hwdep_ready = false;
-	cancel_delayed_work_sync(&c->hwdep_notify_dwork);
 }
 
 static long clarett_hwdep_read(struct snd_hwdep *hw, char __user *buf,
@@ -576,8 +526,6 @@ int clarett_hwdep_init(struct clarett *c)
 	if (err < 0)
 		return err;
 
-	INIT_DELAYED_WORK(&c->hwdep_notify_dwork, clarett_hwdep_notify_wake);
-
 	/* fcp.c leaves iface at the default and fcp-server opens by device, not iface. */
 	hw->private_data = c;
 	hw->exclusive = 1;
@@ -587,7 +535,7 @@ int clarett_hwdep_init(struct clarett *c)
 	hw->ops.read = clarett_hwdep_read;
 	hw->ops.poll = clarett_hwdep_poll;
 
-	c->hwdep_ready = true;		/* dwork is live from here; clarett_hwdep_free() must run */
+	c->hwdep_ready = true;		/* the relay is live from here; clarett_hwdep_free() must run */
 
 	dev_dbg(&c->pci->dev,
 		"FCP hwdep created (fcp-server transport; PVERSION+CMD+INIT+METER+notify)\n");
