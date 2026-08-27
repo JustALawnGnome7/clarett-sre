@@ -121,11 +121,31 @@ sudo modprobe snd-clarett
 It rebuilds automatically on every kernel install from then on. Check with
 `dkms status snd-clarett`, and undo the whole thing with `sudo make dkms-uninstall`.
 
-**RPM (Fedora)** — `packaging/` holds two specs: `snd-clarett-kmod.spec`, which produces
-the Fedora-native `akmod-snd-clarett` (and per-kernel `kmod-snd-clarett-<kernel>`
-packages), and `snd-clarett-dkms.spec`, which wraps the DKMS route above in an RPM. Build
-instructions are in the header of each. `make dist` produces the source tarball both
-consume.
+**RPM (Fedora)** — the Fedora-native route is an akmod, which ships its source and lets
+`akmods.service` rebuild the module at boot after a kernel upgrade:
+
+```sh
+sudo dnf install akmods rpm-build kernel-devel
+make rpm-akmod               # builds; prints the dnf command, does not install
+```
+
+Read the install transaction before confirming it. `akmods` carries a rich dependency on
+`kernel-devel`, which can resolve to `kernel-core` without `kernel-modules` and leave you
+a kernel that boots with no graphics and no network — check that every package removed at
+the old version has a counterpart installed at the new one.
+
+`make rpm-kmod` builds a plain binary module for one kernel instead (`KVER=` to pick it,
+default the running one); it does not rebuild itself, so it suits a pinned kernel or a
+build host. Both targets call `make dist` for the source tarball and stage the spec into
+`%_topdir` first, which is required — kmodtool re-invokes `rpmbuild` against
+`%{_specdir}/%{name}.spec` and fails if the spec is not there.
+
+Do not install the akmod and DKMS at the same time: they install to different paths that
+are both in depmod's search path, and which module loads is undefined. `modinfo -n
+snd-clarett` names the one that won.
+
+`packaging/` also holds `snd-clarett-dkms.spec`, which wraps the DKMS route above in an
+RPM; build instructions are in its header.
 
 Either route makes the module load on its own when the interface appears, through the
 PCI id alias — no `modprobe` and no udev rule needed once it is installed.

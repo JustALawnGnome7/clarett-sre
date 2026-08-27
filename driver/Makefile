@@ -5,6 +5,8 @@
 #   make load             # load in place, pulling in the ALSA modules it needs
 #   make dkms-install     # register with DKMS so it rebuilds on every kernel upgrade
 #   make dist             # source tarball, the input to the RPM packaging
+#   make rpm-akmod        # build the akmod RPM (rebuilds itself for each new kernel)
+#   make rpm-kmod         # build a binary kmod RPM for one kernel (KVER=...)
 #   make clean
 
 # Named once, for both halves of this file: the kbuild half turns it into the object
@@ -55,6 +57,13 @@ DISTFILES := $(CLARETT_SRCS) $(CLARETT_HDRS) Makefile dkms.conf \
 TARBALL   := $(PKGNAME)-$(CLARETT_VERSION).tar.gz
 DKMS_SRC  := /usr/src/$(PKGNAME)-$(CLARETT_VERSION)
 
+# Ask rpm where its build tree is rather than assuming ~/rpmbuild: %_topdir is
+# configurable, and a wrong guess would stage the spec somewhere %akmod_install
+# will not find it.
+RPM_TOPDIR := $(shell rpm --eval '%{_topdir}' 2>/dev/null)
+SPECFILE   := packaging/$(PKGNAME)-kmod.spec
+KVER       ?= $(shell uname -r)
+
 # insmod does NOT resolve dependencies — it loads exactly the file named — so loading the .ko
 # in place needs the modules it links against resident first. snd-pcm and snd-hwdep are usually
 # already up (any onboard HD-Audio card pulls them in), but snd-rawmidi is only loaded once
@@ -69,7 +78,8 @@ DKMS_SRC  := /usr/src/$(PKGNAME)-$(CLARETT_VERSION)
 # module, and the missing one only surfaces later as "Unknown symbol" from insmod.
 MODDEPS = $(shell modinfo -F depends $(CURDIR)/snd-clarett.ko 2>/dev/null | tr ',' ' ')
 
-.PHONY: all clean modules_install load unload version dist dkms-install dkms-uninstall
+.PHONY: all clean modules_install load unload version dist dkms-install dkms-uninstall \
+        rpm-akmod rpm-kmod
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) CLARETT_VERSION=$(CLARETT_VERSION) modules
@@ -124,5 +134,84 @@ dkms-install:
 dkms-uninstall:
 	-dkms remove -m $(PKGNAME) -v $(CLARETT_VERSION) --all
 	rm -rf $(DKMS_SRC)
+
+# --- RPM packaging (Fedora / RPM Fusion kmodtool) ----------------------------
+#
+# Both targets BUILD ONLY and print the dnf command instead of running it. The
+# asymmetry with dkms-install is deliberate: akmods carries a
+# `(kernel-devel-matched if kernel-core)` rich dependency, so its install
+# transaction can drag in kernel-core with no kernel-modules — a kernel that
+# boots to 800x600 with no network. Reading that transaction (every package
+# removed at the old version must have a counterpart installed at the new one)
+# is the operator's job and cannot be delegated to a Makefile.
+#
+# Neither target takes the bare `rpmbuild -bb` path, and that is not an
+# oversight: with neither buildforkernels nor kernels defined, kmodtool builds
+# for "the current kernels", which needs --repo and a
+# buildsys-build-<repo>-kerneldevpkgs helper — RPM Fusion build-farm
+# infrastructure that an ordinary Fedora machine does not have.
+
+# Staging, shared by both. The spec is copied into %{_specdir} rather than built
+# where it lives because kmodtool's %akmod_install re-invokes `rpmbuild -bs`
+# against %{_specdir}/%{name}.spec and fails outright if it is not there.
+define rpm_prepare
+	@command -v rpmbuild >/dev/null || \
+		{ echo "rpmbuild is not installed (Fedora: dnf install rpm-build)"; exit 1; }
+	@test -n "$(RPM_TOPDIR)" || { echo "rpm did not report a %_topdir"; exit 1; }
+	@# dkms.conf owns the version; the spec has to carry a copy because rpm cannot
+	@# read it out. A mismatch makes rpmbuild fail on a missing Source0 instead of
+	@# on the actual cause, so check it here where the message can say so.
+	@spec_ver=$$(sed -n 's/^Version:[[:space:]]*//p' $(SPECFILE)); \
+	 test "$$spec_ver" = "$(CLARETT_VERSION)" || { \
+	   echo "$(SPECFILE) has Version: $$spec_ver, dkms.conf has $(CLARETT_VERSION)"; \
+	   echo "dkms.conf is the source of truth — update the spec to match."; exit 1; }
+	install -d $(RPM_TOPDIR)/SOURCES $(RPM_TOPDIR)/SPECS
+	install -m 644 $(TARBALL) $(RPM_TOPDIR)/SOURCES/
+	install -m 644 $(SPECFILE) $(RPM_TOPDIR)/SPECS/
+endef
+
+# $(1) = shell glob(s) matching the RPMs the build should have produced.
+define rpm_report
+	@set -- $$(ls -1 $(1) 2>/dev/null); \
+	 test $$# -gt 0 || { echo "no RPMs matched — see the rpmbuild output above"; exit 1; }; \
+	 echo; echo "the packages to install:"; for f; do echo "  $$f"; done; \
+	 dkms status -m $(PKGNAME) 2>/dev/null | grep -q . && { \
+	   echo; \
+	   echo "WARNING: $(PKGNAME) is also registered with DKMS. The two routes install"; \
+	   echo "  to different paths that are both in depmod's search path (akmod:"; \
+	   echo "  extra/$(PKGNAME)/, dkms: extra/), and which one loads is undefined."; \
+	   echo "  Run 'make dkms-uninstall' first; 'modinfo -n $(PKGNAME)' names the winner."; \
+	 }; \
+	 echo; \
+	 echo "install with (read the transaction before confirming: if it touches any"; \
+	 echo "kernel package, every package removed at the old version must have a"; \
+	 echo "counterpart installed at the new one, or you get a kernel that boots"; \
+	 echo "with no graphics and no network):"; \
+	 echo; echo "  sudo dnf install $$*"; echo
+endef
+
+# The end-user package: ships the source RPM, and akmods.service rebuilds it at
+# boot after any kernel upgrade. Compiles nothing here, so it needs no kernel
+# tree and is not tied to the running kernel.
+#
+# kmodtool also emits an empty kmod-snd-clarett metapackage that just requires
+# the akmod; it exists so a repo can track the newest kernel, and it is left out
+# of the install line below because it adds nothing to a local file install.
+rpm-akmod: dist
+	$(rpm_prepare)
+	rpmbuild -bb --define 'buildforkernels akmod' $(RPM_TOPDIR)/SPECS/$(notdir $(SPECFILE))
+	$(call rpm_report,\
+	  $(RPM_TOPDIR)/RPMS/*/akmod-$(PKGNAME)-$(CLARETT_VERSION)-*.rpm \
+	  $(RPM_TOPDIR)/RPMS/*/$(PKGNAME)-kmod-common-$(CLARETT_VERSION)-*.rpm)
+
+# A binary module for one kernel, compiled now. Defaults to the running kernel;
+# override with KVER=<uname -r> to build for another (its kernel-devel must be
+# installed).
+rpm-kmod: dist
+	$(rpm_prepare)
+	rpmbuild -bb --define "kernels $(KVER)" $(RPM_TOPDIR)/SPECS/$(notdir $(SPECFILE))
+	$(call rpm_report,\
+	  $(RPM_TOPDIR)/RPMS/*/kmod-$(PKGNAME)-$(KVER)-*.rpm \
+	  $(RPM_TOPDIR)/RPMS/*/$(PKGNAME)-kmod-common-$(CLARETT_VERSION)-*.rpm)
 
 endif

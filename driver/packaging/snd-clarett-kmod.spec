@@ -7,15 +7,20 @@
 # akmod is produced by kmodtool's %%akmod_install re-invoking `rpmbuild -bs` against
 # %%{_specdir}/%%{name}.spec, and it fails there if the file is somewhere else.
 #
+# The Makefile does all of that, and is the recipe to use:
+#
+#   make -C .. rpm-akmod            # the akmod — rebuilds itself for each new kernel
+#   make -C .. rpm-kmod             # a binary kmod for the running kernel
+#   make -C .. rpm-kmod KVER=<ver>  # ... or for another one
+#
+# It builds the tarball, stages both it and this spec into %%{_topdir}, and prints the
+# resulting packages rather than installing them. By hand it is:
+#
 #   make -C .. dist
 #   cp ../snd-clarett-*.tar.gz ~/rpmbuild/SOURCES/
 #   cp snd-clarett-kmod.spec   ~/rpmbuild/SPECS/
-#
-# Build the akmod (what an end user installs — rebuilds itself for each new kernel):
 #   rpmbuild -bb --define 'buildforkernels akmod' ~/rpmbuild/SPECS/snd-clarett-kmod.spec
-#
-# Build a binary kmod for one specific kernel:
-#   rpmbuild -bb --define "kernels $(uname -r)" ~/rpmbuild/SPECS/snd-clarett-kmod.spec
+#   rpmbuild -bb --define "kernels $(uname -r)"   ~/rpmbuild/SPECS/snd-clarett-kmod.spec
 #
 # Note there is deliberately no plain `rpmbuild -bb` recipe here. Without either define,
 # kmodtool takes its "build for the current kernels" path, which requires --repo and the
