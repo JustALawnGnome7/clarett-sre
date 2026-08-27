@@ -18,7 +18,6 @@ OD = collections.OrderedDict
 
 FCP_SET_MUX = 0x003002
 
-
 def load_mux_bands(key):
     """The model's SET_MUX band tables from the de-blobbed tools/arm-tables/clarett_arm_<key>.h.
     Each clarett_armmux_<key>_b<i>[] is {u32 header (band << 16 | ...), u32 entry[]}."""
@@ -27,7 +26,6 @@ def load_mux_bands(key):
     for m in re.finditer(r"clarett_armmux_%s_b(\d+)\[\]\s*=\s*\{(.*?)\};" % key, text, re.S):
         bands[int(m.group(1))] = [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{8})", m.group(2))]
     return bands
-
 
 def band0_mux(key):
     """The model's band-0 routing table as [(src_pin, dst_pin)], padding entries dropped.
@@ -41,7 +39,6 @@ def band0_mux(key):
             continue
         return [((e >> 12) & 0xfff, e & 0xfff) for e in words[1:] if e]
     return []
-
 
 # Pin naming is DIRECTION-SCOPED and PER-MODEL — the same number means different things as a source
 # vs a destination (0x408 = S/PDIF in as a source, Monitor Out 1 as a destination), and the smaller
@@ -83,7 +80,6 @@ def name_destinations(dsts, slug=None):
             out[pin] = (cap.get(pin, f"PCM {pin - 0x600 + 1:02d}"), None)
     return out
 
-
 def alsa_sink_name(name):
     """Device name -> ALSA control name for a routing destination.
 
@@ -99,7 +95,6 @@ def alsa_sink_name(name):
             return "Analogue Output " + name[len(prefix):]
     return name
 
-
 # Presentation order for the routing window: the GUI lists each Hardware group in the order the pins
 # appear in the map, and pin order alone would show ADAT before Analogue (sources) and S/PDIF before
 # Analogue (outputs). Sort by category rank so the conventional Analogue -> S/PDIF -> ADAT order (matching
@@ -112,7 +107,6 @@ def _source_rank(pin):
     if 0x600 <= pin <= 0x61f:                 return (4, pin)  # PCM
     return (9, pin)
 
-
 def _dest_rank(pin):
     if pin in (0x408, 0x409):                 return (0, 0, pin)  # Monitor outputs (8PreX) — before Line
     if 0x400 <= pin <= 0x407:                 return (0, 1, pin)  # Line/Analogue outputs
@@ -121,7 +115,6 @@ def _dest_rank(pin):
     if 0x300 <= pin <= 0x31f:                 return (3, 0, pin)  # Mixer input
     if 0x600 <= pin <= 0x61f:                 return (4, 0, pin)  # PCM
     return (9, 0, pin)
-
 
 # Capture (record-output) layout, from each model's vendor XML <record-outputs>. The capture stream is a
 # contiguous pin block 0x600.. whose entries are physical record inputs with a Loopback PAIR inserted at a
@@ -154,7 +147,6 @@ def capture_names(slug):
             n += 1
             out[p] = f"PCM {n:02d}"
     return out
-
 
 def name_sources(srcs):
     """src pin -> name. Pin 0 ("Off") is excluded: fcp-server rejects a router-pin <= 0."""
@@ -360,7 +352,6 @@ _SMUX_H_EXTRA = {
 SMUX_GONE = {slug: {"m": _SMUX_M[slug], "h": _SMUX_M[slug] | _SMUX_H_EXTRA[slug]}
              for slug in _SMUX_M}
 
-
 def add_rate_meter_indices(slug, dev_dests):
     """Attach peak-index-m / peak-index-h to each metered destination that survives that speed.
 
@@ -452,7 +443,6 @@ SPDIF_SOURCE_ENUM = [OD([("name", "None"),    ("value", 0)]),
                      OD([("name", "RCA"),     ("value", 2)])]
 SPDIF_SOURCE = {"clarett-4pre", "clarett-8pre", "clarett-8prex"}
 
-
 # --- Clarett 8Pre band-0 router table (no capture exists for this model) -------------------------
 #
 # Every other model's routing comes from its captured bring-up blob. There is no 8Pre capture, and
@@ -495,7 +485,6 @@ def synth_band0_8pre():
 
     return pairs
 
-
 # The full source set, which a band-0 table cannot give: it records the source currently patched to
 # each destination, so an unrouted source simply doesn't appear (which is why the 2Pre's map offers
 # 2 of its 16 mix buses and 2 of its 4 playback streams). fcp-server validates destinations against
@@ -508,7 +497,6 @@ def synth_sources_8pre():
             [0x600 + i for i in range(20)] +
             [0x300 + i for i in range(16)])
 
-
 def mode_key(kind):
     """alsa-map control-type key for a mode enum kind: by arity, so a model's kinds never collide
     (the 8PreX has a 3-way and a 2-way; every other model has only one kind)."""
@@ -517,7 +505,20 @@ def mode_key(kind):
 def out_index(n):        # physical output n (0-based) -> array index onto the strided gain region
     return (n // 2) * 4 + (n % 2)
 
-def member(offset, typ, shape=None, nd=0, nc=1, note=None):
+# The device's notification bits, from the vendor XML <notifications> block (identical across the
+# Clarett line, and the same values the USB Clarett and Scarlett descriptors use): bit21 dim-mute,
+# bit22 monitor. Hardware-confirmed on a 2Pre — moving the front-panel monitor knob raises
+# 0x00400000 and nothing else. fcp-server ANDs this mask against the notification word the driver
+# relays (device-ops.c: `if (!(notification & props->notify_client)) continue`), so a control is
+# re-read only when its own event fires.
+#
+# Both bits are set on every monitor-section member rather than split, because a dim or mute press
+# and a knob move both change what that whole group reads back, and the group is four members.
+NOTIFY_DIM_MUTE = 0x00200000
+NOTIFY_MONITOR  = 0x00400000
+NOTIFY_MON_ANY  = NOTIFY_DIM_MUTE | NOTIFY_MONITOR
+
+def member(offset, typ, shape=None, nd=0, nc=NOTIFY_MON_ANY, note=None):
     m = OD(offset=offset, type=typ)
     if shape is not None:
         m["array-shape"] = [shape]
@@ -536,9 +537,9 @@ for slug, spec in MODELS.items():
     # notify-device is the DATA_CMD{activate} the device needs to COMMIT a write (fcp-server issues
     # it via fcp_data_notify after the write). From the snd-clarett driver: air=7, mode=6, gain=1,
     # monitor mute/dim=2. Without it the SET_DATA stages but never manifests.
-    # notify-client is the mask fcp-server re-reads a control on when the DEVICE announces a change.
-    # It costs a mailbox round trip per control per notification, and this device notifies steadily,
-    # so it is set only where the device can actually change the value behind us: mute, dim and the
+    # notify-client is the mask fcp-server re-reads a control on when the DEVICE announces a change
+    # (see NOTIFY_MON_ANY above). It costs a mailbox round trip per control per notification, so it
+    # is set only where the device can actually change the value behind us: mute, dim and the
     # monitor gain (the front-panel knob). Air/mode/SW-HW are host-owned — there is no front-panel
     # control for any of them on this line, so nothing but us ever writes them — and the firmware
     # version is static. See spec/provenance/clarett-control-plane.md and the config-ownership notes.
@@ -689,8 +690,11 @@ for slug, spec in MODELS.items():
         "outputVolume is a strided array and physical-outputs index onto the real gains (pairs at "
         "base+{0,1}, pairs stepping by 4), so the generated output names are sparsely numbered. Cosmetic.",
         "Output mute is omitted: its offset has not been identified. Master mute and dim are present.",
-        "notify-client masks are approximate. The Thunderbolt device does not expose the FCP notification "
-        "word, so the driver relays a wildcard and every notification refreshes every control.",
+        "notify-client masks are the vendor XML's <notifications> values: 0x00200000 dim-mute, "
+        "0x00400000 monitor, the same values the USB Clarett and Scarlett descriptors carry. The "
+        "driver relays the device's real notification word (REG_NOTIFY_CAUSE bits >= 2), so these "
+        "masks select which controls are re-read; a wrong mask means a control silently stops "
+        "tracking the hardware.",
         "peak-index sits on DESTINATIONS, not sources: this line meters its router destinations. Each "
         "carries a _peak-index-provenance marker — \"measured\" (that destination read directly on "
         "hardware), \"stride\" (filled between measured anchors in a contiguous block), or "
