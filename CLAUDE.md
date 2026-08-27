@@ -162,7 +162,8 @@ driver/                               Out-of-tree module `snd-clarett` (hwdep tr
   dkms.conf                           THE version (PACKAGE_VERSION) — the Makefile parses it out and
                                       compiles it in as MODULE_VERSION. Bump it here and nowhere else.
   packaging/*.spec                    Fedora RPM: snd-clarett-kmod.spec (kmodtool -> akmod + per-kernel
-                                      kmod) and snd-clarett-dkms.spec. Build recipes in each header.
+                                      kmod) and snd-clarett-dkms.spec. Driven by `make rpm-akmod` /
+                                      `make rpm-kmod`; the by-hand recipe is in each header.
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
 wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) — do not hand-edit.
@@ -218,8 +219,14 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
 ```
 - **★ PACKAGING (Aug 24 2026) — DKMS + Fedora akmod, both built and verified locally.** `make -C driver`
   and `modules_install` are dev-only: the module lands under one kernel and vanishes at the next
-  update. The two supported routes are `sudo make -C driver dkms-install` and the RPM specs in
-  `driver/packaging/`. **`driver/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
+  update. The two supported routes are `sudo make -C driver dkms-install` and, on Fedora,
+  `make -C driver rpm-akmod` (or `rpm-kmod KVER=<ver>` for a single kernel). **The RPM targets build
+  and stop, printing the `dnf install` line rather than running it** — deliberately, because that
+  transaction is the one the partial-kernel trap below lives in, and the read-before-yes cannot be
+  delegated to a Makefile. They also enforce two traps that were previously only described: the spec
+  is staged into `%{_specdir}` before building (kmodtool re-invokes `rpmbuild` against it there), and
+  the spec's `Version:` is checked against `dkms.conf`, which otherwise surfaces as a missing
+  `Source0` rather than as version skew. **`driver/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
   `driver/Makefile` parses it out, passes it to kbuild, and it is compiled in as `MODULE_VERSION`
   (`-DCLARETT_VERSION`), so `modinfo snd-clarett` names exactly one tree; a build that bypasses the
   Makefile reports `0.0.0-unknown` on purpose. Verified end to end: the module inside the built kmod
@@ -257,7 +264,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     without dkms: `make -j16 KERNELRELEASE=$(uname -r) KDIR=/lib/modules/$(uname -r)/build`.
   - **`CLEAN` is deprecated in dkms 3.x** (accepts only `true` silently) — dkms builds in a fresh copy
     of the source, so it is simply omitted from dkms.conf.
-  - **★ DKMS SURVIVES A REAL KERNEL UPGRADE — VERIFIED (Aug 25 2026, fedora-dsk, 7.1.8 -> 7.1.9).**
+  - **★ DKMS SURVIVES A REAL KERNEL UPGRADE — VERIFIED (Aug 25 2026, the desktop, 7.1.8 -> 7.1.9).**
     Registered on 7.1.8, rebooted into 7.1.9, and `dkms status` came back with **two lines, both
     `installed`**; the new module sits at `/lib/modules/7.1.9-200.fc44.x86_64/extra/snd-clarett.ko.xz`,
     reports `0.1.0`, and is signed with the host's own DKMS MOK. Note **which** autoinstall path this
@@ -265,7 +272,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `kernel-install` hook could not fire for it and the rebuild came from **`dkms.service` at boot**.
     The in-dnf-transaction variant is still untested — do that one on the next kernel with the driver
     already registered.
-  - **★ THE PACKAGED INSTALL AUTOLOADS AND PROBES ON REAL HARDWARE (Aug 25 2026, fedora-dsk 7.1.9,
+  - **★ THE PACKAGED INSTALL AUTOLOADS AND PROBES ON REAL HARDWARE (Aug 25 2026, the desktop on 7.1.9,
     8Pre).** First end-to-end confirmation of the *packaged* path, as opposed to `insmod`: plugging the
     interface in loaded the driver with **no `modprobe`, no udev rule and no `modules-load.d` entry**,
     then probed and registered the card — `card 4 [C8Pre]`, bound at `0000:1a:00.0`, `initstate: live`,
@@ -283,7 +290,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     against because the MOK is not enrolled. Secure Boot is off, so it loads and taints with `E`.
     Enrolling the MOK removes the line (and is what would let it load at all under Secure Boot).
   - **★★ `dnf install dkms` INSTALLS A PARTIAL KERNEL THAT BOOTS BROKEN — CHECK THE TRANSACTION
-    (Aug 25 2026; cost a broken boot on fedora-dsk).** Fedora's `dkms` carries a rich dep
+    (Aug 25 2026; cost a broken boot on the desktop).** Fedora's `dkms` carries a rich dep
     `(kernel-devel-matched if kernel-core)`, which resolves to `kernel-devel` + **`kernel-core`** — and
     **nothing in that chain requires `kernel`, `kernel-modules` or `kernel-modules-extra`**. If the
     three-kernel `installonly_limit` also evicts the oldest kernel in the same transaction, the lists
@@ -304,7 +311,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     **Unrelated, so don't chase them:** disabling kdump, deleting `/boot/*kdump.img`, and
     `grubby --remove-args=crashkernel` had nothing to do with it, nor did the DKMS install, which only
     ever writes to `/usr/src` and `/lib/modules/<kver>/extra`.
-  - **A tight `/boot` is a live constraint on this work (fedora-dsk: 974 MB, was 96% full).** The
+  - **A tight `/boot` is a live constraint on this work (the desktop: 974 MB, was 96% full).** The
     transaction above first failed outright with *"needs 33MB more space on the /boot filesystem"* —
     rpm installs before it erases, so it cannot rely on the eviction it is about to perform. Biggest
     win there was **orphaned kdump initramfs images for kernels no longer installed** (~57 MB each;
@@ -315,7 +322,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `_should_reset_crashkernel()` = `auto_reset_crashkernel != no` **AND** `systemctl is-enabled kdump`,
     so disabling the service also stops `crashkernel=` being re-added to new kernels. Tradeoff worth
     stating: that gives up vmcore capture on the box where this driver has panicked hosts before.
-  - **★ THE AKMOD ROUTE IS VERIFIED ACROSS A REAL KERNEL UPGRADE TOO (Aug 25 2026, fedora-dsk,
+  - **★ THE AKMOD ROUTE IS VERIFIED ACROSS A REAL KERNEL UPGRADE TOO (Aug 25 2026, the desktop,
     7.1.9 -> 7.1.10, 8Pre attached).** DKMS was uninstalled first (see the path clash below), the akmod
     built from `packaging/snd-clarett-kmod.spec` with `--define 'buildforkernels akmod'`, and the
     timeline out of `rpm -q --qf %{INSTALLTIME:date}` + `journalctl -u akmods` is unambiguous:
@@ -332,7 +339,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       in-transaction behaviour stays unobserved rather than disproven — our DKMS run had the new kernel
       on disk *before* the module was registered, so no transaction hook could have fired for it.)
     - **AKMOD MODULES ARE SIGNED as well**, with akmods' own locally generated key
-      (`signer: fedora-dsk_1787627251_951c93b9`) — a different mechanism from DKMS's
+      (`signer: <hostname>_<epoch>_<uuid8>`) — a different mechanism from DKMS's
       `/var/lib/dkms/mok.*` but the same outcome, and the same un-enrolled-MOK taint line.
     - **THE TWO ROUTES MUST NOT BE INSTALLED TOGETHER — different paths, both in depmod's search
       path:** akmod installs to `extra/snd-clarett/snd-clarett.ko.xz` (kmodtool's per-module
@@ -344,8 +351,33 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       (matched) `kernel-modules-extra`. All five landed at 7.1.10, 7.1.7 evicted cleanly. **Note
       `akmods` carries the same `(kernel-devel-matched if kernel-core)` rich dep that `dkms` does**, so
       its install transaction needs the same read-before-yes.
-  - **STILL UNTESTED:** MOK *enrolment* under Secure Boot — both routes sign, but `mokutil --import`
-    and a Secure Boot-enabled load remain unexercised.
+  - **★★ SECURE BOOT WORKS VIA THE AKMOD ROUTE — VERIFIED (Aug 27 2026, EliteBook 640 G11).** MOK
+    enrolment done and the module loads with Secure Boot enforcing, which is itself the proof the
+    signature is trusted: `module.sig_enforce` is set under Secure Boot, so an untrusted module is
+    *rejected*, not merely taint-flagged.
+    - **akmods signing needs NO configuration and never did.** `kmodgenca` runs at the first
+      `akmods.service` run and writes the pair to `/etc/pki/akmods/{private/private_key.priv,
+      certs/public_key.der}`; the signer string is literally its
+      `KEYNAME="${cert_hostname:0:44}_$(date +%s)_$(uuidgen | awk -F- '{print $1}')"`. Enrol with
+      `sudo mokutil --import /etc/pki/akmods/certs/public_key.der`, reboot, MOK Management →
+      Enroll MOK (**physical console only, one boot only, QWERTY keyboard regardless of layout**).
+    - **`public_key.der` is a SYMLINK to `<KEYNAME>.der`, not the key** (`kmodgenca` `update_key_symlinks`),
+      so a broken symlink is a distinct failure from a missing key — `readlink -e` is the discriminator.
+      And the certs/private dirs are `0750 root:akmods`, so a non-root `ls` says *Permission denied*,
+      which reads like absence. Check both before concluding no key exists.
+    - **★ THE BLOCKER WAS NOT MODULE SIGNING AT ALL — HP SHIPS SECURE BOOT WINDOWS-ONLY.** Enabling
+      Secure Boot gave `Selected boot image did not authenticate` from the firmware, i.e. **shim
+      failing before Linux exists**, which no amount of MOK work can touch. Cause: `db` held only
+      Microsoft's *Windows* CAs (`Windows UEFI CA 2023`, `Microsoft Windows Production PCA 2011`) and
+      **not the third-party UEFI CA that signs every Linux distro's shim**. HP gates that behind a
+      separate BIOS toggle, **"Enable MS UEFI CA key"** (Security → Secure Boot Configuration) —
+      turning it on fixed it outright. **The one-line diagnostic:** `sudo mokutil --db | grep -i Microsoft`,
+      then read the *Subject* lines — Windows-only CAs mean Windows-only Secure Boot.
+    - **Ruled out first, cheaply, and worth doing in this order:** `efibootmgr -v` named
+      `\EFI\fedora\shimx64.efi` (not `grubx64.efi` — the classic `grub2-install`-broke-the-chain cause),
+      `shim-x64`/`grub2-efi-x64` installed, ESP contents intact. Only after the Fedora side was proven
+      clean did it make sense to suspect firmware. Note "restore factory keys" would NOT have fixed
+      this: the third-party CA is behind the toggle, not in HP's default key set.
   - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
     (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
     copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
