@@ -576,6 +576,54 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
 
 ## Driver limitations / TODO
 
+- **★★ THE ALSA BUFFER WAS PINNED TO THE 4096-FRAME RING — THE REAL LATENCY CEILING, AND THE PERIOD WAS
+  NEVER THE POINT (Aug 27 2026, 8Pre; user-confirmed fixed on hardware).** A DAW at a 16-frame
+  period reported 1.75 ms round trip and sounded far worse; `/proc/asound/card4/pcm*/sub*/status` settled
+  it in one look: `period_size: 16` (so the period request WAS honoured — PipeWire coercion and the
+  cadence-1 overruns are both exonerated), `buffer_size: 4096`, and **playback `delay: 4000` frames = 83 ms**
+  against capture's 112. `clarett_pcm_open()` was calling
+  `snd_pcm_hw_constraint_minmax(..., BUFFER_BYTES, buf, buf)` — the same value twice, pinning the ALSA
+  buffer to the hardware ring — and the DAW, which had asked for 3 periods of 16 = 48 frames, filled the
+  4096 it was handed instead. **Diagnostic lesson: `delay` in `status` is the measured latency; every
+  number the DAW displays is what it REQUESTED.**
+  - **Fix, part 1:** buffer is now any power-of-two frame count from `CLARETT_MIN_BUFFER_FRAMES` (128) up
+    to the ring. Pow2 is load-bearing — it makes the buffer divide the 4096-frame ring, so ALSA frame k and
+    ring frame k wrap coherently and `clarett_rx_drain`/`clarett_tx_fill` (which already clipped at both
+    boundaries) just need the buffer passed in alongside the ring.
+  - **★★ PART 1 ALONE WAS INERT ON HARDWARE, AND THE REASON IS AN ALSA-LIB ASYMMETRY WORTH REMEMBERING:
+    `snd_pcm_hw_params_choose()` resolves every parameter with `set_first` (the MINIMUM) except
+    `BUFFER_SIZE`, which it resolves with `set_last` (the MAXIMUM).** So an app that pins only the period
+    — most of them, including a DAW that displays a period count it never actually requests — is handed
+    whatever ceiling the driver advertises, and making a small buffer *legal* changes nothing for it. The
+    retest proved it: with the new module confirmed loaded (`/sys/module/snd_clarett/parameters/tx_guard`
+    readable), `buffer_size` came back 4096 and `delay` 4048, unchanged.
+    **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
+    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it, user-confirmed audibly.** Default is **0
+    = the full ring**, i.e. no change for existing clients: lowering the ceiling card-wide would regress
+    anything that wants depth (PipeWire at a 1024-frame quantum needs 2048 for its two periods), and
+    there is no per-app ceiling. An app that asks explicitly can still have 128 with the default.
+  - **Why the whole-runway TX fill SURVIVES a small buffer** (the part that looked like a redesign and
+    wasn't): filling `ring - guard` frames from a buffer that divides the ring simply TILES it, and ring
+    frame f still receives the buffer frame due to play when the engine reaches f, because both advance
+    by the same delta. Underrun now repeats one small buffer instead of a whole 85 ms ring pass.
+  - **The new risk, and the lever for it:** the guard's upper bound is the app's steady-state lead, which
+    the driver cannot see and the app chooses. The old pin made any lead >= 256 frames so 64 was never
+    close; an app keeping only 3 periods of 16 leads by 48, *below* the guard, and the fill's near edge
+    would hand the engine unwritten frames — the original "PipeWire skipping". Guard is now the
+    `tx_guard` param (default 64), clamped per fill to half the ALSA buffer and floored at one fragment.
+    **If skipping appears at a small buffer, turn it down first; the honest fix is to bound the fill by
+    the app's `appl_ptr` rather than assuming a lead.**
+  - **Also fixed in passing:** the capture drain clamped a servicer lag to the RING and copied the OLDEST
+    frames of the burst; with a small buffer that is reachable in normal operation (the ~42 ms platform
+    freeze advances the engine ~2000 frames), so it now skips forward and hands over the NEWEST.
+  - **Known cost, not addressed:** `clarett_tx_fill` copies `ring - guard` ≈ 4032 frames EVERY tick
+    regardless of period — ~322 KB per 333 µs at cadence 1 on a 20-channel 8Pre, near 1 GB/s of memcpy to
+    deliver 16 frames. Pre-existing, now conspicuous. The runway only has to cover worst-case servicer
+    lag, not the whole ring.
+  - **STILL UNVERIFIED (the latency result does not cover these):** whether a small buffer skips (the
+    `tx_guard`-vs-app-lead risk above); what a lowered `max_buffer` does to PipeWire and ordinary desktop
+    playback, which share the card-wide ceiling; the 60 s cadence-4 duplex regression; and how low the
+    buffer goes before it breaks (128 = 2.7 ms was never tried, only 256 = 5.3 ms).
 - **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,

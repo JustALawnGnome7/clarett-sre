@@ -20,6 +20,7 @@
  */
 #include <linux/dma-mapping.h>
 #include <linux/math64.h>
+#include <linux/log2.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
@@ -63,7 +64,11 @@ MODULE_PARM_DESC(stream_batch,
  * the hardware minimum and verified above — a 16x drop from the old 256 floor. dyn_period=0 restores the fixed
  * 256-frame cadence. NOTE: with PipeWire adopting the card it arms the engine first and the duplex lock coerces
  * the app to PipeWire's quantum, so a DAW controls the buffer size only once PipeWire has released the card
- * (standard pro-audio setup). The total ALSA buffer stays pinned to the 4096-frame ring regardless of period.
+ * (standard pro-audio setup).
+ *
+ * The period is only half of what an app feels as latency. The total ALSA buffer used to be PINNED to the
+ * 4096-frame ring, so an app that keeps its buffer full ran 85 ms of playback latency no matter how small a
+ * period it asked for; it is now any power-of-two fraction of the ring down to CLARETT_MIN_BUFFER_FRAMES.
  */
 #define CLARETT_DYN_MIN_FRAMES	CLARETT_FRAG_FRAMES	/* one fragment = 16 frames (cadence 1); the verified floor */
 static bool dyn_period = true;
@@ -329,8 +334,11 @@ static void clarett_set_rx_live(struct clarett *c, unsigned int rate)
  * slot. When rx_slot == audio-bytes/fragment (the contiguous default) this is just a linear copy; when
  * padded (scatter-gather experiment) it gathers per fragment across the gaps. FRAG_FRAMES divides the ring,
  * so a chunk clipped to the fragment boundary also handles the ring wrap.
+ *
+ * `abuf` is the ALSA buffer in frames, which is NOT the ring: it is a power-of-two divisor of it, so the
+ * destination wraps one or more times per ring pass and has to be clipped separately from the source.
  */
-static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32 nframes)
+static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32 nframes, u32 abuf)
 {
 	u8 *ring = clarett_rx_area(c);
 	u32 frame = (u32)c->model->capture_channels * 4;
@@ -343,7 +351,7 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
 		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
 		u32 chunk = min(nframes, CLARETT_FRAG_FRAMES - fio);	/* up to the fragment (and ring) boundary */
 
-		chunk = min(chunk, ring_frames - apos);			/* and up to the ALSA buffer wrap */
+		chunk = min(chunk, abuf - apos);			/* and up to the ALSA buffer wrap */
 
 		memcpy(alsa + (size_t)apos * frame,
 		       ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
@@ -362,7 +370,7 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
 		if (pos == ring_frames)
 			pos = 0;
 		apos += chunk;
-		if (apos == ring_frames)
+		if (apos == abuf)
 			apos = 0;
 		nframes -= chunk;
 	}
@@ -376,8 +384,14 @@ static void clarett_rx_drain(struct clarett *c, u8 *alsa, u32 apos, u32 pos, u32
  * tx_slot == audio-bytes/fragment (tx_frag_pad=0) this degenerates to the old linear copy; when padded it
  * scatters per fragment across the gaps (matching the vendor's non-contiguous TX ring). FRAG_FRAMES divides
  * the ring, so a chunk clipped to the fragment boundary also handles the ring wrap.
+ *
+ * `abuf` is the ALSA buffer in frames, a power-of-two divisor of the ring rather than the ring itself, so
+ * the source wraps one or more times across a single fill and is clipped separately. Filling a runway
+ * longer than the buffer therefore TILES it around the ring, which is what keeps the whole-runway strategy
+ * below correct: ring frame f is always sourced from the buffer frame that is due to play when the engine
+ * reaches f, because both advance by the same delta and abuf divides the ring.
  */
-static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos, u32 nframes)
+static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos, u32 nframes, u32 abuf)
 {
 	u8 *ring = clarett_tx_area(c);
 	u32 frame = (u32)c->model->playback_channels * 4;
@@ -388,7 +402,7 @@ static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos
 		u32 fio   = pos % CLARETT_FRAG_FRAMES;			/* frame within its fragment */
 		u32 chunk = min(nframes, CLARETT_FRAG_FRAMES - fio);	/* up to the fragment (and ring) boundary */
 
-		chunk = min(chunk, ring_frames - apos);			/* and up to the ALSA buffer wrap */
+		chunk = min(chunk, abuf - apos);			/* and up to the ALSA buffer wrap */
 
 		memcpy(ring + (size_t)(pos / CLARETT_FRAG_FRAMES) * slot + (size_t)fio * frame,
 		       alsa + (size_t)apos * frame,
@@ -397,7 +411,7 @@ static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos
 		if (pos == ring_frames)
 			pos = 0;
 		apos += chunk;
-		if (apos == ring_frames)
+		if (apos == abuf)
 			apos = 0;
 		nframes -= chunk;
 	}
@@ -411,6 +425,73 @@ static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos
  * already filled. It must also stay <= the app's steady-state lead (>= one ALSA period, min 256 frames),
  * or the fill's near edge reads not-yet-written data — the PipeWire skipping. 64 frames satisfies both. */
 #define CLARETT_TX_GUARD_FRAMES	(4 * CLARETT_FRAG_FRAMES)	/* 64 frames */
+
+/*
+ * Smallest ALSA buffer offered. The buffer used to be PINNED to the 4096-frame ring, which set playback
+ * latency for any app that keeps the buffer full — measured on an 8Pre at a 16-frame period: delay 4000
+ * frames, 83 ms, against the 1.75 ms the DAW believed it had asked for. The buffer is now a power-of-two
+ * divisor of the ring instead, which keeps ALSA frame k and ring frame k wrapping coherently.
+ *
+ * The floor is twice CLARETT_TX_GUARD_FRAMES, and the factor of two is the point rather than the value:
+ * an app's steady-state lead cannot exceed the buffer, the fill refuses to write within GUARD frames of
+ * the engine's read position, and the guard has to stay BELOW that lead or the fill's near edge reads
+ * frames the app has not written yet — the skipping this guard was introduced to cure.
+ */
+#define CLARETT_MIN_BUFFER_FRAMES	(2 * CLARETT_TX_GUARD_FRAMES)	/* 128 frames */
+
+/*
+ * The guard as a lever, because shrinking the buffer moves it from "obviously safe" to "depends on the
+ * app". Its upper bound is the app's steady-state lead, which the app chooses and the driver cannot see:
+ * the old 4096-frame pin made any lead >= 256 frames, so 64 was never close. A DAW that keeps only its
+ * configured 3 periods of a 16-frame period queued leads by 48 — BELOW the guard — and the fill's near
+ * edge would then hand the engine frames the app has not written.
+ *
+ * Clamped per fill to half the ALSA buffer, so the guard is satisfied by any app that keeps its buffer
+ * even half full, and floored at one fragment, which is already ~10x the engine's advance during a single
+ * fill memcpy (~320 KB, tens of microseconds). If skipping ever appears at a small buffer this is the
+ * first thing to turn down, and the honest fix is to bound the fill by the app's appl_ptr instead of
+ * assuming a lead.
+ */
+static unsigned int tx_guard = CLARETT_TX_GUARD_FRAMES;
+module_param(tx_guard, uint, 0644);
+MODULE_PARM_DESC(tx_guard,
+		 "Frames the playback fill stays clear of the engine's TX read position (default 64, "
+		 "clamped to half the ALSA buffer, floored at one 16-frame fragment).");
+
+/*
+ * Largest ALSA buffer offered, in frames; 0 = the whole 4096-frame ring.
+ *
+ * This is a latency control, not a capacity one, and the reason it has to exist is an asymmetry in
+ * alsa-lib: snd_pcm_hw_params_choose() resolves every parameter with set_first (the minimum) EXCEPT
+ * BUFFER_SIZE, which it resolves with set_last. So an app that pins only the period — which is most of
+ * them, including DAWs that display a period count they never actually request — silently receives
+ * whatever ceiling is advertised here. Merely permitting a small buffer changes nothing for such an app;
+ * the ceiling is the only thing it reads.
+ *
+ * Default 0 (the ring) keeps the behaviour every other client on the card already has, because lowering
+ * it universally is not free: PipeWire at a 1024-frame quantum needs 2048 frames for its two periods, and
+ * a general-purpose desktop wants the deep buffer it has been getting. Set it on a machine being driven
+ * as an interface — 256 gives 5.3 ms at 48 kHz even to an app that asks for nothing.
+ */
+static unsigned int max_buffer;
+module_param(max_buffer, uint, 0644);
+MODULE_PARM_DESC(max_buffer,
+		 "Largest ALSA buffer offered, in frames (rounded down to a power of two; 0 = the full "
+		 "4096-frame ring). Apps that do not request a buffer size are given this, so it sets "
+		 "their latency.");
+
+/* The advertised buffer ceiling in frames: the ring, or the max_buffer override rounded down to a power
+ * of two so the ceiling is itself an attainable value under the pow2 constraint. */
+static u32 clarett_buffer_max_frames(u32 ring_frames)
+{
+	u32 want = READ_ONCE(max_buffer);
+
+	if (!want || want >= ring_frames)
+		return ring_frames;
+	if (want < CLARETT_MIN_BUFFER_FRAMES)
+		want = CLARETT_MIN_BUFFER_FRAMES;
+	return rounddown_pow_of_two(want);
+}
 
 /*
  * Called from the servicer kthread on every 0x300 period event with the number of frames the engine
@@ -445,12 +526,21 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 	if (cs && cs->runtime->dma_area) {
 		u32 frame = (u32)c->model->capture_channels * 4;
 		u32 ring  = clarett_rx_ring_bytes(c) / frame;
-		u64 q = c->pcm_frames;
-		u64 aq = c->pcm_frames - c->pcm_base;
+		u32 abuf  = cs->runtime->buffer_size;		/* <= ring, and divides it */
+		u32 n     = min(add_frames, abuf);
+		u32 skip  = add_frames - n;			/* lag longer than the buffer: keep the NEWEST n */
+		u64 q = c->pcm_frames + skip;
+		u64 aq = c->pcm_frames + skip - c->pcm_base;
 		u32 pos = do_div(q, ring);
-		u32 apos = do_div(aq, ring);
+		u32 apos = do_div(aq, abuf);
 
-		clarett_rx_drain(c, cs->runtime->dma_area, apos, pos, min(add_frames, ring));
+		/*
+		 * Clamped to the ALSA buffer rather than the ring, and skipped forward to the newest n frames.
+		 * The app has lost the rest either way (ALSA will xrun on the hw_ptr jump), but it must be
+		 * handed the most recent audio, not the oldest. Reachable in normal operation: the ~42 ms
+		 * platform freeze advances the engine ~2000 frames, far past a small buffer.
+		 */
+		clarett_rx_drain(c, cs->runtime->dma_area, apos, pos, n, abuf);
 	}
 
 	/* Playback fill: refresh the whole runway ahead of the engine (from GUARD past the read position to
@@ -458,15 +548,18 @@ void clarett_pcm_tick(struct clarett *c, u32 add_frames)
 	if (ps && ps->runtime->dma_area && READ_ONCE(c->play_running)) {
 		u32 frame = (u32)c->model->playback_channels * 4;
 		u32 ring  = clarett_tx_ring_bytes(c) / frame;
+		u32 abuf  = ps->runtime->buffer_size;		/* <= ring, and divides it */
+		u32 guard = clamp_t(u32, READ_ONCE(tx_guard), CLARETT_FRAG_FRAMES, abuf / 2);
 
-		if (ring > CLARETT_TX_GUARD_FRAMES) {
-			u64 q = c->pcm_frames + CLARETT_TX_GUARD_FRAMES;
-			u64 aq = c->pcm_frames + CLARETT_TX_GUARD_FRAMES - c->play_base;
+		if (ring > guard) {
+			u64 q = c->pcm_frames + guard;
+			u64 aq = c->pcm_frames + guard - c->play_base;
 			u32 start = do_div(q, ring);		/* hardware ring position */
-			u32 astart = do_div(aq, ring);		/* same frame in the ALSA buffer */
+			u32 astart = do_div(aq, abuf);		/* same frame in the ALSA buffer */
 
-			clarett_tx_fill(c, ps->runtime->dma_area, astart, start,
-					ring - CLARETT_TX_GUARD_FRAMES);
+			/* Still the whole runway: with abuf dividing the ring the fill tiles the buffer, so a
+			 * lagged tick reads audio at most one buffer stale instead of a whole ring pass. */
+			clarett_tx_fill(c, ps->runtime->dma_area, astart, start, ring - guard, abuf);
 		}
 	}
 
@@ -557,8 +650,8 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	 * tiny period forced PipeWire into a rigid 5 ms cadence it serviced badly (audible skipping), so a floor
 	 * plus a step lets it pick a comfortable larger period. dyn_period lowers the floor to the finest verified
 	 * cadence (CLARETT_DYN_MIN_FRAMES) and derives the marker cadence from whatever period the app picks
-	 * (clarett_pcm_prepare). Either way the BUFFER is pinned to the ring size — RX/TX copies map ALSA frame k
-	 * to ring frame k.
+	 * (clarett_pcm_prepare). The BUFFER is pinned to the ring on the fixed path; under dyn_period it is any
+	 * power-of-two fraction of it, which is what keeps ALSA frame k and ring frame k wrapping together.
 	 */
 	u32 min_frames = dyn_period ? CLARETT_DYN_MIN_FRAMES : (CLARETT_IRQ_DESCS * CLARETT_FRAG_FRAMES);
 	u32 min_period = min_frames * frame;
@@ -568,16 +661,31 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	runtime->hw.rates            = clarett_rate_caps(c, &runtime->hw.rate_min, &runtime->hw.rate_max);
 	runtime->hw.channels_min     = chans;
 	runtime->hw.channels_max     = chans;
+	/* Ceiling: the ring, unless max_buffer lowers it. An app that pins only the period is handed this
+	 * (alsa-lib resolves BUFFER_SIZE with set_last), so it is what sets that app's latency. */
+	if (dyn_period)
+		buf = (size_t)clarett_buffer_max_frames(buf / frame) * frame;
+
 	runtime->hw.buffer_bytes_max = buf;
 	runtime->hw.period_bytes_min = min_period;
 	runtime->hw.period_bytes_max = buf / 2;			/* periods_min = 2 */
 	runtime->hw.periods_max      = buf / min_period;
 
-	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
-	if (err < 0)
-		return err;
-
 	if (dyn_period) {
+		/*
+		 * The buffer is a power-of-two FRAME count between CLARETT_MIN_BUFFER_FRAMES and the ring.
+		 * Pow2 is what makes it divide the 4096-frame ring, so ALSA frame k and ring frame k wrap
+		 * together and the per-period copies stay a straight mapping (clarett_rx_drain/tx_fill take
+		 * the buffer separately from the ring for exactly this). Constrained in FRAMES, not bytes:
+		 * the frame stride is channels*4, which is not a power of two on most of the line.
+		 */
+		err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
+						   (size_t)CLARETT_MIN_BUFFER_FRAMES * frame, buf);
+		if (err < 0)
+			return err;
+		err = snd_pcm_hw_constraint_pow2(runtime, 0, SNDRV_PCM_HW_PARAM_BUFFER_SIZE);
+		if (err < 0)
+			return err;
 		/*
 		 * The period becomes the RX marker cadence (irq_descs = period/16), which must divide
 		 * CLARETT_STREAM_NDESC so the markers place evenly to the wrap. A power-of-two frame count
@@ -591,7 +699,11 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 					   clarett_rule_lock_period, c,
 					   SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
 	}
-	/* Legacy fixed cadence: period is a whole number of 256-frame hardware periods. */
+	/* Legacy fixed cadence: buffer pinned to the ring, period a whole number of 256-frame hardware
+	 * periods. Left as it was — this path exists as the known-good fallback. */
+	err = snd_pcm_hw_constraint_minmax(runtime, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, buf, buf);
+	if (err < 0)
+		return err;
 	return snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, min_period);
 }
 
@@ -960,8 +1072,9 @@ int clarett_create_pcm(struct clarett *c)
 		return -ENOMEM;
 	clarett_build_rings(c);
 
-	/* Each direction constrains its own buffer to its ring in open(); preallocate the larger so both
-	 * fit. The ALSA buffers are plain memory we memcpy to/from the hardware rings (not DMA'd directly). */
+	/* Each direction caps its own buffer at its ring in open() (and may pick any power-of-two fraction
+	 * of it); preallocate the larger so the widest case fits. The ALSA buffers are plain memory we
+	 * memcpy to/from the hardware rings (not DMA'd directly). */
 	rxbuf = clarett_rx_ring_bytes(c);
 	txbuf = clarett_tx_ring_bytes(c);
 	prealloc = max(rxbuf, txbuf);
