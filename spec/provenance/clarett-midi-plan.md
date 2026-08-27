@@ -5,38 +5,227 @@ and HARDWARE-CONFIRMED on the 2Pre.** Decoded from three 2Pre captures (`capture
 via the CH345-on-host rig; driver built and tested on hardware — RX and TX both work, including a full 10-byte
 SysEx each way (note `90 3C 7F` and `F0 7D 43 4C 41 52 45 54 54 F7` round-tripped through the CH345↔2Pre DIN
 cables). RX interrupt is already enabled by the bring-up (no explicit enable needed); the all-vector ISR drain
-caught it regardless of MSI vector. Remaining (non-blocking): large-SysEx flow control (midi_tx_pace_us lever,
-untested), count=2 framing (PC/channel-pressure), concurrent-with-audio-streaming, 8PreX confirmation, maps.
+caught it regardless of MSI vector.
 
-## RESULT — the MIDI transport (Aug 4 2026)
+**★ TX FLOW CONTROL SOLVED AND THE DRIVER WAS SILENTLY LOSING 94% OF A BURST (Aug 27 2026, 2Pre against an
+ISA C8X as reference partner). `0x500` bit16 = "TX FIFO can accept a word", and the vendor's pre-write read
+was a REQUIRED ready gate, not advisory** — see §"TX flow control" below. Also confirmed this session:
+concurrent-with-audio-streaming (both directions, full-duplex PCM), simultaneous bidirectional MIDI, 4 KB
+SysEx each way, the ALSA sequencer path, and **`count=1`/`count=2`/`count=3` framing** (a lone program
+change and a lone channel pressure both round-trip, closing the "count=2 inferred, not captured" gap).
 
-**Mechanism: a memory-mapped MIDI register at BAR0 `0x58c`** (+ status `0x500`, ack `0x504`). NOT the FCP
-mailbox, NOT the audio DMA ring, NOT multiplexed into the sample stream — pure PIO through one data
-register (the FPGA exposing the MIDI UART). Independent of the FCP mailbox, so MIDI should work regardless
-of control-session state.
+**★ A SECOND BUG, found by asking what happens on overflow: the 64-byte RX drain bound could strand a
+backlog, because a non-empty FIFO does NOT re-interrupt** — the ack is what re-arms it. Fixed
+(`CLARETT_MIDI_RX_GUARD` = 256, above the measured 139-byte device FIFO). See §"RX overflow and stall
+recovery". Remaining (non-blocking): 8PreX/8Pre/4Pre confirmation, port naming in the maps, and
+**a retracted finding worth reading as a method lesson** — `F8`/`FE` appeared to be dropped by the
+hardware and were being dropped by `amidi -d`, which needs `-a -c`; nothing is filtered. See below.
 
-**TX — write packed word to `0x58c`:** `(count<<24) | (byte2<<16) | (byte1<<8) | byte0`; `count` = number
-of MIDI bytes 1–3, bytes packed low→high in transmit order. `count` is a plain BYTE COUNT, not a USB-MIDI
-CIN (the SysEx `F7` terminator is `count=1` = `0x010000f7`). Examples (from tx.log + rx.log thru-echo):
-note-on `90 31 64`=`0x03643190`; SysEx `F0 7D 43 4C 41 52 45 54 54 F7` → `0x03437df0`,`0x0352414c`,
-`0x03545445`,`0x010000f7` (3+3+3+1). Each TX write is preceded by a `0x500` read (TX-ready gate? or
-advisory — TBD). 2-byte messages (PC/channel-pressure) → `count=2` inferred, not captured.
-**CONFIRMED from a clean SysEx-only TX capture (10× SysEx → exactly those 4 writes ×10, 40 reads/40 writes,
-no other regs).** Chunking is by **raw 3-byte grouping of the outgoing byte stream, NOT by MIDI message
-boundaries** (the 10-byte SysEx splits 3+3+3+1 purely by count) — so `0x58c` is a byte FIFO with a valid-count,
-and the TX path just packs whatever bytes ALSA gives it 3-at-a-time (final word `count`=remainder). No TX-side
-message parsing needed.
+## RETRACTED — nothing is filtered; `F8`/`FE` were `amidi` default behaviour (Aug 27 2026)
 
-**RX — read `0x58c`, ONE byte per read:** returns `(valid<<24) | byte`, `valid`=bit24 (`0x01000000`);
-returns `0x0` when the FIFO is empty. Injected `90 3C 7F` read back as `0x01000090`,`0x0100003c`,
-`0x0100007f` then `0x0`.
+**`amidi -d` discards Active Sensing (`FEh`) and Clock (`F8h`) from what it prints unless given `-a` and
+`-c`.** Every observation in this section's earlier version used `amidi -d` as the receiver, so the
+receiver was the filter.
 
-**RX interrupt flow (RX is interrupt-driven — `idle.log` is EMPTY, no polling):** MSI → cause sweep →
-`0x500` reads `0xff000a` (low nibble `0xa` = MIDI RX pending; `0xff0000` otherwise) → drain `0x58c` to
-`0x0` → write `0x8` to `0x504` to ACK. One byte per interrupt in this capture.
+Retest on the 2Pre self-loop, listener as `amidi -d -a -c`:
 
-**Registers:** `0x58c` = MIDI data (RW), `0x500` = IRQ status (low byte carries MIDI-RX bit `0x0a`; already
-read by the stream servicer), `0x504` = IRQ ack (write `0x8` = MIDI RX). All in the `0x5xx` IRQ block.
+| sent | received with `-a -c` | received without |
+|---|---|---|
+| `F8` | `F8` | (nothing) |
+| `FE` | `FE` | (nothing) |
+| `F8 FE` | `F8 FE` | (nothing) |
+| `90 40 7F F8 80 40 00` | all 7 bytes | `90 40 7F 80 40 00` |
+| `90 40 7F F8 F8 F8 80 40 00` | all 9 bytes | 6 bytes |
+
+**MIDI Timing Clock and Active Sensing pass through correctly, in both directions, on both devices.
+Nothing is filtered anywhere.** `tools/midi_loopback.py` now runs its listeners with `-a -c`
+unconditionally, and says so in its docstring, because the default silently corrupts any result
+involving those two bytes.
+
+**The method failure, recorded because it was avoidable.** The two bytes that appeared to be dropped were
+*exactly* the two bytes amidi provides command-line flags for. That coincidence was the signal and it was
+missed. On top of the bad observation a self-consistent explanation was built — content-based rather than
+framing (an `F8` inside a `count=3` word died while its word-mates lived), not System Real-Time as a class
+(`FA`/`FB`/`FC` passed), therefore a deliberate FPGA suppression of the two *periodic* messages. Every
+step of that reasoning was valid and the conclusion was worthless, because the instrument was lying. It
+was even written into `driver/README.md` as a user-facing hardware limitation before being caught.
+
+**Rule: when a device appears to filter precisely the set your tool has options about, suspect the tool.
+Read the instrument's defaults, not only the flags being passed.** Directly analogous to the x-no-mmap
+timing artefact that manufactured the manifestation wall — byte-identical traffic under a lying instrument
+is not identical behaviour.
+
+The genuinely unaffected results, all re-confirmed after the tool fix: the TX `MIDI_TX_READY` gate, the
+139-byte RX FIFO and the drain bound, `count=1`/`2`/`3` framing, and every throughput, SysEx and
+PCM-concurrency measurement — none of those involve `F8` or `FE`.
+---
+
+## TX flow control — `0x500` bit16 (Aug 27 2026, 2Pre; the pre-write read is a REQUIRED gate)
+
+**`0x500` bit16 = the TX FIFO can accept another packed word.** It is set while there is room and clears
+when the FIFO is full, and **a word written while it is clear is discarded** — silently tearing the
+outgoing byte stream. This resolves the standing "TX-ready gate, or advisory?" question left by the tx.log
+capture: the vendor's read before every write is load-bearing, and mirroring the read without acting on it
+(what the driver did) is equivalent to not reading it at all.
+
+**Why it was invisible until now.** The Aug 4 confirmation sent single messages and a 10-byte SysEx — well
+inside the FIFO, so nothing was ever dropped. The failure needs a burst longer than nine words.
+
+**Rig:** Clarett 2Pre (Thunderbolt, our driver, card 2) ↔ Focusrite ISA C8X (USB, `snd-usb-audio`, card 1),
+DIN in/out cross-connected. The C8X is an independent known-good MIDI endpoint, so each direction is
+attributable: a failure on 2Pre→C8X is our TX, a failure on C8X→2Pre is our RX. Byte streams compared
+exactly (not just counted) — `first divergence at byte N` is what showed the stream was *torn*, not merely
+short.
+
+**The measurement.** 300 note-on messages (900 bytes) 2Pre→C8X, sweeping the old `midi_tx_pace_us` lever,
+which added a blind `udelay` after each write:
+
+| pace (µs/word) | bytes received of 900 | tx wall time |
+|---|---|---|
+| 0 | **54** | 0.105 s |
+| 200 | 243 | 0.165 s |
+| 500 | 525 | 0.254 s |
+| 960 | **900 (exact)** | 0.393 s |
+| 1200 | 900 (exact) | 0.464 s |
+
+960 µs is not a fitted constant: it is one 3-byte word at the DIN wire rate (3125 bytes/s). So the driver
+was writing at ~10× the rate the UART could drain and the excess was being dropped on the floor. The
+reverse direction (C8X→2Pre, our RX) passed 900/900 untouched throughout, which localised it to TX alone.
+
+**Direct confirmation that bit16 is the mechanism**, via temporary instrumentation logging `0x500` before
+each TX write:
+
+| run | `0x500` sequence |
+|---|---|
+| unpaced (fails) | `0x00ff0000` ×9, then `0x00fe0000` for every remaining word |
+| paced 960 µs (passes) | `0x00ff0000` for all 40 words |
+
+So bit16 clears after exactly **nine words accepted** — a 9-word / 27-byte FIFO — and stays clear while the
+host outruns the wire, but never clears at all once writes are paced to the drain rate. (Depth was measured
+with 3-byte words only; whether the FIFO counts words or bytes is unresolved and the driver does not care.)
+
+**Fix as landed** (`clarett_midi.c`): `clarett_midi_tx_wait()` polls `0x500` for `MIDI_TX_READY` via
+`read_poll_timeout` (200 µs interval, 100 ms timeout) before each write. It sleeps rather than busy-waits —
+a full FIFO takes most of a millisecond to free a slot, so `udelay` at that scale would burn a CPU. The
+wait is taken **before** `snd_rawmidi_transmit()`, so a device that has stopped draining leaves the bytes
+queued in ALSA instead of consuming bytes it cannot send; on timeout the work item warns
+(`dev_warn_ratelimited`) and pauses rather than looping. `midi_tx_pace_us` is **removed** — it was a
+placeholder for exactly this problem and a real gate supersedes it.
+
+Post-fix, TX transmits at the wire rate by construction: 3000 bytes in 1.055 s (3125 B/s = 0.96 s plus
+setup).
+
+### Saturated soak — 60 s, both directions at once, with full-duplex PCM
+
+The heaviest case run: MIDI written straight to the rawmidi device nodes so the stream is genuinely
+continuous rather than a burst (a blocking write paces itself at the wire rate), **187 500 bytes each way
+= 60 s of wire time, both directions simultaneously**, while 14 ch capture and 4 ch playback ran on the
+same device.
+
+| measure | result |
+|---|---|
+| 2Pre TX -> C8X RX | 187500 / 187500, **exact** |
+| C8X TX -> 2Pre RX | 187500 / 187500, **exact** |
+| writer wall time | 60.1 s against a 60.0 s wire floor |
+| PCM capture | 172032044 bytes, exactly the expected size |
+| servicer, 33 windows | `late=0 overrun=0 badreads=0 stepmax=0x40` in **every** window |
+| servicer run worst case | `gapmax` 21429-21548 µs (nominal 21333), `readmax` 333 µs |
+| kernel log | no warnings, errors, timeouts or stalls |
+
+The 60.1 s against a 60.0 s floor is the flow-control gate measured end to end: 0.17% overhead over a
+minute of a fully saturated wire, so `MIDI_TX_READY` is releasing on essentially every drained slot rather
+than costing a poll interval per word. Both MIDI directions saturated for a minute perturbed the audio
+servicer not at all.
+
+### Verification matrix (all exact byte-stream comparisons, 2Pre ↔ C8X)
+
+| test | 2Pre TX → C8X | C8X → 2Pre RX |
+|---|---|---|
+| 300 / 1000 / 2000 note messages | PASS | PASS |
+| SysEx 1 KB | PASS | PASS |
+| SysEx 4 KB | PASS | PASS |
+| simultaneous bidirectional, 3000 B each way | PASS | PASS |
+| during 14 ch capture | PASS | PASS |
+| during full-duplex PCM (14 ch in + 4 ch out) | PASS | PASS |
+| SysEx 4 KB during full-duplex PCM | PASS | PASS |
+| ALSA sequencer path (`aplaymidi` → seq client 24:0) | PASS (1200/1200 B) | — |
+| every system byte `F6`/`F8`/`F9`/`FA`/`FB`/`FC`/`FD`/`FE` alone | PASS | PASS |
+| `F8` embedded mid-stream; 500 sustained `F8` clocks | PASS | PASS |
+| 60 s saturated soak, both ways at once, under PCM | PASS (187500 B) | PASS (187500 B) |
+
+The full-duplex run clocked 40 s / 1876 periods with `late=0 overrun=0 badreads=0`, so the added TX sleep
+does not perturb the stream servicer. `rmmod` clean afterwards, no orphaned `clarett-svc` thread, no
+warnings in the kernel log across the whole session. TX now runs at the wire rate by construction, which is
+itself a check: 3000 bytes took 1.055 s against a 0.96 s floor.
+
+**★ MEASUREMENT HAZARD — a surplus means a SECOND WRITER on the port, and it happened twice.** 1500
+bytes sent read back as **1560**, and 150 sent read back as **345** (the expected 150 intact, then 195
+extra). **The writer was not identified.** Two candidates, not distinguished: a concurrent manual run of
+the bench tool by the operator (known to have occurred at least once in the session, and it also produced
+an `amidi` "Device or resource busy" collision on the single input substream), or PipeWire's ALSA
+sequencer bridge echoing between ports — both surpluses did follow a PipeWire start. Correlation with the
+PipeWire restart is real but weak, and was over-read at first; do not treat it as established.
+With PipeWire stopped and nothing else running, every run is exact and a 6 s idle listen yields zero
+bytes. **Practice: stop PipeWire, confirm `aconnect -l` shows no `Connecting To:` on the ports under
+test, and run one bench instance at a time.** This is why `tools/midi_loopback.py` reports a *surplus*
+distinctly — more bytes than were sent can never be a transmit fault.
+
+**Note for the record:** the ISR was rewritten under MIDI by the interrupt-driven-mailbox work on this
+branch, and MIDI RX came through it intact — including the case that had been the worry, RX with idle
+mailbox traffic now zero. RX does not depend on mailbox interrupts to be drained; its own interrupt fires.
+
+---
+
+## RX overflow and stall recovery (Aug 27 2026, 2Pre)
+
+Two different overflows, and they behave differently.
+
+### Host-side (the ALSA input buffer fills)
+
+Reader `SIGSTOP`ped, 9000 bytes sent from the C8X, then `SIGCONT`. The driver received **all 9000**
+(`/proc/asound/card2/midi0` `Rx bytes` advanced by exactly 9000); the stalled reader got 7795, so ~1205
+were dropped by the rawmidi core when its buffer filled. That is the core's business — it counts them in
+`runtime->xruns`, readable via `SNDRV_RAWMIDI_IOCTL_STATUS` — and `snd_rawmidi_receive()`'s return value is
+ignored here for that reason. **Both directions exact immediately afterwards, no warnings, no wedge.**
+
+### Device-side (the ISR does not run and the hardware FIFO fills)
+
+Provoked with temporary instrumentation that skips the drain for N ms while a 6000-byte stream arrives.
+
+- **The device RX FIFO is 139 bytes**, measured three times identically by counting what came back after
+  the FIFO had been overflowing for over a second. That is ~44 ms of wire time, so the FIFO alone absorbs
+  a stall of that order; the ~42-48 ms platform freeze on the ASRock sits right at the edge of it.
+- **There is no RX overflow status bit.** `0x500` read `0x00ff000a` before, during and after ~4370 bytes
+  were dropped on the floor — nothing latched. Overflowed bytes are simply gone, and nothing tells the
+  host. (For contrast, TX has `MIDI_TX_READY`; RX has no counterpart.)
+- **`0x500` low byte bit1 = RX data pending.** `0x0a` while bytes are queued, `0x08` on the read that takes
+  the last one, `0x00ff0000` once empty. Refines the earlier "low byte `0x0a` = MIDI RX pending".
+- **★ A non-empty FIFO does NOT raise a fresh interrupt — the ack is what re-arms it.** With the drain
+  skipped and therefore never acked, MIDI RX went dead permanently: further incoming bytes raised nothing,
+  and the path only came back when an *unrelated* vec0 interrupt (a mailbox command from `amixer`)
+  re-entered the handler and drained the 139 bytes still sitting there.
+
+**The bug this exposed.** `clarett_midi_irq()` bounded its drain at 64 bytes per interrupt, with the
+comment "anything still pending re-interrupts" — which the above disproves. A backlog larger than 64 bytes
+left the remainder stranded until some unrelated interrupt happened along. It needs a >20 ms ISR stall to
+reach, so it never showed in throughput testing, and in a *continuous* stream each newly arriving byte
+re-triggers so it self-heals; the exposure is a backlog at the tail of a burst, on a host that stalls.
+
+**Fix:** `CLARETT_MIDI_RX_GUARD` = 256, above the measured 139-byte FIFO, so one pass always empties it —
+the bound is now a runaway guard for a stuck valid bit, not a work budget. Verified directly: the same
+stall that previously drained 64 + 64 + 11 across three handler entries now drains **139 in a single pass**
+(`guard_left=116`), and RX recovers exactly.
+
+**Not fixed, and arguably not fixable:** bytes lost while the device FIFO is full are unrecoverable and
+unreported, because the hardware provides no overflow indication. A host stall longer than ~44 ms silently
+truncates incoming MIDI.
+
+### TX under a stalled writer
+
+Benign by construction: the FIFO drains at the wire rate and the gate simply waits. A stall cannot lose
+bytes, only introduce a timing gap. `read_poll_timeout` re-evaluates the condition after the deadline, so a
+work item preempted past the 100 ms timeout while the FIFO drained still succeeds rather than spuriously
+reporting a stall.
 
 **Implementation (`clarett_midi.c`, `snd_rawmidi`, register on ALL models):** TX = pack 1–3 bytes → write
 `0x58c`; RX = on the MIDI interrupt, drain `0x58c` → push to rawmidi → write `0x8` to `0x504`. Follow-ups:

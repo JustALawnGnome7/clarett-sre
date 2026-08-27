@@ -1271,6 +1271,62 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   every read looked like a period event), and the mailbox fails fast on `pci_dev_is_disconnected()`
   instead of waiting out the response timeout per command. Confirmed by powering the unit off during a
   14ch `arecord`: the host survives and `arecord` exits `-EBADFD` (the correct ALSA disconnect error).
+- **★ DIN MIDI IS FULLY VERIFIED, AND TX NEEDED A FLOW-CONTROL GATE THE DRIVER WAS IGNORING (Aug 27 2026,
+  2Pre against an ISA C8X as reference partner; `spec/provenance/clarett-midi-plan.md`).** **`0x500` bit16
+  (`MIDI_TX_READY`) = the TX FIFO can accept another packed word**, and a word written while it is clear is
+  **discarded** — so the vendor's read before every TX write is a required gate, not the "advisory?" the
+  tx.log capture left open. Mirroring the read without acting on it lost **94% of a 900-byte burst** (54
+  bytes arrived, stream torn mid-message); the FIFO is **9 words / 27 bytes** deep and drains at the DIN
+  wire rate. The old `midi_tx_pace_us` lever is **removed** — blind pacing only worked at exactly 960 µs
+  per word (one 3-byte word at 3125 B/s), which is the tell that the real fix is the gate:
+  `clarett_midi_tx_wait()` now polls bit16 with `read_poll_timeout`, sleeping rather than busy-waiting, and
+  waits **before** taking bytes from ALSA so a stalled UART leaves them queued instead of eating them.
+  **Why it hid for three weeks:** the original confirmation sent single messages and a 10-byte SysEx, both
+  inside the FIFO — the bug needs a burst longer than nine words.
+  Verified exact (byte-stream comparison, not counts) both directions: 2000-message bursts, 1 KB and 4 KB
+  SysEx, simultaneous bidirectional, during 14 ch capture, during full-duplex PCM, and the ALSA sequencer
+  path. The full-duplex run was `late=0 overrun=0 badreads=0` over 40 s, so the TX sleep costs the servicer
+  nothing. **Method note: the two-device rig is what made this attributable** — a known-good partner on the
+  other end of the DIN cables means a failure in one direction localises to our TX or our RX immediately,
+  and comparing byte streams rather than counting bytes is what showed the stream was torn, not just short.
+  `count=1`/`2`/`3` framing all confirmed (a lone program change forces the `count=2` word). Untested:
+  MIDI on 4Pre/8Pre/8PreX.
+- **★ MIDI OVERFLOW: THE DEVICE RX FIFO IS 139 BYTES, THERE IS NO OVERFLOW BIT, AND A NON-EMPTY FIFO DOES
+  NOT RE-INTERRUPT — the ack is what re-arms it (Aug 27 2026, 2Pre).** The last of those is the one with
+  teeth: `clarett_midi_irq()` bounded its drain at 64 bytes with the comment "anything still pending
+  re-interrupts", which is **false**, so a backlog over 64 bytes stranded until an unrelated interrupt
+  happened to re-enter the handler. Provoked by instrumenting the ISR to skip the drain — RX went dead
+  permanently and revived only when an `amixer` mailbox command drained the 139 bytes still queued.
+  Fixed: `CLARETT_MIDI_RX_GUARD` = 256, above the FIFO depth, so one pass always empties it (verified:
+  64+64+11 across three entries became **139 in one pass**). Reaching it needs a >20 ms ISR stall, and a
+  continuous stream self-heals because each new byte re-triggers — the exposure is a burst tail on a host
+  that stalls, and **the ASRock's ~42-48 ms freeze sits right at the 139-byte / ~44 ms limit.**
+  Host-side overflow was already correct (driver takes all 9000 bytes, the ALSA core drops the excess and
+  counts `xruns`, exact both ways immediately after). **Unfixable:** bytes lost while the hardware FIFO is
+  full are gone and unreported — no overflow bit exists, so a stall beyond ~44 ms silently truncates MIDI.
+  `0x500` low-byte bit1 = RX data pending (`0x0a` queued, `0x08` on the last byte, `0x00` empty).
+- **★ NOTHING IS FILTERED — `F8`/`FE` PASS FINE, AND THE "HARDWARE DROPS THEM" FINDING WAS A MEASUREMENT
+  ARTEFACT (Aug 27 2026).** **`amidi -d` DISCARDS Active Sensing (`FEh`) and Clock (`F8h`) BY DEFAULT** —
+  `-a` and `-c` are the flags that stop it. Every test that "showed" the device dropping those two bytes
+  used `amidi -d` as the receiver, so the receiver was doing it. With `-a -c`: `F8`, `FE`, `F8 FE`, and
+  `F8` embedded mid-stream all round-trip byte-exact; without them the same send loses exactly the `F8`.
+  So MIDI clock and active sensing work, and `tools/midi_loopback.py` now passes `-a -c` unconditionally.
+  **The tell that should have caught it immediately: the two "filtered" bytes were exactly the two bytes
+  amidi has command-line flags for.** When a device appears to filter precisely the set your tool has
+  options about, suspect the tool. A self-consistent chain of reasoning was built on top (content-based
+  not framing, `FA`/`FB`/`FC` pass so it is not System Real-Time, the FPGA suppresses periodic traffic) —
+  all of it internally valid and all of it worthless, because the receiver was poisoned. **Every
+  measurement here is only as good as the instrument's default configuration; read the man page for the
+  defaults, not just the flags you are using.** (Same class as the x-no-mmap timing artefact that created
+  the manifestation wall: byte-identical traffic under a lying instrument is not identical behaviour.)
+- **A MIDI byte SURPLUS means a second writer on the port — never a transmit fault.** Seen twice (1500
+  sent read back as 1560; 150 as 345). **The writer was not identified:** a concurrent manual bench run
+  (which also collided as `amidi` "Device or resource busy" — there is one input substream) and PipeWire's
+  seq bridge echoing are both live candidates. Both surpluses followed a PipeWire start, but that
+  correlation is weak and was over-read at first. **Practice before any MIDI measurement: stop PipeWire,
+  confirm `aconnect -l` shows no `Connecting To:` on the ports under test, and run ONE bench instance.**
+- `tools/midi_loopback.py` is the MIDI bench: modes `notes`/`sysex`/`raw`/`both`/`idle`, exact byte-stream
+  comparison with first-divergence reporting, and it calls out a *surplus* separately from a loss.
 - Packed bitfield controls: monitor mute/dim enables (bytes 72/73) set at probe; others not implemented.
 - **SW/HW output gain — verified, and the knob now follows into it (July 24 2026, 2Pre).** First
   hardware confirmation of `hwGainEnable` (offset 52, bit per output; 56 for outputs 3/4), previously
