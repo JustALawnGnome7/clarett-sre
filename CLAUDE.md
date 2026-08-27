@@ -23,8 +23,12 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
   2Pre's front-panel LEDs and switch its relays. **Attribution matrix CLOSED 3/3 (July 16, fresh DC
   power-cycle each): two gated runs arm clean, the levers-off control run walls (seed `-5`) — the
   landed-gated ack + pre-submit header zero are now the unconditional default cycle** (`gated_ack`
-  lever retired; `resp_trace` kept as telemetry). **PENDING:** re-audit the shadow/`GET_DATA`
-  refresh paths and the `meter_poll_ms` "heartbeat" hypothesis (both written for a walled device).
+  lever retired; `resp_trace` kept as telemetry). The **`meter_poll_ms` "heartbeat" hypothesis is
+  DISPROVEN** (Aug 26 2026): with the poll off, a preamp toggle switches the relay audibly and byte
+  166 reads back correctly, so the device requires no host heartbeat — the symptom it was invented
+  for belonged to the ack outrunning the response DMA. The meter worker is gone; the meter control's
+  `.get` polls on demand, rate-limited, so **idle mailbox traffic is zero**. **PENDING:** re-audit
+  the shadow/`GET_DATA` refresh paths (still written for a walled device).
 - **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
@@ -186,8 +190,20 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   flag | opcode), `size|seq`@+4 (size low16, seq high16, seq increments),
   `error`@+8, pad@+12, `data[]`@+0x10. Matches scarlett2 header layout.
 - **Doorbell @ `0x408`**: write `1` = submit, `2` = ack/clear prior completion.
-- **Completion**: poll IRQ cause reg `0x100` for DONE bit `0x20000000`. Cause regs
-  `0x100/0x200/0x300/0x400` = one block per MSI vector (read-to-clear).
+- **Completion**: the handshake is the two phase bits in **`0x400`** (read-to-clear): **bit0 =
+  request accepted**, **bit1 = response DMA landed**. bit1 is the gate for the trailing ack and for
+  reading the response — the echo word at response offset 0 lands first and the payload tail trails
+  it by µs. Established over 10753 traced vendor commands (bit1 seen exactly once before every ack,
+  never twice) and hardware-confirmed; a native-speed capture caught `0x1` then `0x2` on successive
+  reads, each read consuming what it returned. One vec0 interrupt per phase bit, or one carrying both.
+- **`0x100` is a SUMMARY register, not a per-vector cause block, and is NOT read-to-clear.** bit29
+  reflects "`0x400` has bits pending" — never asserted while `0x400` reads zero across 100670 traced
+  sweeps, and raised by async event bits as much as by phase bits, so it cannot say which phase an
+  interrupt is or whether a command is outstanding. Reading `0x400` is what clears it. bit31 likewise
+  reflects the stream period block: reading `0x100` twice returns `0x80000000` both times while
+  streaming. So a poll of `0x100` for a "DONE bit" (the old model) could be satisfied by a
+  front-panel notification with no command in flight, and the driver no longer reads it.
+  `0x200`/`0x300` are the real per-direction stream period blocks.
 - **GET responses arrive via DMA, NOT the BAR.** Device DMAs results into a host
   buffer whose bus address is programmed at `0x410` (low32) / `0x414` (high32).
   → MMIO traces can't see GET payloads; the driver allocates its own buffer.
@@ -1084,10 +1100,19 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP
   header + data at +16; `resp[16+i] == config[off+i]`; guard on the echoed cmd at
   +0). Other bytes stay write-through. See transport spec §8.
-- **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
-  the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
-  `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
-  (the ISR deliberately leaves the `0x100` cause to the poll to avoid a race).
+- **Async notifications (MSI vec0 / cause `0x400`) — the mask was INVERTED until Aug 26 2026.**
+  `0x400` carries two populations: **bits 0-1 are per-command phase**, raised by every command the
+  driver issues, and **bits >=2 are the device's events** — bit3 sync change, bit21 dim-mute, bit22
+  monitor (the last two named identically in every Clarett/Scarlett XML). The old mask was
+  `0x00200003`, so the relay fired on the driver's own command completions and **discarded
+  `0x400000` entirely** — hardware-confirmed: turning the monitor knob raises `0x400000` and the
+  mask reduced it to zero, which is why the knob never tracked. Now: phase bits complete the
+  mailbox, any event bit is relayed to fcp-server as the real notification word (as `fcp.c` does),
+  and **the ISR is the only reader of `0x400`** — it is read-to-clear, so a second reader destroys
+  what the first needs. That single-reader rule is load-bearing: the stream servicer used to read
+  `0x400` at ~6.6 kHz and discard it, which stole phase bits and timed commands out at ~1-2% while
+  streaming. Deleted with the fix: `monitor_poll`, the `stream_on` relay gate, `notify_ms` and its
+  coalescing dwork, `cmd_inflight`, and the `GET_METER` "heartbeat" (see below).
   - **The relay is gated off while streaming (`stream_on`), so the monitor knob used to freeze for the
     duration of any stream — FIXED July 24 2026, hardware-confirmed.** The gate is necessary: vec0 also
     fires per audio period and `0x400` reads its idle `0x3` each time, and the relay is a *wildcard*

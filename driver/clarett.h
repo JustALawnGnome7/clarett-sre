@@ -34,7 +34,7 @@ struct snd_rawmidi_substream;
 #define REG_CAPS                 0x000
 #define REG_SERIAL_LO            0x010
 #define REG_SERIAL_HI            0x014
-#define REG_IRQ0_CAUSE           0x100   /* read-to-clear; bit DONE = mailbox complete */
+#define REG_IRQ0_CAUSE           0x100   /* summary of the other cause blocks; NOT read-to-clear */
 #define REG_IRQ0_ENABLE          0x104   /* observed init value 0xf000003f            */
 #define REG_NOTIFY_CAUSE         0x400   /* read-to-clear; carries the notify mask     */
 #define REG_DOORBELL             0x408   /* write 1 = submit, 2 = ack/clear prior      */
@@ -106,7 +106,6 @@ struct snd_rawmidi_substream;
 #define MBOX_DATA                0x10
 
 #define CMD_EXEC_FLAG            0x80000000u
-#define IRQ_DONE_BIT             0x20000000u   /* mailbox-complete cause bit @ REG_IRQ0_CAUSE */
 #define DOORBELL_SUBMIT          1
 #define DOORBELL_ACK             2
 
@@ -121,26 +120,44 @@ struct snd_rawmidi_substream;
 #define CLARETT_VEC_EVENT        0       /* the device signals control events on vec0 */
 
 /*
- * REG_NOTIFY_CAUSE (0x400) is NOT an async event queue — it is a 2-bit command-phase/status
- * register. Correlating every FC boot capture (tools scratch: notify_correlate) shows it only ever
- * holds {0,1,2,3}: idle/ready = 0x3, then it dips 0x3->0x0 while a mailbox command is accepted and
- * blips 0x1->0x2 mid-command, returning to 0x3 at completion. FC POLLS it as flat status and
- * branches on nothing — it performs NO per-bit follow-up read (the Apollo-style "each notification
- * bit points to a descriptor block you must read" model was tested here and refuted). One capture
- * (4pre, at stream time) is the sole place bit3 (0x8) ever appears.
+ * REG_NOTIFY_CAUSE (0x400), read-to-clear, carries two populations of bits:
  *
- * Consequence for our ISR: vec0 fires on mailbox-DONE too, and at completion 0x400 reads its idle
- * 0x3 (== NOTIFY_MON_PRIMARY), so a completion MSI can be misread as a monitor event; the cmd_inflight
- * guard suppresses that self-reflection. But hardware (response-logging on the 2Pre) shows
- * the guard is only a minor cleanup: the dominant "notification retried indefinitely" storm is the
- * DEVICE genuinely re-asserting 0x3 in us-scale bursts (8 in 234us, far faster than our ~30ms command
- * rate, inflight=0) because our GET returns empty (size=0) and never satisfies it — where FC's returns
- * real config and it goes quiet. So this is a dormant-backend symptom, not a driver bug. (The earlier
- * 0x00200000/0x00400000 pair was an unverified notify-mask guess that never matched.)
+ *   bits 0-1  per-command mailbox phase. bit0 = the request was taken, bit1 = the response DMA
+ *             has landed. Each is raised once per command, and each drives one of the mailbox's
+ *             waits; see __clarett_fcp().
+ *   bits >=2  asynchronous device events, which can land at any time. Every one is relayed to
+ *             userspace, named or not. Bit3 signals a sync-state change; the vendor XML names
+ *             bit21 dim-mute and bit22 monitor, identically across the Clarett line, the USB
+ *             Clarett and the Scarlett descriptors.
+ *
+ * A read takes both populations at once, so the reader splits them: phase bits complete the
+ * mailbox, everything else is forwarded. sound/usb/fcp.c splits its notify word the same way,
+ * FCP_NOTIFY_ACK being the equivalent of bit0.
  */
-#define NOTIFY_MON_PRIMARY       0x00000003u  /* bit0|bit1 — raised on every monitor (mute/dim) event */
-#define NOTIFY_MON_AUX           0x00200000u  /* bit21 — co-occurs intermittently */
-#define NOTIFY_MONITOR_MASK      (NOTIFY_MON_PRIMARY | NOTIFY_MON_AUX)
+#define NOTIFY_REQ_ACCEPTED      0x00000001u  /* bit0 — request taken */
+#define NOTIFY_RESP_LANDED       0x00000002u  /* bit1 — response DMA landed */
+#define NOTIFY_PHASE_MASK        (NOTIFY_REQ_ACCEPTED | NOTIFY_RESP_LANDED)
+#define NOTIFY_EVENT_MASK        (~NOTIFY_PHASE_MASK)
+
+#define NOTIFY_EV_SYNC           0x00000008u  /* bit3  — sync state changed (undeclared) */
+#define NOTIFY_EV_DIM_MUTE       0x00200000u  /* bit21 — [XML] dim-mute */
+#define NOTIFY_EV_MONITOR        0x00400000u  /* bit22 — [XML] monitor */
+
+/*
+ * The two phase bits fail differently, so each has its own deadline:
+ *
+ *   bit0 within CLARETT_ACCEPT_TIMEOUT_MS. Past it the request was never taken, so the command
+ *   goes unacked and counts a strike. CLARETT_MBOX_STRIKES consecutive strikes latch the mailbox
+ *   dead, failing every later command immediately until a reload or rebind.
+ *
+ *   bit1 within CLARETT_ANSWER_TIMEOUT_MS. Past it the request was taken but went unanswered. The
+ *   ack is still sent, to release the phase machine, and the command returns -ETIMEDOUT meaning
+ *   "outcome unknown": bit0 fired, so the device may have executed it, and re-issuing a SET_DATA
+ *   or DATA_CMD activate could double-apply it to NVRAM.
+ */
+#define CLARETT_ACCEPT_TIMEOUT_MS  200
+#define CLARETT_ANSWER_TIMEOUT_MS  500
+#define CLARETT_MBOX_STRIKES       3
 
 /* Monitoring config region re-read on a notification. */
 #define MONITOR_CFG_OFFSET       24
@@ -202,15 +219,11 @@ struct snd_rawmidi_substream;
 #define FCP_DATA_CMD             0x800002
 
 /*
- * GET_METER (0x001001): Focusrite Control polls this continuously (~24 Hz) the entire time it is
- * connected — the bulk of the trace "noise". It is not just a GUI meter read: it is the device's
- * required host heartbeat. With NO periodic poll the device accepts control writes (done=1, fcperr=0)
- * but never applies them to hardware (front-panel LEDs/preamp do not move), and the stream engine
- * stalls after one ring pass. Replaying FC's exact 8-byte payload {0x00300000, 0x00000001} as a
- * periodic heartbeat is what makes control changes physically manifest. See clarett_meter_work().
+ * GET_METER (0x001001): returns the level-meter slot array. Focusrite Control polls it continuously
+ * (~24 Hz) while connected, which is what a meter display does and the bulk of the trace "noise";
+ * the meter control's .get polls it on demand, rate-limited to CLARETT_METER_CACHE_MS.
  */
 #define FCP_GET_METER            0x001001
-#define CLARETT_METER_POLL_MS    40
 
 /*
  * MUX_READ: read back the routing table. Request {u8 offset, u8 pad, u8 count, u8 band}; reply is an
@@ -224,8 +237,7 @@ struct snd_rawmidi_substream;
  * control at its UI refresh rate (30-60 Hz); a device command per read floods the mailbox and disrupts
  * streaming (skips + command timeouts, since control and stream contend on this Thunderbolt device). The
  * .get serves the cached levels between polls, so the GUI still sees a live meter with far fewer device
- * commands. Kept just above the heartbeat interval so the heartbeat's own refresh (below) keeps the cache
- * fresh and the .get never has to poll on its own — one meter poll rate, not two.
+ * commands, and bounds the device traffic a meter display can generate to one command per interval.
  */
 #define CLARETT_METER_CACHE_MS   50
 
@@ -556,11 +568,16 @@ struct clarett {
 
 	u32 serial_lo, serial_hi, fw_app, fw_fpga;
 
-	/* MSI / async notifications (vec0). With the vendor mailbox cycle (default) the ISR
-	 * IS the completion path: while cmd_inflight it reads the 0x100 mailbox cause (the
-	 * vendor sweep's first read, MSI-paced) and completes mbox_done; clarett_fcp then
-	 * finishes the sweep. legacy_mbox_cycle=1 restores the pure polled mailbox, where
-	 * the ISR deliberately never touches 0x100. */
+	/*
+	 * MSI / async notifications (vec0). REG_NOTIFY_CAUSE (0x400) is read-to-clear and carries the
+	 * whole handshake, so the ISR is its only reader: bit0 and bit1 complete mbox_accepted and
+	 * mbox_landed, and the remaining bits are forwarded as device events. A command raises one
+	 * interrupt per phase bit, or one carrying both. fcp_notify() in sound/usb/fcp.c splits its
+	 * notify word the same way.
+	 *
+	 * 0x100 bit29 summarises "0x400 has bits pending", raised by event bits and phase bits alike
+	 * and retired by draining 0x400. The ISR reads it and discards the value.
+	 */
 	bool irq_ready;
 	bool ctl_ready;				/* controls registered; notify path may snd_ctl_notify */
 	int n_vec;				/* MSI vectors actually allocated (<= CLARETT_NUM_VECTORS) */
@@ -568,15 +585,10 @@ struct clarett {
 	struct work_struct notify_work;
 	struct delayed_work save_work;		/* debounced DATA_CMD{PERSIST}; see CLARETT_SAVE_DELAY_MS */
 	atomic_t notify_bits;
-	/*
-	 * Last-seen monitor config region, for the change-detecting poll that keeps the front-panel
-	 * knob live while streaming (clarett_monitor_poll; the 0x400 relay is gated off by stream_on).
-	 * Touched only from the meter worker, so no lock of its own.
-	 */
-	u8 mon_snap[MONITOR_CFG_LEN];
+	u8 mon_snap[MONITOR_CFG_LEN];		/* last-seen monitor region; clarett_monitor_sync() only */
 	bool mon_snap_valid;
-	struct completion mbox_done;		/* completed by the vec0 ISR on mailbox DONE */
-	u32 mbox_cause;				/* 0x100 value the ISR consumed with DONE set */
+	struct completion mbox_accepted;	/* ... on 0x400 bit0 */
+	struct completion mbox_landed;		/* ... on 0x400 bit1 */
 	/*
 	 * Is the mailbox wedged? Set when the last command either produced no response DMA at all, or
 	 * produced one echoing a sequence number that is not the one we sent. Both are the same fault:
@@ -588,22 +600,11 @@ struct clarett {
 	 * it here to decide whether to reset the mailbox and retry.
 	 */
 	bool mbox_wedged;
-	/*
-	 * Set while a mailbox command is in flight (clarett_fcp submit->complete). vec0 fires on
-	 * mailbox-DONE as well as front-panel notifications, and 0x400 reads its idle level (bit0|bit1
-	 * = 0x3) at completion, so a completion MSI can be misread as a monitor event. This guard makes
-	 * the ISR skip 0x400 while our own command is in flight, suppressing that self-reflection.
-	 * NOTE (hardware-confirmed): this is only a MINOR contributor. On a walled device the
-	 * dominant "notification retried indefinitely" storm is the DEVICE genuinely re-asserting 0x3 in
-	 * us-scale bursts because our GET returns empty (size=0) and never satisfies it — the guard cannot
-	 * stop that (the device fires in the idle gaps where inflight=0). See clarett_irq() and the
-	 * REG_NOTIFY_CAUSE note.
-	 */
-	atomic_t cmd_inflight;
 
-	/* Periodic GET_METER heartbeat — the device requires it to apply control writes to
-	 * hardware (and to sustain streaming). See FCP_GET_METER / clarett_meter_work(). */
-	struct delayed_work meter_work;
+	/* Consecutive request-never-accepted commands, and the latch they set. Both are
+	 * mbox_lock-held; mbox_dead is also read unlocked as a fast path. */
+	unsigned int mbox_strikes;
+	bool         mbox_dead;
 
 	/*
 	 * FCP hwdep level meter. fcp-server creates the "Level Meter"
@@ -619,8 +620,7 @@ struct clarett {
 	 */
 	wait_queue_head_t hwdep_notify_wait;
 	atomic_t hwdep_notify_event;
-	struct delayed_work hwdep_notify_dwork;	/* coalesces relay wakes (idle 0x400 storms ~30 Hz) */
-	bool hwdep_ready;			/* dwork INIT'd: gates cancel (probe-error paths never got here) */
+	bool hwdep_ready;			/* hwdep created: gates the relay (probe-error paths never got here) */
 	struct snd_kcontrol *hwdep_meter_ctl;
 	s16 *hwdep_meter_map;
 	__le32 *hwdep_meter_levels;	/* GET_METER scratch + cache (rate-limited; see clarett_hwdep_meter_get) */
@@ -1013,6 +1013,8 @@ int clarett_fcp_cmd(struct clarett *c, u32 opcode, const u8 *req, u16 req_len,
 /* hwdep.c */
 int clarett_hwdep_init(struct clarett *c);	/* create the FCP hwdep (fcp-server transport) */
 void clarett_hwdep_notify(struct clarett *c, u32 ev);	/* relay a device notification to fcp-server */
+void clarett_notify_event(struct clarett *c, u32 ev);	/* queue device event bits for relay */
+void clarett_monitor_sync(struct clarett *c);		/* re-read monitor region; drives hw_gain_follow */
 void clarett_hwdep_free(struct clarett *c);	/* stop the relay before c is freed (UAF guard) */
 int clarett_get_data(struct clarett *c, u32 offset, u32 len);
 int clarett_set_data(struct clarett *c, u32 offset, u32 len, const u8 *val);
