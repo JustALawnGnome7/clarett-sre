@@ -577,7 +577,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
 ## Driver limitations / TODO
 
 - **★★ THE ALSA BUFFER WAS PINNED TO THE 4096-FRAME RING — THE REAL LATENCY CEILING, AND THE PERIOD WAS
-  NEVER THE POINT (Aug 27 2026, 8Pre; user-confirmed fixed on hardware).** A DAW at a 16-frame
+  NEVER THE POINT (Aug 27 2026, 8Pre; fixed and measured on hardware).** A DAW at a 16-frame
   period reported 1.75 ms round trip and sounded far worse; `/proc/asound/card4/pcm*/sub*/status` settled
   it in one look: `period_size: 16` (so the period request WAS honoured — PipeWire coercion and the
   cadence-1 overruns are both exonerated), `buffer_size: 4096`, and **playback `delay: 4000` frames = 83 ms**
@@ -598,7 +598,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     retest proved it: with the new module confirmed loaded (`/sys/module/snd_clarett/parameters/tx_guard`
     readable), `buffer_size` came back 4096 and `delay` 4048, unchanged.
     **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
-    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it, user-confirmed audibly.** Default is **0
+    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay` went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** Default is **0
     = the full ring**, i.e. no change for existing clients: lowering the ceiling card-wide would regress
     anything that wants depth (PipeWire at a 1024-frame quantum needs 2048 for its two periods), and
     there is no per-app ceiling. An app that asks explicitly can still have 128 with the default.
@@ -620,6 +620,19 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     regardless of period — ~322 KB per 333 µs at cadence 1 on a 20-channel 8Pre, near 1 GB/s of memcpy to
     deliver 16 frames. Pre-existing, now conspicuous. The runway only has to cover worst-case servicer
     lag, not the whole ring.
+  - **PIPEWIRE PINS ITS OWN BUFFER, SO THE CEILING NEVER REACHES IT — and the A/B that looked like
+    "PipeWire adapts" is VOID (8Pre).** Playing silence through the `pro-output` sink, PipeWire
+    negotiated `period_size: 64`, `buffer_size: 256` and logged nothing — but it negotiated **the same
+    256 at `max_buffer=0`**, i.e. with the ceiling still at the full ring. So it chose that buffer
+    itself; nothing was demonstrated about how it responds to a lowered ceiling, and an earlier reading
+    of this as "PipeWire shrinks its quantum to fit" was fitted to a one-sided measurement. **The
+    objection to lowering the default therefore still stands, unanswered.** The useful half is the
+    mechanism it does establish: PipeWire *pins* BUFFER_SIZE, which is why it is unaffected either way,
+    while the DAW pins only the period and so takes the advertised maximum (the `set_last` asymmetry
+    above). That also makes `max_buffer` useless as an A/B lever against any PipeWire-driven symptom.
+    **Method note:** `pactl suspend-sink <sink> 0` does NOT force the ALSA open — PipeWire opens on
+    demand. Playing a silent WAV with `pw-play --target=<sink>` and reading `hw_params` mid-stream does,
+    and is the non-audible way to see what PipeWire actually negotiated.
   - **STILL UNVERIFIED (the latency result does not cover these):** whether a small buffer skips (the
     `tx_guard`-vs-app-lead risk above); what a lowered `max_buffer` does to PipeWire and ordinary desktop
     playback, which share the card-wide ceiling; the 60 s cadence-4 duplex regression; and how low the
