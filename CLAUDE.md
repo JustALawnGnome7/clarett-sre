@@ -647,9 +647,23 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   - **STILL UNVERIFIED (the latency result does not cover these):** whether a small buffer skips (the
     `tx_guard`-vs-app-lead risk above); the 60 s cadence-4 duplex regression; how low the buffer goes
     before it breaks (128 = 2.7 ms was never tried, only 256 = 5.3 ms); and whether the PipeWire result
-    above holds on a wider model (it was taken on the 4-playback-channel 2Pre — the 8Pre's 20-channel
-    `pro-output` sink is where the unexplained silence was seen, and stereo-onto-20-channels is the
-    leading suspect there, unrelated to buffer size).
+    above holds on a wider model (it was taken on the 4-playback-channel 2Pre).
+  - **★ THE 8PreX/8Pre "PIPEWIRE PLAYS NOTHING" EPISODE WAS DEVICE EXCLUSIVITY, NOT A DRIVER BUG
+    (Aug 27 2026, resolved Aug 31 by the operator).** `snd_pcm_new(..., 0, 1, 1, ...)` gives **one
+    playback and one capture substream** — no dmix, no sharing — so a DAW opened on `hw:N,0` **as an ALSA
+    device** locks PipeWire out of the card completely. PipeWire had the 8Pre, the DAW was then granted
+    it directly, and everything PipeWire subsequently "played" went nowhere. Corroborated by three
+    observations from that session that were each misread at the time: `aplay -D hw:N,0` returning
+    `Device or resource busy` (blamed on PipeWire, equally the DAW), `pw-record` yielding a 44-byte
+    header-only WAV with `frames=0` (the capture substream was held too), and every `Level Meter` slot
+    reading zero for a `pw-play` tone that never reached the device. **None of routing, output level,
+    channel mapping or `max_buffer` was involved**, and a long hunt through all four found nothing
+    because there was nothing there.
+    **THE ONE-LINE DISCRIMINATOR, and use it before trusting any `/proc/asound` reading:**
+    `/proc/asound/card<N>/pcm0p/sub0/status` prints **`owner_pid`** — check it against `pidof pipewire`.
+    `state: RUNNING` with an advancing `hw_ptr` only ever means *some* client is streaming, never which,
+    and reading it as "PipeWire is playing" is what cost that session. Run a DAW through PipeWire's JACK
+    layer (`pw-jack`) rather than on the raw ALSA device if both are wanted at once.
 - **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
