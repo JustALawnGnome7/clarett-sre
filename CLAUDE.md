@@ -599,9 +599,10 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     readable), `buffer_size` came back 4096 and `delay` 4048, unchanged.
     **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
     `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay` went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** Default is **0
-    = the full ring**, i.e. no change for existing clients: lowering the ceiling card-wide would regress
-    anything that wants depth (PipeWire at a 1024-frame quantum needs 2048 for its two periods), and
-    there is no per-app ceiling. An app that asks explicitly can still have 128 with the default.
+    = the full ring**, i.e. no change for existing clients, since the ceiling is card-wide and there is
+    no per-app one. An app that asks explicitly can still have 128 with the default. (The reason first
+    given for that default — that PipeWire needs 2048 at a 1024-frame quantum and would regress — is
+    **disproven**; see the PipeWire bullet below. The default is now conservative on sample size only.)
   - **Why the whole-runway TX fill SURVIVES a small buffer** (the part that looked like a redesign and
     wasn't): filling `ring - guard` frames from a buffer that divides the ring simply TILES it, and ring
     frame f still receives the buffer frame due to play when the engine reaches f, because both advance
@@ -620,23 +621,35 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     regardless of period — ~322 KB per 333 µs at cadence 1 on a 20-channel 8Pre, near 1 GB/s of memcpy to
     deliver 16 frames. Pre-existing, now conspicuous. The runway only has to cover worst-case servicer
     lag, not the whole ring.
-  - **PIPEWIRE PINS ITS OWN BUFFER, SO THE CEILING NEVER REACHES IT — and the A/B that looked like
-    "PipeWire adapts" is VOID (8Pre).** Playing silence through the `pro-output` sink, PipeWire
-    negotiated `period_size: 64`, `buffer_size: 256` and logged nothing — but it negotiated **the same
-    256 at `max_buffer=0`**, i.e. with the ceiling still at the full ring. So it chose that buffer
-    itself; nothing was demonstrated about how it responds to a lowered ceiling, and an earlier reading
-    of this as "PipeWire shrinks its quantum to fit" was fitted to a one-sided measurement. **The
-    objection to lowering the default therefore still stands, unanswered.** The useful half is the
-    mechanism it does establish: PipeWire *pins* BUFFER_SIZE, which is why it is unaffected either way,
-    while the DAW pins only the period and so takes the advertised maximum (the `set_last` asymmetry
-    above). That also makes `max_buffer` useless as an A/B lever against any PipeWire-driven symptom.
+  - **★ PIPEWIRE ADAPTS TO THE LOWERED CEILING BY SHRINKING ITS PERIOD, NOT ITS QUANTUM — MEASURED
+    PROPERLY AT LAST (Aug 31 2026, 2Pre, tone audible in BOTH legs).** The A/B that matters is run with
+    **no DAW open**, restarting PipeWire between legs (the ceiling is read at `open()`, so a sink that is
+    already open keeps what it negotiated and the param looks inert):
+    | `max_buffer` | period | buffer | `delay` | audible |
+    |---|---|---|---|---|
+    | 0 | 1024 | 4096 | 3072 = 64 ms | yes |
+    | 256 | 64 | 256 | 128 = **2.7 ms** | yes |
+    `clock.quantum` stayed **1024 in both** — so PipeWire decouples the ALSA node's period from the graph
+    quantum and simply runs the node faster. Ordinary desktop playback therefore does NOT break at a
+    lowered ceiling; it gets 24x less latency, at the cost of 16x the node wakeups (unmeasured CPU).
+    **Two of this project's own claims died here, both from measuring under a DAW that had already pulled
+    the graph to a small quantum:** "PipeWire pins BUFFER_SIZE and is indifferent to the ceiling" (it
+    pins nothing at the default quantum — it took the full 4096) and "PipeWire at a 1024-frame quantum
+    needs 2048 for its two periods, so lowering the default would regress the desktop" (it needs no such
+    thing). A third, predicted this session and also wrong: that `buffer < period` would make `hw_params`
+    unsatisfiable and fail the open outright — PipeWire never asks for that intersection, it re-picks the
+    period first. **The stated rationale for `max_buffer` defaulting to 0 is thus disproven**; the default
+    stays 0 for now on sample size (one host, one PipeWire version, one model), not on evidence of harm.
     **Method note:** `pactl suspend-sink <sink> 0` does NOT force the ALSA open — PipeWire opens on
-    demand. Playing a silent WAV with `pw-play --target=<sink>` and reading `hw_params` mid-stream does,
-    and is the non-audible way to see what PipeWire actually negotiated.
+    demand. Playing a WAV with `pw-play` and reading `hw_params` mid-stream does. And read `hw_params`
+    with a *listening* check beside it: `state: RUNNING` with `hw_ptr` advancing was equally true during
+    the 8Pre silence, so the telemetry alone cannot tell playing from silent.
   - **STILL UNVERIFIED (the latency result does not cover these):** whether a small buffer skips (the
-    `tx_guard`-vs-app-lead risk above); what a lowered `max_buffer` does to PipeWire and ordinary desktop
-    playback, which share the card-wide ceiling; the 60 s cadence-4 duplex regression; and how low the
-    buffer goes before it breaks (128 = 2.7 ms was never tried, only 256 = 5.3 ms).
+    `tx_guard`-vs-app-lead risk above); the 60 s cadence-4 duplex regression; how low the buffer goes
+    before it breaks (128 = 2.7 ms was never tried, only 256 = 5.3 ms); and whether the PipeWire result
+    above holds on a wider model (it was taken on the 4-playback-channel 2Pre — the 8Pre's 20-channel
+    `pro-output` sink is where the unexplained silence was seen, and stereo-onto-20-channels is the
+    leading suspect there, unrelated to buffer size).
 - **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
