@@ -440,23 +440,39 @@ static void clarett_tx_fill(struct clarett *c, const u8 *alsa, u32 apos, u32 pos
 #define CLARETT_MIN_BUFFER_FRAMES	(2 * CLARETT_TX_GUARD_FRAMES)	/* 128 frames */
 
 /*
- * The guard as a lever, because shrinking the buffer moves it from "obviously safe" to "depends on the
- * app". Its upper bound is the app's steady-state lead, which the app chooses and the driver cannot see:
- * the old 4096-frame pin made any lead >= 256 frames, so 64 was never close. A DAW that keeps only its
- * configured 3 periods of a 16-frame period queued leads by 48 — BELOW the guard — and the fill's near
- * edge would then hand the engine frames the app has not written.
+ * The guard as a lever. Its job is ANTI-TEARING: keeping the fill clear of the engine's current read
+ * position. What it is not is a latency term — the ALSA buffer and the reported delay are unchanged
+ * across its whole range (measured identical at 64/128/256 on an 8Pre at a 512-frame buffer). It sets a
+ * deadline instead: a frame has to be in the ALSA buffer roughly this many frames before the engine
+ * reaches its ring slot, or the engine plays whatever was already there.
+ *
+ * The text here used to claim the opposite risk — that a guard EXCEEDING the app's steady-state lead
+ * would make the fill's near edge hand the engine frames the app had not written — and advised turning
+ * the guard DOWN if skipping appeared. Neither half is supported by measurement. On hardware (8Pre), via
+ * a device-internal digital loopback carrying a sample-counter ramp checked frame by frame: a client
+ * pinning its lead at 48 frames against a 64-frame guard was indistinguishable from one leading by 128,
+ * with break counts tracking the client's OWN underrun count and not the lead at all. And with a normal
+ * full-buffer client every guard from 16 to 96 came out equally clean, at a 32- and a 64-frame period
+ * alike (single-digit breaks throughout). So there is no measured basis for lowering it, and none for
+ * raising it either.
+ *
+ * UNRESOLVED, and the reason the floor stays at one fragment rather than being raised: the same sweep
+ * driven by a SYNTHETIC client that pins a short lead showed guard 16 and 32 tearing catastrophically —
+ * tens of thousands of whole-buffer skip/repeat pairs per 25 s — while 64 stayed in single digits, 3/3.
+ * That did not reproduce with an ordinary client at either period, so it is unattributed, and plausibly
+ * an artifact of that client rather than a property of the driver. Do not act on it without a retest,
+ * and note that everything above was measured through a host with a large periodic firmware stall.
  *
  * Clamped per fill to half the ALSA buffer, so the guard is satisfied by any app that keeps its buffer
- * even half full, and floored at one fragment, which is already ~10x the engine's advance during a single
- * fill memcpy (~320 KB, tens of microseconds). If skipping ever appears at a small buffer this is the
- * first thing to turn down, and the honest fix is to bound the fill by the app's appl_ptr instead of
- * assuming a lead.
+ * even half full, and floored at one fragment. If skipping appears at a small buffer, the honest fix is
+ * to bound the fill by the app's appl_ptr instead of assuming a lead.
  */
 static unsigned int tx_guard = CLARETT_TX_GUARD_FRAMES;
 module_param(tx_guard, uint, 0644);
 MODULE_PARM_DESC(tx_guard,
 		 "Frames the playback fill stays clear of the engine's TX read position (default 64, "
-		 "clamped to half the ALSA buffer, floored at one 16-frame fragment).");
+		 "clamped to half the ALSA buffer, floored at one 16-frame fragment). Measured to have "
+		 "no effect on reported latency; see clarett_pcm.c before changing it.");
 
 /*
  * Largest ALSA buffer offered, in frames; 0 = the whole 4096-frame ring.
@@ -468,17 +484,26 @@ MODULE_PARM_DESC(tx_guard,
  * whatever ceiling is advertised here. Merely permitting a small buffer changes nothing for such an app;
  * the ceiling is the only thing it reads.
  *
- * Default 0 (the ring) keeps the behaviour every other client on the card already has, because lowering
- * it universally is not free: PipeWire at a 1024-frame quantum needs 2048 frames for its two periods, and
- * a general-purpose desktop wants the deep buffer it has been getting. Set it on a machine being driven
- * as an interface — 256 gives 5.3 ms at 48 kHz even to an app that asks for nothing.
+ * Default CLARETT_MIN_BUFFER_FRAMES. Lowering the ceiling universally was once believed to cost the
+ * desktop its deep buffer, on the theory that PipeWire at a 1024-frame quantum needs 2048 frames for its
+ * two periods. That is false, and measurement on hardware says so twice over (2Pre and 8Pre): PipeWire
+ * negotiates EXACTLY the advertised ceiling at every value down to CLARETT_MIN_BUFFER_FRAMES, and adapts
+ * by shrinking the ALSA node's period — its graph quantum never moves. Ordinary playback does not break
+ * at a low ceiling; it simply runs the node more often.
+ *
+ * Note what the default implies, because it is deliberate rather than incidental: the ceiling equals
+ * CLARETT_MIN_BUFFER_FRAMES, so the permitted range collapses to a single value and the buffer is
+ * effectively PINNED. Every client is handed 128 frames — 2.7 ms at 48 kHz — whatever it requests, and
+ * a request for more is silently granted less. Raise this on a host whose scheduling stalls exceed that
+ * (a firmware SMI, a loaded general-purpose desktop); a value above the floor restores a real range that
+ * applications can choose within.
  */
-static unsigned int max_buffer;
+static unsigned int max_buffer = CLARETT_MIN_BUFFER_FRAMES;
 module_param(max_buffer, uint, 0644);
 MODULE_PARM_DESC(max_buffer,
-		 "Largest ALSA buffer offered, in frames (rounded down to a power of two; 0 = the full "
-		 "4096-frame ring). Apps that do not request a buffer size are given this, so it sets "
-		 "their latency.");
+		 "Largest ALSA buffer offered, in frames (rounded down to a power of two, floored at "
+		 "128; 0 = the full 4096-frame ring). Apps that do not request a buffer size are given "
+		 "this, so it sets their latency.");
 
 /* The advertised buffer ceiling in frames: the ring, or the max_buffer override rounded down to a power
  * of two so the ceiling is itself an attainable value under the pow2 constraint. */

@@ -598,22 +598,43 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     retest proved it: with the new module confirmed loaded (`/sys/module/snd_clarett/parameters/tx_guard`
     readable), `buffer_size` came back 4096 and `delay` 4048, unchanged.
     **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
-    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay` went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** Default is **0
-    = the full ring**, i.e. no change for existing clients, since the ceiling is card-wide and there is
-    no per-app one. An app that asks explicitly can still have 128 with the default. (The reason first
-    given for that default — that PipeWire needs 2048 at a 1024-frame quantum and would regress — is
-    **disproven**; see the PipeWire bullet below. The default is now conservative on sample size only.)
+    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay`
+    went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** **Default is now `CLARETT_MIN_BUFFER_FRAMES` = 128
+    (Sep 2 2026, operator's call over a recommendation of 256).** The old default of 0 (the ring) is gone;
+    its stated rationale — that PipeWire needs 2048 at a 1024-frame quantum and would regress — was
+    **disproven twice**, on the 2Pre and again on the 8Pre.
+    **KNOW WHAT 128 IMPLIES: it is the FLOOR as well, so ceiling == floor and the buffer is PINNED.**
+    Measured on the 8Pre: with `max_buffer=128`, requests for 128/256/1024 are all granted **128**,
+    silently and with no error — the same shape as the original bug (an app handed a buffer it never
+    asked for), relocated from 4096 to 128. Deliberate here, but it means a host whose scheduling stalls
+    exceed 2.7 ms has no way up except changing the parameter. Any value above the floor restores a real
+    range: at `max_buffer=256` a request for 128 gets 128 and 256 gets 256.
   - **Why the whole-runway TX fill SURVIVES a small buffer** (the part that looked like a redesign and
     wasn't): filling `ring - guard` frames from a buffer that divides the ring simply TILES it, and ring
     frame f still receives the buffer frame due to play when the engine reaches f, because both advance
     by the same delta. Underrun now repeats one small buffer instead of a whole 85 ms ring pass.
-  - **The new risk, and the lever for it:** the guard's upper bound is the app's steady-state lead, which
-    the driver cannot see and the app chooses. The old pin made any lead >= 256 frames so 64 was never
-    close; an app keeping only 3 periods of 16 leads by 48, *below* the guard, and the fill's near edge
-    would hand the engine unwritten frames — the original "PipeWire skipping". Guard is now the
-    `tx_guard` param (default 64), clamped per fill to half the ALSA buffer and floored at one fragment.
-    **If skipping appears at a small buffer, turn it down first; the honest fix is to bound the fill by
-    the app's `appl_ptr` rather than assuming a lead.**
+  - **★★ THE OLD `tx_guard` TEXT WAS WRONG, BUT SO WAS MY FIRST REPLACEMENT — READ THIS BEFORE TOUCHING
+    THE GUARD (Sep 2 2026, 8Pre, digital loopback).** The parameter's default and clamp floor are
+    UNCHANGED; only the documentation moved. What is established:
+    - **It is not a latency term.** Reported `delay` was identical at guard 64/128/256 (512 frames,
+      10.66 ms, buffer 512). It sets a write DEADLINE, not a queue.
+    - **The old advice — "if skipping appears, turn `tx_guard` down first" — has no support** and is
+      removed. So is the hazard it was premised on: a client pinning its lead at 48 frames against a
+      64-frame guard was indistinguishable from one leading by 128, break counts tracking the client's
+      OWN underruns (ur 0/1/1/2/2/6 -> breaks 0/1/2/8/10/27) and not the lead.
+    - **With a NORMAL full-buffer client every guard from 16 to 96 is equally clean** — single-digit
+      breaks at a 32- AND a 64-frame period alike. There is no cliff and no measured basis for changing
+      the value in either direction.
+    **THE UNRESOLVED PART, AND THE METHOD LESSON.** A synthetic client pinning a SHORT lead showed guard
+    16 and 32 tearing catastrophically (38k-71k whole-buffer skip/repeat pairs per 25 s) against single
+    digits at 64, reproducibly 3/3 — and I raised the clamp floor to 64 on the strength of it. That was
+    **confounded**: those runs changed the client AND the period together, and the effect vanishes with
+    an ordinary client at either period. The floor change was reverted. The synthetic client is also
+    only viable at period 32 (at period 64 a 48-frame lead underruns 24999 times in 22 s), so its one
+    working configuration is precisely the one that misbehaved — most likely an artifact of that client.
+    **Lesson, the second time today: when a result comes from a rig you built for the occasion, vary ONE
+    thing against a stock client before believing it.** (The first time was reading a single 10-vs-2 run
+    as the lead hazard; repetitions killed it.)
   - **Also fixed in passing:** the capture drain clamped a servicer lag to the RING and copied the OLDEST
     frames of the burst; with a small buffer that is reachable in normal operation (the ~42 ms platform
     freeze advances the engine ~2000 frames), so it now skips forward and hands over the NEWEST.
@@ -644,10 +665,57 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     demand. Playing a WAV with `pw-play` and reading `hw_params` mid-stream does. And read `hw_params`
     with a *listening* check beside it: `state: RUNNING` with `hw_ptr` advancing was equally true during
     the 8Pre silence, so the telemetry alone cannot tell playing from silent.
-  - **STILL UNVERIFIED (the latency result does not cover these):** whether a small buffer skips (the
-    `tx_guard`-vs-app-lead risk above); the 60 s cadence-4 duplex regression; how low the buffer goes
-    before it breaks (128 = 2.7 ms was never tried, only 256 = 5.3 ms); and whether the PipeWire result
-    above holds on a wider model (it was taken on the 4-playback-channel 2Pre).
+  - **★ THE DIGITAL-LOOPBACK RAMP — the method that made all of the above measurable, REUSE IT (Sep 2 2026,
+    8Pre).** Playback glitches had only ever been assessed by listening. The router turns that into a
+    frame-exact count with no cables and no ears: **`PCM 01 Capture Enum` accepts a PLAYBACK channel as its
+    source**, so a playback channel loops straight back into capture inside the device, bit-exactly.
+    - Put the signal on **PCM 7** (on the 8Pre, PCM 7-10 feed no physical output and no mixer input, so a
+      full-scale test tone is completely SILENT — check this per model before trusting it).
+    - Signal is a **sample counter scaled by 256** (low 8 bits zero, so the device's 24-bit truncation is
+      lossless). Consecutive recovered samples must differ by exactly 256.
+    - The delta classifies the fault by itself: `skip B`/`repeat B` where B == the ALSA buffer is an
+      **xrun** (client starvation); a delta that is not a multiple of the step is **sample-level
+      corruption**; and `skip 2016` is literally the ~42 ms platform freeze read off the wire.
+    - Drive it with `aplay`/`arecord` on `hw:N,0` (one playback + one capture substream, so the two
+      processes coexist). **Do NOT try to use PipeWire as the playback leg** — activating its sink also
+      opens the capture substream, and `arecord` then gets EBUSY.
+    Harness (ramp generator, checker, runners) is disposable but the recipe above is not.
+  - **★ THE CEILING IS FULLY EFFECTIVE ON A 20-CHANNEL MODEL (Sep 2 2026, 8Pre, `max_buffer` swept with
+    PipeWire as the only client).** `buffer == max_buffer` at every value, period always buffer/4, and
+    **`clock.quantum` pinned at 1024 throughout** — so the 2Pre finding (PipeWire shrinks the ALSA node's
+    period, not its graph quantum) generalizes:
+    | `max_buffer` | 0 | 2048 | 1024 | 512 | 256 | 128 |
+    |---|---|---|---|---|---|---|
+    | period | 512 | 512 | 256 | 128 | 64 | 32 |
+    | buffer | 2048 | 2048 | 1024 | 512 | 256 | 128 |
+    | latency | 42.7 ms | 42.7 ms | 21.3 ms | 10.7 ms | 5.3 ms | 2.7 ms |
+    Note `max_buffer=0` gave **2048 here but 1024 earlier in the same session** — PipeWire's unconstrained
+    pick is NOT deterministic, which is an independent argument for setting the ceiling explicitly.
+  - **Servicer CPU is FLAT across the whole buffer range** (8Pre, 20 s samples of the `clarett-svc` kthread):
+    11.70% at buffer 4096 / 11.25% at 512 / 11.70% at 256 / **12.25% at 128**, while the fill's memcpy load
+    rises 14 -> 461 MB/s. So the known `clarett_tx_fill` inefficiency (copying `ring - guard` every tick
+    regardless of period) is real in bytes and **irrelevant in practice** — the servicer's cost is dominated
+    by MMIO polling over the Thunderbolt link. Do not argue against a small period on CPU grounds.
+  - **★★ RETEST LIST — RUN ALL OF THIS ON THE ELITEBOOK 640 G11 BEFORE TRUSTING ANY NUMBER ABOVE
+    (queued Sep 2 2026).** Every measurement in this section was taken on the ASRock X570 Creator, i.e.
+    THROUGH the ~42 ms periodic firmware stall ([[clarett-playback-skipping]]), with a NON-REALTIME test
+    client (`/tmp` is `nosuid`, so a `setcap cap_sys_nice` wrapper was inert — put the binary on a
+    filesystem without `nosuid` next time). Both make every small-buffer number pessimistic, and the
+    stall is why only a 4096-frame buffer was ever break-free here.
+    1. **The `max_buffer` sweep, repeated on the clean host** — 128/256/512/4096 by digital loopback.
+       This is what establishes the real usable floor, and therefore whether the 128 default is right.
+    2. **The `tx_guard` question** — does the synthetic short-lead client reproduce the 16/32 catastrophe
+       there? If it does NOT, it is this host or that client and the floor stays at one fragment; if it
+       DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
+    3. **A realtime client.** Everything here ran at normal priority; a DAW runs SCHED_FIFO. Re-run the
+       lead A/B and the buffer sweep with the client at RT before believing any break count.
+    4. **Does the 128 pin survive real use?** ceiling == floor means every app gets 2.7 ms with no way
+       up. Check a desktop session plus a DAW project on a host without the stall.
+    5. **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
+       impulse, count frames). NOTHING today measured plucked-string-to-speaker latency; the digital
+       loopback cannot see the converters. This is the number the amp-modeling target is about.
+    6. **The 60 s cadence-4 duplex regression** (never re-run) and **rates other than 48 kHz** (all of
+       today was 48k).
   - **★ THE 8PreX/8Pre "PIPEWIRE PLAYS NOTHING" EPISODE WAS DEVICE EXCLUSIVITY, NOT A DRIVER BUG
     (Aug 27 2026, resolved Aug 31 by the operator).** `snd_pcm_new(..., 0, 1, 1, ...)` gives **one
     playback and one capture substream** — no dmix, no sharing — so a DAW opened on `hw:N,0` **as an ALSA
