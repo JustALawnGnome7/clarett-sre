@@ -82,7 +82,96 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
 - **4 MSI vectors**; MSI-driven (`DisINTx+`). PCIe Gen1 x1. **Dummy serial AND dummy firmware-version
   words** — an 8Pre and an 8PreX report byte-identical `serial`/`fw app`/`fpga`, so none of the three
   identifies a unit or a model (Aug 21 2026; see the detection bullet under Driver limitations).
+  **A Red 8Line reports the same three constants too** (Sep 2 2026) — so this holds across product
+  *lines*, not just within the Clarett line. See the Red range section below.
 - FPGA-based Thunderbolt front-end (firmware has App + FPGA segments).
+
+## Red range — first hardware contact (Red 8Line, Sep 2 2026)
+
+**★★ THE RAW CAPTURES FROM THIS SESSION WERE LOST — the host crashed and both traces lived in
+`/tmp`.** Everything below is the surviving analysis; anything byte-level needs re-capturing. Write
+the next Red trace straight into `captures/`, not `/tmp`.
+
+- **`GET_7.1` geometry = `playback=64 capture=60`.** `snd_clarett` bound on the shared PCI id, read it,
+  and refused to register. That is the pair a `struct clarett_model` entry needs, and it closes the
+  "read the Red's GET_7.1 counts" TODO in [[focusrite-red-8line-incoming]].
+  **This was also the first real-world exercise of the unknown-geometry `-ENODEV` path**, previously
+  listed as untested under the model-detection bullet: it fired correctly and logged the raw pair to
+  key on, exactly as designed.
+- **★ REGISTER `0x000` DISTINGUISHES RED FROM CLARETT — the first host-visible register that does,
+  and it needs NO mailbox transaction.**
+  | | `0x000` |
+  |---|---|
+  | Clarett 2Pre / 4Pre / 8Pre / 8PreX — 13 captures, many sessions | `0x032003fd` |
+  | Red 8Line — two independent traces, taken under two *different* Windows drivers | `0x042003fc` |
+
+  `XOR = 0x07000001` → bits **[26:24]** go `3 → 4`, plus **bit 0**. The nibble reads like a
+  family/generation field, but that is inference from two data points.
+  **Limits, both important:** one Red unit only (may not hold for Red 4Pre/8Pre/16Line), and it does
+  **not** separate models *within* a family — all four Claretts share `0x032003fd` — so
+  `GET_7.1` geometry remains the model-level discriminator and `0x000` is at best a family gate.
+  This is a genuine correction to the standing "the pre-mailbox surface is identical across the line"
+  claim: identical across the *Clarett* line, yes; across *lines*, no.
+- **The identity constants extend to the Red line**: `0x8000 = 0x04061973` (fw app),
+  `0x8004 = 0x18101966` (fpga), serial `0x10`/`0x14` = `0x5678abcd`/`0x1234` →
+  `0x000012345678abcd`. Byte-identical to every Clarett, so nothing may key off them — see Hardware facts.
+- **The whole `0x8000`–`0x801c` fw-info header is byte-identical to the 2Pre's**, including
+  `0x8010 = 0x400`, `0x8014 = 0x410`, `0x8018 = 0x20`. **HYPOTHESIS, unproven:** that block is a
+  self-description of the transport — doorbell block base, response-DMA pointer register, DONE bit —
+  which is what a driver would read to adapt across models. It cannot be confirmed adaptive precisely
+  *because* it is constant on every unit seen; disproving it needs a device whose transport differs.
+- **The MIDI transport ports to the Red line**: `0x510`/`0x514` (`0x847`), `0x58c`, and `0x500`
+  reading its documented idle `0xff0000` all appear on the Red exactly as in the 2Pre decode.
+- **The vendor driver writes `0x414 = 2`** — it places the response DMA buffer above 4 GB
+  (`0x2_5b6ff000`), an independent confirmation that `0x414` is a real 64-bit address high word.
+- **Vendor init on the Red** (identical under both Windows drivers, apart from the DMA address):
+  `0x800005 {off=0, len=8}`, then `GET_7.1` bands **0, 1 AND 2** — ours reads band 0 only — then a
+  **4.99 s** idle poll of `0x100`/`0x300`/`0x200`/`0x400`/`0x500` (the four MSI cause blocks + MIDI
+  status). Whether the vendor needs all three bands to identify a unit is open, and is a candidate
+  explanation for band 0 alone yielding a pair no Clarett entry matches.
+- **Topology**: the Red 8Line's internal Thunderbolt controller is a **JHL6540 Alpine Ridge 4C**
+  (the Claretts carry a DSL2210 Port Ridge). `boltctl` names it `Focusrite Red16Line`, generation
+  Thunderbolt 3, 20 Gb/s = 2 lanes × 10 — consistent with the DROM-superset note in
+  [[focusrite-red-8line-incoming]]. Its IOMMU group holds the internal bridge `08:00.0` (bound to
+  `pcieport`) **plus** the endpoint; that does NOT block vfio (the group-viability test exempts PCI
+  bridges, `hdr_type != NORMAL`), but `reset_method` is **`bus` only, no FLR**. The host also cannot
+  assign an I/O window to `08:00.0` (`can't assign; no space`, ×4) — benign, the endpoint has no I/O BAR.
+
+### OPEN — Windows will not boot with the Red 8Line passed through
+
+A Clarett 8PreX in the **identical** slot, guest address and domain config boots fine, which is the
+control that makes this the device's problem and not the rig's.
+- **Ruled out by that A/B and by the trace:** `boltctl`/the TB tunnel (device enumerates, BAR assigned,
+  `vfio-pci ... reset done` ×4); the IOMMU group; the bus-reset-only path; guest addressing; the
+  VM/NVRAM/failed-boot counter; and `kvmvapic.bin: Failed to open file`, which is **present in
+  successful boots too** and is therefore not a cause.
+- **With the Clarett Thunderbolt driver installed:** the driver ran the 4 commands above, idled ~5 min,
+  then Windows saved config space, wrote Command ← 0, cleared BAR0 and rebooted → *Automatic Repair*
+  loop. Suspected cause: Windows binds the Clarett driver on the **shared PCI id `1cb5:0002`** and it
+  chokes on a device it does not know — the same collision `snd_clarett` hits, except ours refuses in
+  one line.
+- **After installing RedNet Control 2** (which uninstalled the Clarett Thunderbolt driver): the
+  device-level traffic is *identical*, but Windows gets further — the guest display driver loads
+  (mode `1280x800 → 1400x1050`) and it does not reboot — then hangs with **`vcpu.0.time` pinned at
+  ~100 %, `vcpu.1/2/3.time` at exactly 0 (the APs never started, so it never reached SMP init), and
+  disk I/O frozen**.
+- **★ PENDING CONTROL, RUN THIS FIRST:** boot the VM with **no `<hostdev>` at all**. RedNet Control 2
+  installs the Audinate/Dante stack and removed the Clarett driver on the way in — a far bigger change
+  to that guest than a driver swap — so until a device-free boot is shown to work, the hang **cannot**
+  be attributed to the 8Line. The 8PreX result predates that install and no longer covers it.
+- **Recommended rig change either way — hot-plug instead of boot-attach.** Keep the hostdev out of the
+  persistent domain and `virsh attach-device <dom> hostdev.xml --live` once Windows is up. A driver
+  stall then costs a device, not a boot loop; the capture is *cleaner* because driver init is isolated
+  at a known wall-clock instant; and detach/re-attach repeats an init capture with no reboot. Re-check
+  the source BDF after every physical replug — it was `09:00.0` this session and `1a:00.0` before.
+- **★ METHOD — "stuck at the TianoCore screen" was a red herring twice over, and the MMIO trace alone
+  could not tell.** `virsh screenshot` showed OVMF had *already* handed off (`BdsDxe: starting
+  Boot0004 "Windows Boot Manager"`); the logo persists only because Windows has not switched video
+  modes yet, so a Windows-stage hang looks exactly like a firmware-stage one. A later screenshot
+  showed *Automatic Repair*. **`virsh domstats <dom> --vcpu --block` is the discriminator for how far
+  a guest actually got** — AP `vcpu.N.time` of exactly 0 means Windows never reached SMP init, and
+  frozen `block.0.rd.reqs` with one vCPU at 100 % means spinning, not working. Both conclusions I drew
+  from the trace before screenshotting ("not the device", then "it booted") were wrong.
 
 ## Protocol — FCP (Focusrite Control Protocol)
 
@@ -1097,9 +1186,11 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `Clarett 8PreX: ... PCM 28/28ch, MIDI` / card `1 [C8PreX]`, one info line each. **The 8PreX result is
     the important one — its `{28,28}` pair was XML-derived and had never touched hardware, and it is
     correct.** Detection-only is now validated on 2Pre, 8Pre and 8PreX.
-    **Still untested:** the unknown-geometry `-ENODEV` path (every test used a model the table knows), a
-    genuinely never-armed unit, and the 4Pre — lowest risk of the four, since its pair came from a real
-    capture rather than the XML.
+    **The unknown-geometry `-ENODEV` path is now HARDWARE-CONFIRMED (Sep 2 2026, Red 8Line):** it
+    refused to register and logged `playback=64 capture=60` to key a new entry on, exactly as designed.
+    See the Red range section.
+    **Still untested:** a genuinely never-armed unit, and the 4Pre — lowest risk of the four, since its
+    pair came from a real capture rather than the XML.
   - **★ SERIAL AND FIRMWARE-VERSION WORDS ARE CONSTANTS, NOT PER-UNIT DATA (Aug 21 2026).** An 8Pre and an
     8PreX print byte-identical identity: `serial 000012345678abcd fw app 0x04061973 fpga 0x18101966` on
     both (the fw words read as dates — 04/06/1973, 18/10/1966). So the "dummy serial" in the hardware
