@@ -199,7 +199,8 @@ MODULE_PARM_DESC(error_probe,
 		 "meter-poll worker otherwise races the probe on the shared resp_buf and c->seq (its GET_METER "
 		 "responses land in the buffer and it bumps the seq), corrupting per-command attribution.");
 
-static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre;	/* defined below; chosen by clarett_detect_model() */
+static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre,
+				  red_8line;	/* defined below; chosen by clarett_detect_model() */
 
 /*
  * Model selection: THE DEVICE DECIDES, always. There is deliberately no override.
@@ -238,6 +239,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 {
 	static const struct clarett_model *const models[] = {
 		&clarett_2pre, &clarett_4pre, &clarett_8pre, &clarett_8prex,
+		&red_8line,
 	};
 	static const u8 band0;
 	const u8 *r = c->resp_buf;
@@ -2409,6 +2411,62 @@ static const struct clarett_model clarett_8pre = {
 	.n_stream_tx_ids = ARRAY_SIZE(clarett_8pre_stream_tx),
 	.stream_rx_ids = clarett_8pre_stream_rx,
 	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
+};
+
+/*
+ * Focusrite Red 8Line — the first non-Clarett member of the line, and the first model whose entry is
+ * deliberately CONTROL-PLANE EMPTY. It shares PCI id 1cb5:0002 with every Clarett, so the id_table
+ * already matches it and this entry exists purely so clarett_detect_model() stops refusing it.
+ *
+ * Geometry is HARDWARE-MEASURED: GET_7.1 answered playback=64 capture=60 on a real unit. The [XML]
+ * independently predicts exactly that — 64 <playback> elements, and 58 <record> + 2 <loopback> = 60
+ * capture channels — which is the strongest confirmation available for a pair read out by DMA.
+ *
+ * WHAT IS DELIBERATELY LEFT NULL/ZERO, AND WHY. The Red's control plane is NOT a wider Clarett:
+ *  - out_gains: the Red's output gains are 16-bit values on a 2-byte stride (gain @24, 26, 28, ...,
+ *    bits="16", min-gain -112.0 dB), where every Clarett uses a 7-bit 1 dB/step attenuation byte.
+ *    clarett_hw_gain_follow() writes a BYTE at out_gains[].offset, so populating this table from the
+ *    Red's offsets would write half a gain field. NULL correctly disables that mirror outright.
+ *  - the preamp/naming fields (n_analogue, analogue, in_prefix, mode_label, has_spdif_source): dead
+ *    since the in-kernel control layer was removed, and the Red's preamps carry phantom, phase,
+ *    stereo-link and separate mic/line/inst gains that this struct cannot describe anyway.
+ *  - meter_sources: the Red's front-panel meter bridge has never been observed.
+ *  - stream_tx_ids/rx_ids: the per-channel CONFIG_PUSH burst is uncaptured, as on the 8PreX. Zero
+ *    skips it.
+ * The control plane therefore reaches userspace only through the FCP hwdep, and there is no
+ * fcp-server map pair for this slug yet — see fcp-server-data/README.md.
+ *
+ * max_rate is 0 (44.1/48 kHz only) ON PURPOSE: not one byte of this model's DATA PLANE has been
+ * exercised. Raise it only after a hardware pitch-check, per the field comment on max_rate.
+ */
+static const struct clarett_clock_src red_8line_clock_srcs[] = {
+	{ "Internal",  CLARETT_CLOCK_INTERNAL },
+	{ "Wordclock", CLARETT_CLOCK_WORDCLOCK },
+	{ "ADAT 1",    CLARETT_CLOCK_ADAT },
+	{ "ADAT 2",    CLARETT_CLOCK_ADAT2 },
+	{ "S/PDIF",    CLARETT_CLOCK_SPDIF },
+	{ "Dante",     CLARETT_CLOCK_DANTE },
+	{ "Loop Sync", CLARETT_CLOCK_LOOPSYNC },
+};
+
+static const struct clarett_model red_8line = {
+	.name = "Red 8Line",
+	.slug = "red-8line",
+	.capture_channels = 60,			/* HW-MEASURED via GET_7.1; [XML] 58 record + 2 loopback agrees */
+	.playback_channels = 64,		/* HW-MEASURED via GET_7.1; [XML] 64 <playback> agrees */
+	/*
+	 * S/MUX, [XML] <record-outputs> pin-m/pin-h, same cascade rule as the Clarett models ("0x0" = gone
+	 * at that speed AND above). The Red differs in KIND, though: rather than simply losing channels it
+	 * RE-PINS survivors (a slot carrying ADAT 5 at single speed carries ADAT 9 at double and Dante 1 at
+	 * quad), and only the tail actually goes away. Both dead sets are still contiguous tails, which is
+	 * what these two counts require. UNTESTED — and unreachable while max_rate is 0.
+	 */
+	.rx_live_mid = 52,			/* [XML] Dante 25-32 (pin-m=0x0) gone at double speed */
+	.rx_live_high = 32,			/* [XML] + Dante 5-24 (pin-h=0x0) gone at quad speed */
+	.max_rate = 0,				/* single speed only until the data plane is exercised */
+	.clock_srcs = red_8line_clock_srcs,
+	.n_clock_srcs = ARRAY_SIZE(red_8line_clock_srcs),
+	.stream_frag = 0,
 };
 
 static const struct pci_device_id clarett_ids[] = {

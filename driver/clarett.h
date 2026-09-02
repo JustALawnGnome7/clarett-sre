@@ -267,6 +267,14 @@ struct snd_rawmidi_substream;
 #define CLARETT_CLOCK_ADAT2      1	/* 8PreX only, UNVERIFIED */
 #define CLARETT_CLOCK_WORDCLOCK  2	/* 8PreX only, untested (needs a BNC wordclock source) */
 #define CLARETT_CLOCK_SPDIF      3	/* all models; hardware-verified on the 2Pre and 8Pre */
+/*
+ * Red-range only, both [XML]-derived and UNVERIFIED. Note value 4 collides with the loose
+ * "any external / optical" behaviour measured on a 2Pre at that value (see the table above): these
+ * encodings are per-model, so the Red's 4 meaning Dante neither confirms nor contradicts that
+ * observation. Nothing selects them by default — the Red's clock_srcs list is what exposes them.
+ */
+#define CLARETT_CLOCK_DANTE      4	/* Red only, UNVERIFIED */
+#define CLARETT_CLOCK_LOOPSYNC   5	/* Red only, UNVERIFIED */
 #define CLARETT_CLOCK_INTERNAL   24
 #define CLARETT_DEFAULT_RATE     48000
 
