@@ -103,6 +103,15 @@ for key, cfg in amap["global-controls"].items():
     access = "read" if cfg.get("access") == "readonly" else "read write"
     if cfg["type"] == "bool":
         ctl(iface, cfg["name"], "false", [f"access '{access}'", "type BOOLEAN", "count 1"])
+    elif cfg["type"] == "enum":
+        # Same shape as the per-channel enums above. Emitting these as INTEGER instead is not
+        # merely cosmetic: alsa-scarlett-gui picks its "Digital I/O Mode" element by NAME prefix
+        # ("S/PDIF Source" is the last fallback) and then reads an item name off it, so an
+        # integer control under an enum's name dereferences an absent item-name table.
+        vals = [v["name"] if isinstance(v, dict) else v for v in cfg["values"]]
+        ctl(iface, cfg["name"], q(vals[0]),
+            [f"access '{access}'", "type ENUMERATED", "count 1"] +
+            [f"item.{j} {q(v)}" for j, v in enumerate(vals)])
     else:
         ctl(iface, cfg["name"], 1,
             [f"access '{access}'", "type INTEGER", "count 1", "range '0 - 65535'"])
