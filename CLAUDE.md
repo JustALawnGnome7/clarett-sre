@@ -901,8 +901,35 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     client (`/tmp` is `nosuid`, so a `setcap cap_sys_nice` wrapper was inert — put the binary on a
     filesystem without `nosuid` next time). Both make every small-buffer number pessimistic, and the
     stall is why only a 4096-frame buffer was ever break-free here.
-    1. **The `max_buffer` sweep, repeated on the clean host** — 128/256/512/4096 by digital loopback.
-       This is what establishes the real usable floor, and therefore whether the 128 default is right.
+    1. ~~**The `max_buffer` sweep, repeated on the clean host**~~ **DONE Sep 4 2026 — 128 IS RIGHT, and
+       item 3's realtime client was covered in the same run.** Red 8Line, 60 channels, 48 kHz, client at
+       SCHED_FIFO 50, six 60 s legs on the EliteBook 640 G11:
+       | max_buffer | 128 | 256 | 512 | 1024 | 2048 | 4096 |
+       |---|---|---|---|---|---|---|
+       | period | 32 | 64 | 128 | 256 | 512 | 1024 |
+       | `gapmax` | 874 us | 1551 us | 2886 us | 5566 us | 10872 us | 21553 us |
+       | **excess over nominal** | **207** | **218** | **219** | **233** | **205** | **220 us** |
+       | periods delivered | 90000 | 45000 | 22500 | 11250 | 5625 | 2813 |
+       **Every leg delivered its EXACT expected period count, with `client_ov`/`late`/`overrun`/`badreads`
+       all zero throughout, `readmax` 43-97 us.** So 128 frames is clean at the widest geometry in the
+       range, on the widest device, with nothing dropped.
+       **★ THE NUMBER THAT MATTERS: worst-case servicer jitter is 205-233 us and is INDEPENDENT of the
+       period** — it does not scale, so it is pure scheduling overhead, not a stall. At buffer 128
+       (2667 us) that is 9 % of the buffer, an **11x margin**. Nothing here is marginal.
+       **★★ `gapmax` IS NOT A STALL METRIC — it tracks the NOMINAL PERIOD, and misreading it cost two
+       wrong conclusions in one session.** `gapmax` ~= period/48000 + ~220 us. A 21.5 ms `gapmax` at
+       period 1024 is *health*; the same number at period 32 would be a catastrophe. **Always divide by
+       the nominal period before interpreting it**, and judge a run by `client_ov`/`late`/`overrun`/
+       `badreads` instead. (Compare the ASRock, where `readmax` reaches 42047 us and `gapmax` runs
+       45-60 ms against a 10.7 ms nominal — that is what a real stall looks like.)
+       **Method trap that voided the first attempt:** running `sudo arecord ... /dev/null` **clobbers
+       `/dev/null`** (root recreates it as a regular file), after which every `>/dev/null` in the script
+       silently fails — so the `max_buffer` writes never happened and all six legs ran at 4096 while
+       *appearing* to sweep. Have `arecord` write to stdout (`-`) and let the unprivileged shell do the
+       redirect; read `buffer_size`/`period_size` back from `hw_params` MID-run and print them, so
+       identical legs are visible rather than inferred.
+       Still not covered by this run: playback/duplex (the floor is `2 * CLARETT_TX_GUARD_FRAMES`, so
+       TX is what sets it), rates above 48 kHz, and a NON-realtime client.
     2. **The `tx_guard` question** — does the synthetic short-lead client reproduce the 16/32 catastrophe
        there? If it does NOT, it is this host or that client and the floor stays at one fragment; if it
        DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
