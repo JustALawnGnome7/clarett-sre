@@ -160,8 +160,13 @@ into `captures/`, never `/tmp`.
     recorded for this board in [[clarett-playback-skipping]]**, which is an open discrepancy worth
     re-characterising: same fault, far higher rate, cause of the change unknown.
     **Why 2048 was not enough is arithmetic**: 2048 frames = 42.67 ms of runway against a 42.6 ms median
-    freeze and a 52.7 ms worst case — exactly marginal. **`max_buffer=4096` (85.3 ms, the full ring) is
-    the value predicted to ride through it on this host; untested.**
+    freeze and a 52.7 ms worst case — exactly marginal. **`max_buffer=4096` (85.3 ms, the full ring)
+    CLEARS IT COMPLETELY — 30 s at 60 channels with ZERO client overruns (confirmed).** The fault is not
+    fixed, it is absorbed, and the distinction is visible in the telemetry: that same clean run still
+    logged `gapmax` 46-60 ms (worst 60.3 ms, i.e. WORSE than the runs that failed) and the device still
+    raised 3 unacked periods, while `readmax` stayed at 48-60 us — the servicer was stalled between
+    polls rather than caught inside a `readl`. **So on this board a Red needs `max_buffer=4096`; 2048
+    would have failed against the measured 60 ms tail anyway.**
     **Method note (my error, twice over):** I inferred "not the SMI" from the overrun *rate* being too
     high for the documented cadence, and "narrower streams are clean" from 2-second runs — far too short
     to sample a fault this intermittent. The driver already publishes `readmax`/`gapmax` telemetry that
