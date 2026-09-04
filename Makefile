@@ -25,8 +25,11 @@ FCP_DATADIR := $(DESTDIR)$(PREFIX)/share/fcp-server
 WP_CONFDIR  := $(DESTDIR)$(PREFIX)/share/wireplumber/wireplumber.conf.d
 
 # Both halves of each model's map pair; fcp-server loads both from DATADIR.
-CLARETT_MAPS := $(wildcard fcp-server-data/fcp-devmap-clarett-*.json) \
-                $(wildcard fcp-server-data/fcp-alsa-map-clarett-*.json)
+# Matches every model the generator emits, not just the Clarett line -- the Red 8Line
+# has a pair too, and a clarett-* glob left it out of `make install` while looking like
+# it had worked.
+FCP_MAPS := $(wildcard fcp-server-data/fcp-devmap-*.json) \
+            $(wildcard fcp-server-data/fcp-alsa-map-*.json)
 WP_DROPIN    := wireplumber/51-clarett-naming.conf
 # The drop-in is generated from the driver's clarett_model table, so its per-model rules
 # cannot drift from the card names the driver registers. Needs driver/ present.
@@ -53,14 +56,14 @@ install: install-maps install-wireplumber
 
 install-maps:
 	install -d $(FCP_DATADIR)
-	install -m 644 $(CLARETT_MAPS) $(FCP_DATADIR)/
+	install -m 644 $(FCP_MAPS) $(FCP_DATADIR)/
 
 install-wireplumber:
 	install -D -m 644 $(WP_DROPIN) $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
 	@echo "Restart WirePlumber to apply: systemctl --user restart wireplumber"
 
 uninstall:
-	rm -f $(addprefix $(FCP_DATADIR)/,$(notdir $(CLARETT_MAPS)))
+	rm -f $(addprefix $(FCP_DATADIR)/,$(notdir $(FCP_MAPS)))
 	rm -f $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
 
 # Deliberately not a prerequisite of install-wireplumber: a package or a data-only

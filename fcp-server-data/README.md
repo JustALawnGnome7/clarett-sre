@@ -121,7 +121,28 @@ own minimum), so unlike the Clarett there is nothing to invert.
   but `MIX_INFO` dimensions have not been read from a Red.
 - **`line-input-ref`** (offset 272, one bit per input, activate 21) — audible effect not established.
 
-Untested on hardware: the pair has not yet been loaded by fcp-server against a Red.
+**HARDWARE-CONFIRMED (Sep 4 2026, ASRock X570 Creator).** fcp-server loads the pair and registers
+**1252 controls** on a Red 8Line -- the first non-Clarett device this stack has ever driven -- and a
+control write **manifests physically**: `Line In 1 Phantom Power Capture Switch` set from `amixer`
+lit phantom on input 1 of the unit's front panel (user-confirmed), the Red's equivalent of the 2Pre
+LED/relay confirmation. Air and high-pass wrote cleanly on the same input with input 2 unmoved, so
+the per-input indexing is right too. Also confirmed live rather than inferred: output volumes read
+back as real **signed** dB (`24..34 = 0`, `36/38 = -110`, `40..50 = -112`), and the router reads the
+factory patch back coherently in both directions (Monitor 1/2 <- PCM 1/2, headphones <- PCM 9/10,
+line outs 7-14 <- PCM 1-8). `Sync Status` reads Locked; the driver's own `Clock Source` offers all
+seven Red sources.
+
+**Two traps this run exposed, both now fixed and neither in the map's content:**
+- The devmap **must** carry a top-level `enums` block. `init_global_controls()` hard-fails (-1)
+  without one, so fcp-server exited 1 with `Cannot find enums in device map` before creating a
+  single control. The requirement was already documented on the Clarett path and simply had not
+  been carried into `build_red_8line()`.
+- The repo Makefile's `install-maps` globbed `fcp-devmap-clarett-*.json`, so `make install`
+  **silently skipped the Red pair while reporting success**. The glob now matches every model the
+  generator emits.
+
+`No meters found` is still logged at error level on every start. It is expected (no `peak-index`)
+and non-fatal -- `add_meter_control()`'s return is ignored by its caller.
 
 ## What the maps deliberately don't cover
 

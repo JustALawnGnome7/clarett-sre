@@ -133,6 +133,41 @@ into `captures/`, never `/tmp`.
   within each group of four: `0x403→0x600`, `0x402→0x601`, …). **This clears blocker (1) on the Red map
   pair** — see `fcp-server-data/README.md`; the sole remaining blocker is authoring a Red control model
   in `gen_fcp_maps.py` (16-bit gains, Red offsets, richer preamps), which needs no new measurement.
+- **★★★ THE RED'S CONTROL PLANE WORKS END TO END — fcp-server DRIVES IT AND A WRITE MANIFESTS
+  PHYSICALLY (Sep 4 2026, ASRock X570 Creator).** `fcp-server@4` loads the map pair and registers
+  **1252 controls**; `amixer -c 4 cset name='Line In 1 Phantom Power Capture Switch' 1` **lit phantom
+  power on input 1 of the unit's front panel** (user-confirmed, then reverted). That is the Red's
+  equivalent of the 2Pre LED/relay confirmation and it closes the loop the whole map-authoring
+  exercise was for. Air and high-pass wrote cleanly on the same input with input 2 unmoved, so the
+  per-input indexing is right as well.
+  - **Both mandatory capability gates PASS on a non-Clarett device** — no "does not support required
+    INIT/DATA category". The flash-persisted session really is enough on the Red too.
+  - **★ THE MIXER MATRIX CAME UP UNAIDED — 32 mixes x 32 inputs, 1024 gain controls.** fcp-server
+    reads `MIX_INFO` from the device and builds the grid; the map contributes only
+    `mixer-input-index` on the Mixer Input destinations. This **retires the "MIX_INFO dimensions have
+    not been read from a Red" limitation** — they never had to be, and now they are known anyway.
+  - **Output volumes confirmed live as SIGNED dB**, not inferred from the one vendor write:
+    `offset 24..34 = 0`, `36/38 = -110`, `40..50 = -112`.
+  - **The router reads the factory patch back coherently in both directions** — Monitor 1/2 <- PCM 1/2,
+    headphones <- PCM 9/10, line outs 7-14 <- PCM 1-8, 155 selectable sources per destination. Pin ->
+    name resolution is right as a source *and* as a destination, which is the thing a direction-scoped
+    pin table most easily gets wrong.
+  - `Sync Status` = Locked; the driver's own `Clock Source` offers all seven Red sources.
+  - **TWO TRAPS, both fixed, neither in the map's content.** (1) **The devmap MUST carry a top-level
+    `enums` block** — `init_global_controls()` hard-fails (-1) without one, so the server exited 1 on
+    `Cannot find enums in device map` before creating a single control. The requirement was already
+    documented on the Clarett path in `gen_fcp_maps.py` and simply had not been carried into
+    `build_red_8line()`. (2) **The repo Makefile's `install-maps` globbed `fcp-devmap-clarett-*.json`,
+    so `make install` SILENTLY SKIPPED the Red pair while reporting success** — which is why its copy
+    in `/usr/local/share/fcp-server` had to be made by hand. Now globs every model the generator emits.
+  - **Upstream limitation, cosmetic and not map-fixable:** `fcp-support/server/mix.c:287` names mixes
+    `'A' + i`, so on a 32-mix device the last six render as `Mix [`, `Mix \`, `Mix ]`, `Mix ^`,
+    `Mix _`, ``Mix ` ``. No Scarlett or Clarett has more than 26 mixes, so the Red is the first device
+    to run off the end of the alphabet.
+  - `No meters found` is still logged **at error level** on every start. Expected (no `peak-index`
+    anywhere) and **non-fatal** — `add_meter_control()`'s return is ignored by its caller. Measuring
+    the Red's meter slots with `tools/fcp_meter_watch.c` remains the next map job, alongside the
+    preamp gain ranges.
 - **★★★ THE RED 8LINE STREAMS — FIRST AUDIO EVER OFF A NON-CLARETT DEVICE, AND IT NEEDED NO CODE CHANGE
   (Sep 4 2026, ASRock X570 Creator).** `arecord -D hw:5,0 -c 60 -f S32_LE -r 48000` runs and exits 0.
   - **Clock is correct: 47997.4 Hz measured against 48000 nominal, −0.01 %** (`hw_ptr` delta over a

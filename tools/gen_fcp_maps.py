@@ -1141,8 +1141,12 @@ def build_red_8line():
         "panel can move -- and cleared on the preamp switches.",
         "line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
         "applies to all eight inputs but its audible effect has not been established.",
-        "The mixer matrix is not exposed. Mixer Input destinations carry mixer-input-index so the "
-        "routing side is complete, but MIX_INFO dimensions have not been read from a Red.",
+        "The mixer matrix needs nothing from this map and comes up on its own: fcp-server reads "
+        "MIX_INFO from the device and builds the gain grid, and a Red answers 32 mixes x 32 inputs. "
+        "All this map supplies is mixer-input-index on the Mixer Input destinations, which is what "
+        "binds each grid column to a router pin. Note fcp-server names mixes 'A' + i, so on a "
+        "32-mix device the last six come out as [ \\ ] ^ _ ` rather than letters -- cosmetic, "
+        "upstream, and not something a map can correct.",
         "Sources and destinations are the factory-default patch recovered from the vendor bring-up, "
         "widened to the full PCM and Mix ranges. Pins outside it may well be routable; verify on the "
         "bench before adding any (pick a destination, try the pin, confirm with GET_MUX).",
@@ -1153,6 +1157,15 @@ def build_red_8line():
         ds["sources"] = dev_sources
         ds["destinations"] = dev_dests
     devmap["device-specification"] = ds
+    # REQUIRED, not decoration -- and the Red proved it: fcp-server's init_global_controls()
+    # hard-fails (-1) if the devmap has no "enums" at all, so the server exited 1 on load with
+    # "Cannot find enums in device map" before a single control appeared. Only eMSG_FLASH_CTRL is
+    # read from it: it supplies the notify-device activate for `save: true` controls == DATA_CMD
+    # persist (5). Same block as the Clarett builder emits.
+    devmap["enums"] = OD([
+        ("eDEV_FCP_USER_MESSAGE_TYPE",
+         OD(enumerators=OD([("eMSG_FLASH_CTRL", 5)]))),
+    ])
     with open(f"{OUTDIR}/fcp-devmap-{slug}.json", "w") as f:
         json.dump(devmap, f, indent=2); f.write("\n")
 
