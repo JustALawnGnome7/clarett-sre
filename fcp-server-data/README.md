@@ -106,7 +106,17 @@ the generator cannot honestly produce one yet:
   entries would write half a gain field into live config space.
 - **The Red's preamps are a richer model than this generator describes** — phantom,
   phase invert, stereo link and separate mic/line/inst gains, none of which the
-  air+mode control set covers.
+  air+mode control set covers. **The OFFSETS are no longer a risk, though (Sep 4 2026):**
+  every per-input control offset the [XML] predicts is confirmed by the vendor's own
+  `SET_DATA` writes in `captures/red_8line.log` — air `170+i`, mode `162+i`, phantom
+  `154+i`, hpf `178+i`, phase `186+i`, stereo-link `194+i` and hardware-control-enable
+  `90+i` all matched at every index, with output gain, mute and dim matched wherever that
+  session happened to touch them. **The 16-bit gain encoding is confirmed too**: `len=0x2`
+  carrying `90 ff` = `0xff90` = **-112**, exactly the [XML]'s `min-gain="-112.0"` dB, so it
+  is a signed 16-bit dB value rather than a Clarett attenuation byte. The remaining work is
+  authoring a richer control model, NOT guessing at addresses — the specific hazard this
+  section was written to prevent ("writing half a gain field into live config space") is
+  retired.
 - ~~**There is no band-0 router table to build from.**~~ **RESOLVED (Sep 4 2026)** — a
   vendor bring-up capture of a Red control session now exists (`captures/red_8line.log`),
   de-blobbed to `tools/arm-tables/arm_red_8line.h` the way every Clarett table was
