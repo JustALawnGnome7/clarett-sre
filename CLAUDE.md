@@ -928,8 +928,26 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
        *appearing* to sweep. Have `arecord` write to stdout (`-`) and let the unprivileged shell do the
        redirect; read `buffer_size`/`period_size` back from `hw_params` MID-run and print them, so
        identical legs are visible rather than inferred.
-       Still not covered by this run: playback/duplex (the floor is `2 * CLARETT_TX_GUARD_FRAMES`, so
-       TX is what sets it), rates above 48 kHz, and a NON-realtime client.
+       **★★ DUPLEX SWEEP FOLLOWED, AND IT CLOSES THE QUESTION — `max_buffer=128` IS CORRECT.** The
+       capture sweep tested the wrong direction: the floor is `2 * CLARETT_TX_GUARD_FRAMES`, so PLAYBACK
+       defines it. Red 8Line, **64ch playback + 60ch capture simultaneously**, both clients SCHED_FIFO,
+       45 s legs:
+       | max_buffer | 128 | 256 | 512 | 1024 |
+       |---|---|---|---|---|
+       | period | 32 | 64 | 128 | 256 |
+       | excess over nominal | 304 us | 218 us | 210 us | 215 us |
+       | margin (buffer/excess) | **8.8x** | 24.5x | 50.7x | 99.4x |
+       | periods delivered | 67500 | 33751 | 16875 | 8438 |
+       **Exact expected period counts at every size, with capture xruns, playback xruns, `late` and
+       `overrun` ALL ZERO throughout.** Excess is ~210-215 us as in the capture sweep, rising to 304 us
+       only at the tightest setting (where `readmax` also rose, 253 us against 42-75 us elsewhere) — two
+       realtime clients plus `clarett_tx_fill` at the smallest period, and still an 8.8x margin.
+       **Three further firsts in the same run:** the Red's **PLAYBACK works** (first playback ever on a
+       non-Clarett device, and the first non-Clarett duplex); its TX fragment at 64 channels is
+       `64*4*16` = `0x1000`, page-exact, so the 8PreX's fragment-fold hazard does not arise; and the
+       **duplex arm/close races did not recur** — simultaneous start and stop at four buffer sizes on a
+       new model left no orphaned `clarett-svc` kthread and no `WARN_ON` splat.
+       Still not covered: rates above 48 kHz, and a NON-realtime client.
     2. **The `tx_guard` question** — does the synthetic short-lead client reproduce the 16/32 catastrophe
        there? If it does NOT, it is this host or that client and the floor stays at one fragment; if it
        DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
