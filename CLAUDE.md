@@ -138,8 +138,13 @@ into `captures/`, never `/tmp`.
   - **`0x0204 = 0x40` (64) and `0x0304 = 0x3c` (60) are the per-direction CHANNEL COUNTS** — an
     independent confirmation of `GET_7.1`'s `playback=64 capture=60` from a register that needs no
     mailbox transaction at all.
-  - **`0x0208 = 0x400` = 64x16 and `0x0308 = 0x3c0` = 60x16** — channels x 16 frames, i.e. the fragment
-    in samples, consistent with the Clarett `CLARETT_CTR_FRAMES=16` geometry.
+  - **`0x0208 = 0x400` and `0x0308 = 0x3c0` are the SIZE/IRQ-period registers, and OUR EXISTING FORMULA
+    PREDICTS BOTH EXACTLY.** `clarett_period_bytes(ch) = ch * 4 * 4` (channels x 4 bytes x 4 frames)
+    gives 64 -> `0x400` and 60 -> `0x3c0`. That formula was derived entirely from Clarett models
+    (8PreX 28ch -> `0x1c0`, 2Pre 4ch -> `0x40` / 14ch -> `0xe0`) and it lands on the Red's vendor values
+    with no adjustment — the strongest evidence yet that the data-plane engine is line-wide, not
+    per-model. (Read `64 x 16` at first: arithmetically the same number, but it is the IRQ period in
+    bytes, NOT the descriptor fragment — the fragment is `ch * 4 * 16` = `0x1000`/`0xf00`.)
   - **`0x0214 = 0x0314 = 0x0414 = 2`** — descriptor rings *and* the response buffer all placed above
     4 GB. Third independent confirmation these are real 64-bit address high words.
   - Written 14x each at arm: `0x0108=0x10`, `0x010c=0x1e70700`, `0x0110=7` then `0`, `0x020c=1`,
