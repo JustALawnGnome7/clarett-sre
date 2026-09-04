@@ -88,9 +88,10 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
 
 ## Red range — first hardware contact (Red 8Line, Sep 2 2026)
 
-**★★ THE RAW CAPTURES FROM THIS SESSION WERE LOST — the host crashed and both traces lived in
-`/tmp`.** Everything below is the surviving analysis; anything byte-level needs re-capturing. Write
-the next Red trace straight into `captures/`, not `/tmp`.
+**The Sep 2 raw captures were lost to a host crash (both lived in `/tmp`) — but a full replacement
+exists: `captures/red_8line.log` (Sep 4 2026, 44 MB, 516k lines, 16074 FCP transactions, 5526 of them
+non-meter), a complete vendor session covering bring-up AND streaming.** Write every Red trace straight
+into `captures/`, never `/tmp`.
 
 - **`GET_7.1` geometry = `playback=64 capture=60`.** `snd_clarett` bound on the shared PCI id, read it,
   and refused to register. That is the pair a `struct clarett_model` entry needs, and it closes the
@@ -124,6 +125,29 @@ the next Red trace straight into `captures/`, not `/tmp`.
   reading its documented idle `0xff0000` all appear on the Red exactly as in the 2Pre decode.
 - **The vendor driver writes `0x414 = 2`** — it places the response DMA buffer above 4 GB
   (`0x2_5b6ff000`), an independent confirmation that `0x414` is a real 64-bit address high word.
+- **★★ THE BRING-UP IS DE-BLOBBED — `tools/arm-tables/arm_red_8line.h` (Sep 4 2026).** From
+  `captures/red_8line.log` via `fcp_decode.py --emit-init` → `--emit-deblob`, byte-faithful round-trip
+  (`--deblob-check` PASS, 391 steps: 377 typed / 14 raw). Three `SET_MUX` bands of **157/141/99**
+  entries against the 8PreX's 103/87/79; band 0 gives **156 routed pairs, 156 distinct destinations,
+  109 distinct sources**, with analogue in `0x400-0x407` → capture `0x600-0x607` (note the reversal
+  within each group of four: `0x403→0x600`, `0x402→0x601`, …). **This clears blocker (1) on the Red map
+  pair** — see `fcp-server-data/README.md`; the sole remaining blocker is authoring a Red control model
+  in `gen_fcp_maps.py` (16-bit gains, Red offsets, richer preamps), which needs no new measurement.
+- **★★ THE VENDOR STREAMED, so the capture carries the Red's DATA PLANE too — unplanned and the most
+  valuable part.** From `tools/bar_profile.py`:
+  - **`0x0204 = 0x40` (64) and `0x0304 = 0x3c` (60) are the per-direction CHANNEL COUNTS** — an
+    independent confirmation of `GET_7.1`'s `playback=64 capture=60` from a register that needs no
+    mailbox transaction at all.
+  - **`0x0208 = 0x400` = 64x16 and `0x0308 = 0x3c0` = 60x16** — channels x 16 frames, i.e. the fragment
+    in samples, consistent with the Clarett `CLARETT_CTR_FRAMES=16` geometry.
+  - **`0x0214 = 0x0314 = 0x0414 = 2`** — descriptor rings *and* the response buffer all placed above
+    4 GB. Third independent confirmation these are real 64-bit address high words.
+  - Written 14x each at arm: `0x0108=0x10`, `0x010c=0x1e70700`, `0x0110=7` then `0`, `0x020c=1`,
+    `0x0210`/`0x0310` = the two ring bases. `0x0300` cause values `0x8000000c`/`0x80000018`/`0x80000024`
+    — the counter advancing in steps of `0xc`.
+  - `0x0218`/`0x021c` and `0x0318`/`0x031c` are the live ring pointers (read 505x each).
+- **`0x000 = 0x042003fc` confirmed on a THIRD independent trace** (29 reads, all identical), under a
+  third Windows driver stack. The family register holds; see the `0x000` table above.
 - **Vendor init on the Red** (identical under both Windows drivers, apart from the DMA address):
   `0x800005 {off=0, len=8}`, then `GET_7.1` bands **0, 1 AND 2** — ours reads band 0 only — then a
   **4.99 s** idle poll of `0x100`/`0x300`/`0x200`/`0x400`/`0x500` (the four MSI cause blocks + MIDI
@@ -137,7 +161,7 @@ the next Red trace straight into `captures/`, not `/tmp`.
   bridges, `hdr_type != NORMAL`), but `reset_method` is **`bus` only, no FLR**. The host also cannot
   assign an I/O window to `08:00.0` (`can't assign; no space`, ×4) — benign, the endpoint has no I/O BAR.
 
-### OPEN — Windows will not boot with the Red 8Line passed through
+### RESOLVED by hot-plug — Windows will not BOOT with the Red 8Line attached, but takes it fine at runtime (Sep 4 2026)
 
 A Clarett 8PreX in the **identical** slot, guest address and domain config boots fine, which is the
 control that makes this the device's problem and not the rig's.
@@ -155,23 +179,60 @@ control that makes this the device's problem and not the rig's.
   (mode `1280x800 → 1400x1050`) and it does not reboot — then hangs with **`vcpu.0.time` pinned at
   ~100 %, `vcpu.1/2/3.time` at exactly 0 (the APs never started, so it never reached SMP init), and
   disk I/O frozen**.
-- **★ PENDING CONTROL, RUN THIS FIRST:** boot the VM with **no `<hostdev>` at all**. RedNet Control 2
-  installs the Audinate/Dante stack and removed the Clarett driver on the way in — a far bigger change
-  to that guest than a driver swap — so until a device-free boot is shown to work, the hang **cannot**
-  be attributed to the 8Line. The 8PreX result predates that install and no longer covers it.
-- **Recommended rig change either way — hot-plug instead of boot-attach.** Keep the hostdev out of the
-  persistent domain and `virsh attach-device <dom> hostdev.xml --live` once Windows is up. A driver
-  stall then costs a device, not a boot loop; the capture is *cleaner* because driver init is isolated
-  at a known wall-clock instant; and detach/re-attach repeats an init capture with no reboot. Re-check
-  the source BDF after every physical replug — it was `09:00.0` this session and `1a:00.0` before.
+- **★ THE PENDING CONTROL RAN AND PASSED (Sep 4 2026):** the VM boots normally with **no `<hostdev>`
+  at all**, so the RedNet Control 2 / Dante install is exonerated and the boot failure really is the
+  8Line's. **And the workaround is total** — hot-plugged after Windows is up, the device attaches,
+  Windows binds a driver and runs a full control + streaming session with no instability. Only
+  *boot-attach* fails.
+- **★★ THE HOT-PLUG RIG, AS BUILT AND PROVEN (Sep 4 2026) — this is how the Red capture was taken.**
+  Keep the hostdev out of the persistent domain and `virsh attach-device <dom> hostdev.xml --live` once
+  Windows is up. A driver stall then costs a device, not a boot loop; the capture is *cleaner* because
+  driver init is isolated at a known wall-clock instant; and detach/re-attach repeats an init capture
+  with no reboot. Re-check the source BDF after every physical replug — `09:00.0` and `1a:00.0` have
+  both been the Red, and on a two-unit host **both endpoints are `1cb5:0002` bound to `snd_clarett`**,
+  so identify by `readlink -f /sys/bus/pci/devices/<bdf>` / the registered card name, never by order.
+  ```xml
+  <hostdev mode='subsystem' type='pci' managed='yes'>
+    <source><address domain='0x0000' bus='0x1a' slot='0x00' function='0x0'/></source>
+    <alias name='ua-clarett'/>
+  </hostdev>
+  ```
+  `managed='yes'` does the `snd_clarett` → `vfio-pci` swap and rebinds on detach.
+- **★★ MMIO TRACING A HOT-PLUGGED DEVICE NEEDS `-global`, NOT `<qemu:override>` — the alias-keyed
+  override is SILENTLY INERT on the hotplug path, and an untraced capture looks identical to a traced
+  one until you check.** libvirt applies `<qemu:override>` when it builds the command line, so a device
+  added later never sees it: `x-no-mmap` reads `false`, BAR0 is mapped through, and `vfio_region_*`
+  produces **nothing** while `vfio_pci_*_config` keeps working (config space is never mmap'd) — so the
+  log looks alive. Fix, in `<qemu:commandline>`, applied at device *creation* and therefore to
+  hot-plugged devices too:
+  ```xml
+  <qemu:arg value='-global'/><qemu:arg value='vfio-pci.x-no-mmap=true'/>
+  ```
+  Needs a VM restart (command-line arg), which is free now that the guest boots with no hostdev.
+  **Always verify before trusting a capture:**
+  `virsh qemu-monitor-command <dom> --pretty '{"execute":"qom-get","arguments":{"path":"/machine/peripheral/ua-clarett","property":"x-no-mmap"}}'`
+  **Dead end, do not retry:** out-of-band `device_del` + `device_add x-no-mmap=true` via QMP. libvirt
+  watches `DEVICE_DELETED` and immediately reverses its `managed` setup — the host driver is rebound and
+  `/dev/vfio/<group>` disappears, so the re-add dies with `Could not open '/dev/vfio/55'`.
+- **Scrub the trace before committing it:** libvirt's first log line embeds `hostname:`, which the
+  repo rule forbids. `sed -i '1s/hostname: [^ ]*/hostname: <redacted>/'`.
 - **★ METHOD — "stuck at the TianoCore screen" was a red herring twice over, and the MMIO trace alone
   could not tell.** `virsh screenshot` showed OVMF had *already* handed off (`BdsDxe: starting
   Boot0004 "Windows Boot Manager"`); the logo persists only because Windows has not switched video
   modes yet, so a Windows-stage hang looks exactly like a firmware-stage one. A later screenshot
   showed *Automatic Repair*. **`virsh domstats <dom> --vcpu --block` is the discriminator for how far
-  a guest actually got** — AP `vcpu.N.time` of exactly 0 means Windows never reached SMP init, and
-  frozen `block.0.rd.reqs` with one vCPU at 100 % means spinning, not working. Both conclusions I drew
-  from the trace before screenshotting ("not the device", then "it booted") were wrong.
+  a guest actually got** — frozen `block.0.rd.reqs` with one vCPU at 100 % means spinning, not working.
+  Both conclusions I drew from the trace before screenshotting ("not the device", then "it booted")
+  were wrong.
+  **★★ CORRECTION (Sep 4 2026) — "AP `vcpu.N.time` of exactly 0 means Windows never reached SMP init"
+  IS WRONG ON THIS RIG, and that half of the RedNet hang diagnosis is withdrawn.** The domain runs
+  `-smp 4,sockets=4,cores=1,threads=1` — four separate SOCKETS — and Windows 10 client editions cap
+  physical sockets (Home 1, Pro 2), so vcpu1-3 read exactly 0 **on a completely healthy boot**.
+  Measured on a guest that was demonstrably fine (disk writes advancing, vcpu0 at ~5 %): libvirt
+  reported `vcpu.1/2/3.time=0`, and `/proc/<qemu>/task/*/stat` confirmed the AP threads had genuinely
+  consumed zero — so it is not even a reporting artifact, it is the steady state. The *other* half
+  (vcpu0 pinned at ~100 % with frozen disk I/O) still stands as a hang signal. Fixing the topology to
+  `sockets=1,cores=4` would give that guest its other three cores back.
 
 ## Protocol — FCP (Focusrite Control Protocol)
 

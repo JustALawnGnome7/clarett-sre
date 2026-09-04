@@ -107,20 +107,19 @@ the generator cannot honestly produce one yet:
 - **The Red's preamps are a richer model than this generator describes** — phantom,
   phase invert, stereo link and separate mic/line/inst gains, none of which the
   air+mode control set covers.
-- **There is no band-0 router table to build from.** The `clarett-8pre` pair got away
-  without a capture only because the 4Pre has *identical* input geometry, so its
-  captured table applied verbatim. Nothing in the Clarett line resembles a 60-channel
-  capture side with 32 Dante channels and a `num="154"` routing matrix, so the
-  equivalent construction has nothing to borrow and would be invention.
+- ~~**There is no band-0 router table to build from.**~~ **RESOLVED (Sep 4 2026)** — a
+  vendor bring-up capture of a Red control session now exists (`captures/red_8line.log`),
+  de-blobbed to `tools/arm-tables/arm_red_8line.h` the way every Clarett table was
+  (byte-faithful round-trip, 391 steps). Band 0 gives **156 routed pairs, 156 distinct
+  destinations, 109 distinct sources**; bands are 157/141/99 entries against the 8PreX's
+  103/87/79. So the routing half is no longer invention.
 - **The meter slot layout has never been observed** on a Red.
 
-**What unblocks it**, in order of value: (1) a vendor bring-up capture of a Red
-control session, de-blobbed with `fcp_decode.py --emit-deblob`, which yields the
-band-0 `SET_MUX` table the way every Clarett pair got theirs — note the Windows VM
-cannot currently boot with the unit attached (see `CLAUDE.md`, Red range); (2)
-extending `gen_fcp_maps.py` with a Red control model (16-bit gains, the Red offset
-set, the extra preamp controls); (3) `tools/fcp_meter_watch.c` on the hardware for
-the meter slots. Until then the Red is hwdep-only, which is a working, honest state.
+**What unblocks it**, in order of value: ~~(1) a vendor bring-up capture~~ **— done, see
+above**; (2) extending `gen_fcp_maps.py` with a Red control model (16-bit gains, the Red
+offset set, the extra preamp controls) — **this is now the sole blocker for the map pair**,
+and it is authoring work, not a measurement; (3) `tools/fcp_meter_watch.c` on the hardware
+for the meter slots. Until then the Red is hwdep-only, which is a working, honest state.
 
 ## What the maps deliberately don't cover
 
