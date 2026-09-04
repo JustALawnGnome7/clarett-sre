@@ -265,14 +265,17 @@ tools/gen_wireplumber_conf.py         Emits the drop-in above, one rule per clar
                                       driver/clarett_main.c (order from clarett_detect_model's list).
                                       `--check` fails on drift; `make wireplumber-conf` /
                                       `make check-wireplumber-conf`.
-tools/arm-tables/clarett_arm*.h       The de-blobbed vendor bring-up (typed step lists + the
-                                      clarett_arm_emit() builder). Lived in driver/ while the driver
+tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step lists + the
+                                      clarett_arm_emit() builder in clarett_arm.h). <model> carries the
+                                      product line -- arm_clarett_8prex.h, arm_red_8line.h -- and the
+                                      arrays inside match (arm_red_8line_mux_b0), so no variable wears a
+                                      bare vendor prefix. Lived in driver/ while the driver
                                       replayed the bring-up; the driver no longer arms, so these are
                                       kept ONLY as input to gen_fcp_maps.py (it parses the SET_MUX
                                       bands for the router pins). Regenerate with
                                       fcp_decode.py --emit-deblob.
 tools/gen_fcp_maps.py                 Generates all four map pairs (names, routing/mixer tables from
-                                      the de-blobbed bring-up tables tools/arm-tables/clarett_arm_<model>.h,
+                                      the de-blobbed bring-up tables tools/arm-tables/arm_<model>.h,
                                       measured meter peak-index).
 tools/gen_sim_state.py                Map -> alsactl .state file, so alsa-scarlett-gui can render our
                                       control set with no hardware attached.
@@ -1172,7 +1175,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:
     `clarett_arm_device()`, `clarett_apply_model_routing()`, `clarett_band0_routed()`, the
     `rearm_geometry` and `inject_clock` params, and `clarett_model.arm_seq`/`n_arm_steps` (41 → 38
-    module params). **The four `clarett_arm_<model>.h` tables MOVED to `tools/arm-tables/` rather than
+    module params). **The four `arm_clarett_<model>.h` tables MOVED to `tools/arm-tables/` rather than
     being deleted** — `gen_fcp_maps.py` parses their `SET_MUX` bands for the router pins, so deleting
     them would have silently broken map generation (verified: the regenerated maps are byte-identical
     after the move). `tools/fcp_cap_read.c` still dumps the capability bytes. Transport §8.

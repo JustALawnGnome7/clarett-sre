@@ -436,22 +436,22 @@ def emit_deblob(path, suffix):
             coeffs = [p[2 + 2 * i] | p[3 + 2 * i] << 8 for i in range((len(p) - 2) // 2)]
             idx = len(mix_rows)
             mix_rows.append(coeffs)
-            steplines.append((op, ck, bus, 0, f'clarett_armmix{suffix}[{idx}]', len(coeffs)))
+            steplines.append((op, ck, bus, 0, f'arm{suffix}_mix[{idx}]', len(coeffs)))
         elif kind == 'mux':
             words = [int.from_bytes(p[4 * i:4 * i + 4], 'little') for i in range(len(p) // 4)]
             idx = len(mux_bands)
             mux_bands.append(words)
-            steplines.append((op, ck, 0, 0, f'clarett_armmux{suffix}_b{idx}', len(words)))
+            steplines.append((op, ck, 0, 0, f'arm{suffix}_mux_b{idx}', len(words)))
         elif kind == 'setdata':
             a, b, data = int.from_bytes(p[:4], 'little'), int.from_bytes(p[4:8], 'little'), p[8:]
             hdr = data[:len(data.rstrip(b'\0'))]
             o = len(wb_pool)
             wb_pool += hdr
-            steplines.append((op, ck, a, b, f'clarett_armwb{suffix} + {o}' if hdr else 'NULL', len(hdr)))
+            steplines.append((op, ck, a, b, f'arm{suffix}_wb + {o}' if hdr else 'NULL', len(hdr)))
         elif kind == 'raw':
             o = len(raw_pool)
             raw_pool += p
-            steplines.append((op, ck, 0, 0, f'clarett_armraw{suffix} + {o}', len(p)))
+            steplines.append((op, ck, 0, 0, f'arm{suffix}_raw + {o}', len(p)))
 
     ncoef = len(mix_rows[0]) if mix_rows else 0
     assert all(len(r) == ncoef for r in mix_rows), "non-uniform mixer coeff counts"
@@ -464,27 +464,27 @@ def emit_deblob(path, suffix):
     print(" * De-blobbed bring-up tables (see clarett_arm.h); payloads are byte-identical to the")
     print(" * vendor capture (verified offline against it). */")
     if mix_rows:
-        print(f"static const u16 clarett_armmix{suffix}[{len(mix_rows)}][{ncoef}] = {{")
+        print(f"static const u16 arm{suffix}_mix[{len(mix_rows)}][{ncoef}] = {{")
         for r in mix_rows:
             print("\t{ " + " ".join(f"0x{c:04x}," for c in r) + " },")
         print("};")
     for i, words in enumerate(mux_bands):
-        print(f"static const u32 clarett_armmux{suffix}_b{i}[] = {{")
+        print(f"static const u32 arm{suffix}_mux_b{i}[] = {{")
         print("\n".join("\t" + " ".join(f"0x{w:08x}," for w in words[j:j + 6])
                         for j in range(0, len(words), 6)))
         print("};")
     if wb_pool:
         print(f"/* Writeback fallback: capture-day config, normally OVERWRITTEN by echoed live device")
         print(f" * state during arm (only used if a live GET_DATA read fails). */")
-        print(f"static const u8 clarett_armwb{suffix}[] = {{")
+        print(f"static const u8 arm{suffix}_wb[] = {{")
         print(hexrows(wb_pool))
         print("};")
     if raw_pool:
         print(f"/* Opaque query payloads (identity/version reads; responses discarded). */")
-        print(f"static const u8 clarett_armraw{suffix}[] = {{")
+        print(f"static const u8 arm{suffix}_raw[] = {{")
         print(hexrows(raw_pool))
         print("};")
-    print(f"static const struct clarett_arm_step clarett_arm{suffix}[] = {{")
+    print(f"static const struct clarett_arm_step arm{suffix}[] = {{")
     for op, ck, a, b, data, dlen in steplines:
         print(f"\t{{ 0x{op:06x}, {ck}, {a}, {b}, {data}, {dlen} }},")
     print("};")
@@ -507,10 +507,10 @@ def synth_txn(n, opcode, payload):
 def parse_init_header(path):
     """Parse a generated clarett_init_<model>.h into (blob bytes, [(opcode, off, len), ...])."""
     text = open(path).read()
-    mb = re.search(r'clarett_init_blob\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
-    ms = re.search(r'clarett_init_seq\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
+    mb = re.search(r'init_blob\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
+    ms = re.search(r'init_seq\w*\[\]\s*=\s*\{(.*?)\};', text, re.S)
     if not mb or not ms:
-        sys.exit(f"{path}: no clarett_init_blob/seq arrays found (is this a generated init header?)")
+        sys.exit(f"{path}: no init_blob/seq arrays found (is this a generated init header?)")
     blob = [int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', mb.group(1))]
     steps = [(int(o, 16), int(off), int(ln))
              for o, off, ln in re.findall(r'\{\s*0x([0-9a-fA-F]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}',
@@ -635,7 +635,7 @@ def main():
     ap.add_argument("--emit-deblob", action="store_true",
                     help="input is a generated clarett_init_<model>.h; emit the de-blobbed bring-up "
                          "(typed step list + mix/mux/writeback/raw tables, see clarett_arm.h). "
-                         "Use --init-model for the symbol suffix. Redirect to tools/arm-tables/clarett_arm_<model>.h.")
+                         "Use --init-model for the symbol suffix. Redirect to tools/arm-tables/arm_<model>.h.")
     ap.add_argument("--deblob-check", action="store_true",
                     help="input is a generated clarett_init_<model>.h; decompose every step to a typed "
                          "record, re-serialize, and verify byte-identity (the byte-faithful de-blob "
@@ -646,10 +646,11 @@ def main():
                          "Tier-1 meaning, and print prune-candidate + CONFIG_PUSH-id rollups.")
     ap.add_argument("--summary", action="store_true",
                     help="with --annotate-init, print only the decode-tier rollup (skip the per-step table)")
-    ap.add_argument("--init-model", default="2pre",
-                    help="symbol suffix for --emit-init (default '2pre' -> clarett_init_blob_2pre / "
-                         "clarett_init_seq_2pre); e.g. '8prex' for the 8PreX. Per-model headers coexist. "
-                         "Pass '' for an unsuffixed symbol.")
+    ap.add_argument("--init-model", default="clarett_2pre",
+                    help="symbol suffix for --emit-init/--emit-deblob (default 'clarett_2pre' -> "
+                         "init_blob_clarett_2pre / arm_clarett_2pre); e.g. 'clarett_8prex', 'red_8line'. "
+                         "The product line belongs in the key, so no symbol carries a bare vendor "
+                         "prefix. Per-model headers coexist. Pass '' for an unsuffixed symbol.")
     args = ap.parse_args()
 
     if args.emit_deblob:              # offline: emit the de-blobbed per-model tables
@@ -843,11 +844,11 @@ def main():
         model_arg = f" --init-model {args.init_model}" if args.init_model else ""
         print(f"/* Generated by tools/fcp_decode.py --emit-init{model_arg} from {src}. Do not edit.")
         print(" * Device bring-up replayed at probe; struct clarett_init_step is in clarett.h. */")
-        print(f"static const u8 clarett_init_blob{suffix}[] = {{")
+        print(f"static const u8 init_blob{suffix}[] = {{")
         for i in range(0, len(blob), 12):
             print("\t" + " ".join(f"0x{b:02x}," for b in blob[i:i + 12]))
         print("};")
-        print(f"static const struct clarett_init_step clarett_init_seq{suffix}[] = {{")
+        print(f"static const struct clarett_init_step init_seq{suffix}[] = {{")
         for op, off, ln in rows:
             print(f"\t{{ 0x{op:06x}, {off}, {ln} }},")
         print("};")

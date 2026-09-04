@@ -20,11 +20,11 @@ FCP_SET_MUX = 0x003002
 
 
 def load_mux_bands(key):
-    """The model's SET_MUX band tables from the de-blobbed tools/arm-tables/clarett_arm_<key>.h.
-    Each clarett_armmux_<key>_b<i>[] is {u32 header (band << 16 | ...), u32 entry[]}."""
-    text = open(os.path.join(ARMDIR, f"clarett_arm_{key}.h")).read()
+    """The model's SET_MUX band tables from the de-blobbed tools/arm-tables/arm_<key>.h.
+    Each arm_<key>_mux_b<i>[] is {u32 header (band << 16 | ...), u32 entry[]}."""
+    text = open(os.path.join(ARMDIR, f"arm_{key}.h")).read()
     bands = {}
-    for m in re.finditer(r"clarett_armmux_%s_b(\d+)\[\]\s*=\s*\{(.*?)\};" % key, text, re.S):
+    for m in re.finditer(r"arm_%s_mux_b(\d+)\[\]\s*=\s*\{(.*?)\};" % key, text, re.S):
         bands[int(m.group(1))] = [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{8})", m.group(2))]
     return bands
 
@@ -383,10 +383,10 @@ MODELS = {
     # pcm_out = PCM playback channel count (GET_7.2 / driver playback_channels). The router exposes one
     # PCM source pin per playback channel (0x600 + i), but a captured band-0 table only routes a handful
     # by default, so the full range is added explicitly rather than harvested (see the src_pins union).
-    "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="2pre",
+    "clarett-2pre":  dict(name="Clarett 2Pre",  mode_label="Level", init="clarett_2pre",
                           n_analogue=2, outputs=4, pcm_out=4, mix_out=16,
                           modes={0: "li2", 1: "li2"}),
-    "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="4pre",
+    "clarett-4pre":  dict(name="Clarett 4Pre",  mode_label="Level", init="clarett_4pre",
                           n_analogue=4, outputs=6, pcm_out=8, mix_out=16,
                           modes={0: "li2", 1: "li2"}),
     "clarett-8pre":  dict(name="Clarett 8Pre",  mode_label="Level", init=None,
@@ -394,10 +394,10 @@ MODELS = {
                           modes={0: "li2", 1: "li2"},
                           # No capture for this model: the fcp-server map's routing is constructed
                           # instead (synth_band0_8pre). The driver arms its own captured routing from
-                          # clarett_arm_8pre.h, so nothing driver-side consumes this table.
+                          # arm_clarett_8pre.h, so nothing driver-side consumes this table.
                           synth_mux=lambda: synth_band0_8pre(),
                           synth_sources=lambda: synth_sources_8pre()),
-    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Level", init="8prex",
+    "clarett-8prex": dict(name="Clarett 8PreX", mode_label="Level", init="clarett_8prex",
                           n_analogue=8, outputs=10, pcm_out=28, mix_out=16,
                           modes={0: "mli3", 1: "mli3",
                                  2: "ml2", 3: "ml2", 4: "ml2",

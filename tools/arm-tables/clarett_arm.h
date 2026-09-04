@@ -7,7 +7,8 @@
  * — verified offline for every model against the original capture (a userspace harness reconstructs
  * the command stream from these tables and diffs it against the captured blob).
  *
- * The per-model tables live in clarett_arm_<model>.h (generated from the vendor capture).
+ * The per-model tables live in arm_<model>.h (generated from the vendor capture), where
+ * <model> carries the product line: arm_clarett_8prex, arm_red_8line.
  * Dependency-free (only shifts + memcpy/memset) so the same builder validates in userspace and runs
  * in the kernel. Provide u8/u16/u32 before including.
  */
