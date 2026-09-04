@@ -845,3 +845,353 @@ for slug, spec in MODELS.items():
 
     print(f"{slug}: {na} air, {sum(1 for m in modes.values() if m)} mode "
           f"({sorted(used_modes)}), {nout} outputs (shape [{out_shape}])")
+
+
+# =====================================================================================================
+# Red 8Line — the first non-Clarett model, and a different control plane rather than a wider one.
+#
+# Everything below is authored from the [XML] and CROSS-CHECKED against the vendor's own SET_DATA
+# writes in captures/red_8line.log: every per-input offset the XML predicts appears in that stream at
+# every index, and the 16-bit gain encoding is confirmed by the value it wrote (0xff90 = -112, exactly
+# the XML's min-gain of -112.0 dB, so a signed dB value at 1 dB/step rather than the Clarett's unsigned
+# attenuation byte). That is why this model gets a builder of its own instead of a MODELS entry: the
+# offsets, the widths and the control set all differ, and forcing it through the Clarett loop would
+# mean writing Clarett-shaped fields into a Red's config space.
+#
+# The pin -> name tables are inlined rather than parsed from the XML at run time, as everywhere else in
+# this generator: vendor-reference/ is git-ignored, so the script must work without it.
+# Router SOURCES (things audio comes FROM). [XML] <inputs>.
+RED_IN_PINS = {
+    0x403: "Analogue 1",
+    0x402: "Analogue 2",
+    0x401: "Line 3",
+    0x400: "Line 4",
+    0x407: "Line 5",
+    0x406: "Line 6",
+    0x405: "Line 7",
+    0x404: "Line 8",
+    0x408: "S/PDIF L",
+    0x409: "S/PDIF R",
+    0x200: "ADAT 1.1",
+    0x201: "ADAT 1.2",
+    0x202: "ADAT 1.3",
+    0x203: "ADAT 1.4",
+    0x204: "ADAT 1.5",
+    0x205: "ADAT 1.6",
+    0x206: "ADAT 1.7",
+    0x207: "ADAT 1.8",
+    0x208: "ADAT 2.1",
+    0x209: "ADAT 2.2",
+    0x20a: "ADAT 2.3",
+    0x20b: "ADAT 2.4",
+    0x20c: "ADAT 2.5",
+    0x20d: "ADAT 2.6",
+    0x20e: "ADAT 2.7",
+    0x20f: "ADAT 2.8",
+    0x800: "Dante 1",
+    0x801: "Dante 2",
+    0x802: "Dante 3",
+    0x803: "Dante 4",
+    0x804: "Dante 5",
+    0x805: "Dante 6",
+    0x806: "Dante 7",
+    0x807: "Dante 8",
+    0x808: "Dante 9",
+    0x809: "Dante 10",
+    0x80a: "Dante 11",
+    0x80b: "Dante 12",
+    0x80c: "Dante 13",
+    0x80d: "Dante 14",
+    0x80e: "Dante 15",
+    0x80f: "Dante 16",
+    0x810: "Dante 17",
+    0x811: "Dante 18",
+    0x812: "Dante 19",
+    0x813: "Dante 20",
+    0x814: "Dante 21",
+    0x815: "Dante 22",
+    0x816: "Dante 23",
+    0x817: "Dante 24",
+    0x818: "Dante 25",
+    0x819: "Dante 26",
+    0x81a: "Dante 27",
+    0x81b: "Dante 28",
+    0x81c: "Dante 29",
+    0x81d: "Dante 30",
+    0x81e: "Dante 31",
+    0x81f: "Dante 32",
+}
+
+# Router DESTINATIONS (things audio goes TO). [XML] <outputs>. NOTE the pin numbers COLLIDE with
+# the sources above and mean different things: 0x403 is "Analogue 1" as a source and "Headphone 1 (R)"
+# as a destination. The two tables must never be merged.
+RED_OUT_PINS = {
+    0x400: "Monitor Output 1",
+    0x401: "Monitor Output 2",
+    0x402: "Headphone 1 (L)",
+    0x403: "Headphone 1 (R)",
+    0x404: "Headphone 2 (L)",
+    0x405: "Headphone 2 (R)",
+    0x406: "Line Output 1",
+    0x407: "Line Output 2",
+    0x408: "Line Output 3",
+    0x409: "Line Output 4",
+    0x40a: "Line Output 5",
+    0x40b: "Line Output 6",
+    0x40c: "Line Output 7",
+    0x40d: "Line Output 8",
+    0x186: "S/PDIF Output L",
+    0x187: "S/PDIF Output R",
+    0x200: "ADAT Output 1.1",
+    0x201: "ADAT Output 1.2",
+    0x202: "ADAT Output 1.3",
+    0x203: "ADAT Output 1.4",
+    0x204: "ADAT Output 1.5",
+    0x205: "ADAT Output 1.6",
+    0x206: "ADAT Output 1.7",
+    0x207: "ADAT Output 1.8",
+    0x208: "ADAT Output 2.1",
+    0x209: "ADAT Output 2.2",
+    0x20a: "ADAT Output 2.3",
+    0x20b: "ADAT Output 2.4",
+    0x20c: "ADAT Output 2.5",
+    0x20d: "ADAT Output 2.6",
+    0x20e: "ADAT Output 2.7",
+    0x20f: "ADAT Output 2.8",
+    0x800: "Dante 1",
+    0x801: "Dante 2",
+    0x802: "Dante 3",
+    0x803: "Dante 4",
+    0x804: "Dante 5",
+    0x805: "Dante 6",
+    0x806: "Dante 7",
+    0x807: "Dante 8",
+    0x808: "Dante 9",
+    0x809: "Dante 10",
+    0x80a: "Dante 11",
+    0x80b: "Dante 12",
+    0x80c: "Dante 13",
+    0x80d: "Dante 14",
+    0x80e: "Dante 15",
+    0x80f: "Dante 16",
+    0x810: "Dante 17",
+    0x811: "Dante 18",
+    0x812: "Dante 19",
+    0x813: "Dante 20",
+    0x814: "Dante 21",
+    0x815: "Dante 22",
+    0x816: "Dante 23",
+    0x817: "Dante 24",
+    0x818: "Dante 25",
+    0x819: "Dante 26",
+    0x81a: "Dante 27",
+    0x81b: "Dante 28",
+    0x81c: "Dante 29",
+    0x81d: "Dante 30",
+    0x81e: "Dante 31",
+    0x81f: "Dante 32",
+}
+
+
+# The 14 analogue outputs occupy pins 0x400..0x40d in order. alsa-scarlett-gui only accepts a hardware
+# output sink whose name starts with "Analogue "/"S/PDIF "/"ADAT ", and the Clarett's alsa_sink_name()
+# cannot be reused here: it keys on the name, so the Red's "Monitor Output 1" and "Line Output 1" would
+# BOTH become "Analogue Output 1". Number by pin position instead, which is collision-free by
+# construction.
+RED_N_ANALOGUE_OUT = 14
+
+def red_sink_name(pin, devname):
+    if 0x400 <= pin < 0x400 + RED_N_ANALOGUE_OUT:
+        return f"Analogue Output {pin - 0x400 + 1}"
+    return devname
+
+def red_source_name(pin):
+    if pin in RED_IN_PINS:                       return RED_IN_PINS[pin]
+    if 0x600 <= pin < 0x600 + 64:                return f"PCM {pin - 0x600 + 1}"
+    if 0x300 <= pin < 0x300 + 32:                return f"Mix {chr(ord('A') + pin - 0x300)}"
+    return None
+
+def red_dest_name(pin):
+    """-> (device name, mixer-input index or None)."""
+    if 0x300 <= pin < 0x300 + 32:                return f"Mixer Input {pin - 0x300 + 1:02d}", pin - 0x300
+    if 0x600 <= pin < 0x600 + 64:                return f"PCM {pin - 0x600 + 1}", None
+    if pin in RED_OUT_PINS:                      return RED_OUT_PINS[pin], None
+    return None, None
+
+
+def build_red_8line():
+    slug = "red-8line"
+    nout = RED_N_ANALOGUE_OUT
+    npre = 2          # [XML]: only Analogue 1-2 carry preamps; Line 3-8 are line-level inputs
+
+    # ---- devmap ----
+    # notify-device is the DATA_CMD{activate} that COMMITS a write, taken from each control's
+    # command= attribute [XML]: gain=1, hw-control=3, mode=7, air=8, preamp gains=9, hpf=10,
+    # phantom=11, phase=12, stereo-link=13, mute/dim=15.
+    m = OD()
+    m["versionStageRelease"] = member(0, "uint32", nd=0, nc=0,
+                                      note="Placeholder offset; see _limitations")
+    # Output gain: SIGNED 16-bit dB, 1 dB/step, -112..0 [XML min-gain/max-gain, and the vendor wrote
+    # 0xff90 = -112 to every one of these at init]. Nothing like the Clarett's attenuation byte, so
+    # there is no invert here.
+    m["outputVolume"] = member(24, "int16", shape=nout, nd=1, nc=1,
+                               note="per-output gain @ 24+2i, signed 16-bit dB (-112..0), 1 dB/step; "
+                                    "commit activate 1")
+    # Mute and dim share one byte per output (68+i, bits 0 and 1), so a control has to address a BIT
+    # within a single member -- one member per output byte, as the Clarett does for hwGainEnable.
+    for n in range(nout):
+        m[f"outMuteDim{n}"] = member(68 + n, "bool", nd=15, nc=1,
+                                     note=f"output {n+1} mute (bit 0) and dim (bit 1) @ {68+n}; "
+                                          f"commit activate 15")
+    m["hwGainEnable"] = member(90, "bool", shape=nout, nd=3, nc=0,
+                               note="per-output hardware-control enable @ 90+i; the field is 2 bits "
+                                    "wide [XML] but only bit 0 has been observed set (value 1); "
+                                    "commit activate 3")
+    m["phantom"]    = member(154, "bool",  shape=npre, nd=11, nc=0, note="per-preamp 48V @ 154+i; activate 11")
+    m["mode"]       = member(162, "uint8", shape=npre, nd=7,  nc=0, note="per-preamp mode @ 162+i, 0=Mic/1=Line/2=Inst; activate 7")
+    m["air"]        = member(170, "bool",  shape=npre, nd=8,  nc=0, note="per-preamp air @ 170+i; activate 8")
+    m["hpf"]        = member(178, "bool",  shape=npre, nd=10, nc=0, note="per-preamp high-pass @ 178+i; activate 10")
+    m["phase"]      = member(186, "bool",  shape=npre, nd=12, nc=0, note="per-preamp phase invert @ 186+i; activate 12")
+    m["stereoLink"] = member(194, "bool",  shape=npre, nd=13, nc=0, note="preamp stereo link @ 194+i; activate 13")
+
+    phys_in = []
+    for i in range(npre):
+        phys_in.append(OD(name=f"Analogue {i+1}", controls=OD([
+            ("air",         OD(index=i, member="air")),
+            ("mli3",        OD(index=i, member="mode")),
+            ("phantom",     OD(index=i, member="phantom")),
+            ("hpf",         OD(index=i, member="hpf")),
+            ("phase",       OD(index=i, member="phase")),
+            ("stereo-link", OD(index=i, member="stereoLink")),
+        ])))
+
+    phys_out = []
+    for n in range(nout):
+        phys_out.append(OD(name=RED_OUT_PINS[0x400 + n], controls=OD([
+            ("level",   OD(index=n, member="outputVolume")),
+            ("mute",    OD(index=0, member=f"outMuteDim{n}")),   # index = BIT within the byte
+            ("dim",     OD(index=1, member=f"outMuteDim{n}")),
+            ("hw-gain", OD(index=n, member="hwGainEnable")),
+        ])))
+
+    # ---- router, from the de-blobbed vendor bring-up ----
+    dev_sources, dev_dests, alsa_sources, alsa_sinks = [], [], [], []
+    pairs = band0_mux("red_8line")
+    src_pins = {s for s, _ in pairs if s}
+    src_pins |= {0x600 + i for i in range(64)}     # every playback channel is a valid source
+    src_pins |= {0x300 + i for i in range(32)}     # every mix bus likewise
+    for pin in sorted(src_pins, key=lambda p: (_source_rank(p), p)):
+        nm = red_source_name(pin)
+        if nm is None:
+            continue
+        dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
+        alsa_sources.append(OD([("device_name", nm), ("alsa_name", nm)]))
+    for pin in sorted({d for _, d in pairs}, key=lambda p: (_dest_rank(p), p)):
+        nm, mix_idx = red_dest_name(pin)
+        if nm is None:
+            continue
+        entry = OD([("name", nm), ("router-pin", str(pin))])
+        if mix_idx is not None:
+            entry["mixer-input-index"] = mix_idx
+        dev_dests.append(entry)
+        alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
+    assert len({e["name"] for e in dev_sources}) == len(dev_sources), "red: duplicate source name"
+    assert len({e["name"] for e in dev_dests}) == len(dev_dests), "red: duplicate sink name"
+    assert len({s["alsa_name"] for s in alsa_sinks}) == len(alsa_sinks), "red: duplicate ALSA sink name"
+
+    devmap = OD()
+    devmap["_note"] = ("Device map for the Focusrite Red 8Line (Thunderbolt). Like the Clarett models it "
+                       "does not answer DEVMAP_READ (0x80000d), so this file is its description, loaded "
+                       "from DATADIR by fcp_devmap_read_from_file() and keyed on the model slug "
+                       "published at /proc/asound/card<N>/clarett -- every model in both lines shares "
+                       "PCI id 1cb5:0002. Paired with fcp-alsa-map-red-8line.json.")
+    devmap["_schema"] = ("structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, "
+                         "notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,"
+                         "outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read "
+                         "offset = member.offset + index*width, and index+1 fills the %d in the alsa-map "
+                         "name. For mute/dim the index is a BIT position within a single-byte member.")
+    devmap["_provenance"] = (
+        "Authored from Focusrite's own device descriptor and CONFIRMED against the vendor's SET_DATA "
+        "writes in a black-box MMIO capture of a Red control session: air 170+i, mode 162+i, phantom "
+        "154+i, hpf 178+i, phase 186+i, stereo-link 194+i and hardware-control-enable 90+i were each "
+        "matched at every index, and output gain, mute and dim wherever that session exercised them. "
+        "The 16-bit gain encoding is confirmed by the value written (0xff90 = -112, the descriptor's "
+        "own -112.0 dB minimum). Router pins come from the de-blobbed band-0 SET_MUX of that same "
+        "capture. Clean-room: black-box observation plus published descriptors, never a vendor device "
+        "map or driver.")
+    devmap["_limitations"] = [
+        "The mic/line/inst preamp gains (130/131/132 + 3i, one byte each, commit activate 9) are "
+        "DELIBERATELY ABSENT. Their offsets are confirmed, but the descriptor gives no range or dB "
+        "mapping for them and none has been measured, so any min/max here would be invention -- and "
+        "a wrong range on a mic preamp is not a cosmetic error. Add them once measured on hardware.",
+        "No peak-index anywhere: the GET_METER slot layout has never been observed on a Red, and the "
+        "Clarett slot orders do not transfer between models, let alone between product lines. Level "
+        "meters will therefore not display until this is measured with tools/fcp_meter_watch.c.",
+        "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "
+        "set (the vendor wrote 1 to the monitor and headphone outputs alike); what the second bit "
+        "selects is undecoded.",
+        "versionStageRelease.offset is a placeholder, as on the Clarett maps, so Firmware Version "
+        "shows a meaningless value. It exists because fcp-server requires the control for its "
+        "socket-path TLV and lock handshake. NOTE the descriptor does place App and FPGA versions at "
+        "offsets 8 and 12, but inside a firmware-upgrade segment block whose address space has not "
+        "been shown to be the appspace -- unverified, so not used.",
+        "notify-client masks are approximate, as on the Clarett: the Thunderbolt device does not "
+        "expose the FCP notification word, so the driver relays a wildcard and every notification "
+        "refreshes every control. Set here on the output gain, mute and dim -- the things a front "
+        "panel can move -- and cleared on the preamp switches.",
+        "line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
+        "applies to all eight inputs but its audible effect has not been established.",
+        "The mixer matrix is not exposed. Mixer Input destinations carry mixer-input-index so the "
+        "routing side is complete, but MIX_INFO dimensions have not been read from a Red.",
+        "Sources and destinations are the factory-default patch recovered from the vendor bring-up, "
+        "widened to the full PCM and Mix ranges. Pins outside it may well be routable; verify on the "
+        "bench before adding any (pick a destination, try the pin, confirm with GET_MUX).",
+    ]
+    devmap["structs"] = OD([("APP_SPACE", OD([("members", m)]))])
+    ds = OD([("physical-inputs", phys_in), ("physical-outputs", phys_out)])
+    if dev_sources:
+        ds["sources"] = dev_sources
+        ds["destinations"] = dev_dests
+    devmap["device-specification"] = ds
+    with open(f"{OUTDIR}/fcp-devmap-{slug}.json", "w") as f:
+        json.dump(devmap, f, indent=2); f.write("\n")
+
+    # ---- alsa-map ----
+    a = OD()
+    a["_note"] = ("Presentation layer for the Red 8Line, paired with fcp-devmap-red-8line.json. "
+                  "Control names follow the scarlett2 conventions alsa-scarlett-gui matches on.")
+    a["input-controls"] = OD([
+        ("air",         OD(name="Line In %d Air Capture Switch", type="bool")),
+        ("mli3",        OD(name="Line In %d Level Capture Enum", type="enum",
+                           values=[OD(name="Mic", value=0), OD(name="Line", value=1),
+                                   OD(name="Inst", value=2)])),
+        ("phantom",     OD(name="Line In %d Phantom Power Capture Switch", type="bool")),
+        ("hpf",         OD(name="Line In %d High Pass Filter Capture Switch", type="bool")),
+        ("phase",       OD(name="Line In %d Phase Invert Capture Switch", type="bool")),
+        ("stereo-link", OD(name="Line In %d Stereo Link Capture Switch", type="bool")),
+    ])
+    # Signed dB in the device, so unlike the Clarett there is nothing to invert.
+    a["output-controls"] = OD([
+        ("level",   OD([("name", "Line %d Playback Volume"), ("type", "int"),
+                        ("min", -112), ("max", 0), ("db-min", -112), ("db-max", 0)])),
+        ("mute",    OD([("name", "Line %d Mute Playback Switch"), ("type", "bool-bitmap")])),
+        ("dim",     OD([("name", "Line %d Dim Playback Switch"), ("type", "bool-bitmap")])),
+        ("hw-gain", OD([("name", "Line Out %d Volume Control Playback Enum"),
+                        ("type", "bool-bitmap")])),
+    ])
+    a["output-link"] = []
+    a["global-controls"] = OD([
+        ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
+                                    ("access", "readonly"), ("type", "int")])),
+    ])
+    if alsa_sources:
+        a["sources"] = alsa_sources
+        a["sinks"] = alsa_sinks
+    with open(f"{OUTDIR}/fcp-alsa-map-{slug}.json", "w") as f:
+        json.dump(a, f, indent=2); f.write("\n")
+
+    print(f"{slug}: {npre} preamps (air/mode/phantom/hpf/phase/link), {nout} outputs "
+          f"(level/mute/dim/hw-gain), {len(dev_sources)} sources, {len(dev_dests)} destinations")
+
+
+build_red_8line()
