@@ -148,15 +148,24 @@ into `captures/`, never `/tmp`.
     unaided; and the page-safe fragment rule covers the Red without special-casing (TX `64*4*16` =
     `0x1000`, exactly one page; RX `0xf00` is not pow2 and slots up to `0x1000`). The 2 MB contiguous
     DMA allocation — double the 8PreX's — succeeded.
-  - **★ OPEN, AND A GENUINE DEFAULT-VALUE PROBLEM: 0.37-0.83 overruns/s at 60 channels.** NOT the
-    platform SMI — that fires every 40-58 s (0.02/s), twenty times rarer — and narrower streams
-    (2/8/16 ch) are clean over the same window. Cause is `max_buffer`'s **128-frame pin**: buffer 128 /
-    period 32 = a 2.67 ms buffer asking a non-realtime client to service 11.5 MB/s at ~1500 wakeups/s.
-    **That default was chosen on a 20-channel 8Pre, and a 60-channel device moves 3x the bytes per
-    period — but ceiling == floor, so a Red user cannot raise it from userspace at all**, only via the
-    module parameter. Argues the default should scale with channel count rather than being a hard pin.
-    Untried: `echo 2048 | sudo tee /sys/module/snd_clarett/parameters/max_buffer` (read at `open()`, so
-    no reload needed) — do that first when picking this up.
+  - **★ THE OVERRUNS ARE THE ASROCK PLATFORM FREEZE, NOT THE RED AND NOT THE BUFFER (corrected on
+    measurement).** I first attributed 0.37-0.83 overruns/s to `max_buffer`'s 128-frame pin being too
+    tight for a 60-channel client. **Raising it to 2048 changed nothing** (buffer/period confirmed
+    2048/512 in `hw_params`), and the driver telemetry names the real cause outright:
+    `readmax=42047us` — **a single MMIO read taking 42 ms** — with `gapmax` 45-52 ms and occasional
+    `0x300 read returned ~0` blackouts. No buffer size fixes a 42 ms stall.
+    **A ≥42 ms servicer gap appears in 153 of 153 windows (median 42.6 ms, max 52.7 ms)**, and the same
+    is true of the 8PreX's telemetry on this box before the Red ever streamed — so it is the host, not
+    the model and not two-devices-at-once. **This is 20x more frequent than the "~42 ms every 40-58 s"
+    recorded for this board in [[clarett-playback-skipping]]**, which is an open discrepancy worth
+    re-characterising: same fault, far higher rate, cause of the change unknown.
+    **Why 2048 was not enough is arithmetic**: 2048 frames = 42.67 ms of runway against a 42.6 ms median
+    freeze and a 52.7 ms worst case — exactly marginal. **`max_buffer=4096` (85.3 ms, the full ring) is
+    the value predicted to ride through it on this host; untested.**
+    **Method note (my error, twice over):** I inferred "not the SMI" from the overrun *rate* being too
+    high for the documented cadence, and "narrower streams are clean" from 2-second runs — far too short
+    to sample a fault this intermittent. The driver already publishes `readmax`/`gapmax` telemetry that
+    answers this directly. **Read the servicer telemetry before theorising about a stream fault.**
   - **Still untested on the Red:** playback, any rate above 48 kHz (`max_rate` stays 0 until those are
     pitch-checked), and the digital-loopback ramp (needs a `SET_MUX` from a bench tool, there being no
     map pair to give the router a GUI).
