@@ -133,6 +133,33 @@ into `captures/`, never `/tmp`.
   within each group of four: `0x403→0x600`, `0x402→0x601`, …). **This clears blocker (1) on the Red map
   pair** — see `fcp-server-data/README.md`; the sole remaining blocker is authoring a Red control model
   in `gen_fcp_maps.py` (16-bit gains, Red offsets, richer preamps), which needs no new measurement.
+- **★★★ THE RED 8LINE STREAMS — FIRST AUDIO EVER OFF A NON-CLARETT DEVICE, AND IT NEEDED NO CODE CHANGE
+  (Sep 4 2026, ASRock X570 Creator).** `arecord -D hw:5,0 -c 60 -f S32_LE -r 48000` runs and exits 0.
+  - **Clock is correct: 47997.4 Hz measured against 48000 nominal, −0.01 %** (`hw_ptr` delta over a
+    3.55 s span containing no re-trigger). Same order as the 2Pre's +0.09 %, i.e. unlocked-crystal
+    offset, so `CLARETT_CTR_FRAMES=16` is exact on this model too. 44.1 kHz also runs.
+  - **The audio is real and lands where the de-blobbed router says it should.** Capture channels 0-7
+    carry an ADC noise floor at ~−105 dBFS (96 % non-zero, low byte always zero = 24-bit MSB-justified);
+    channels 8-59 are exactly zero, being Dante/ADAT/S-PDIF/loopback with nothing connected. That is
+    precisely `arm_red_8line.h` band 0's `0x400-0x407 → 0x600-0x607` — **the first cross-validation of a
+    de-blobbed routing table against live audio**, and it came from the same capture.
+  - **Why nothing had to change**, which is the load-bearing part: every register `clarett_engine_arm()`
+    writes matches the vendor's Red values byte-for-byte; `clarett_period_bytes()` predicts `0x400`/`0x3c0`
+    unaided; and the page-safe fragment rule covers the Red without special-casing (TX `64*4*16` =
+    `0x1000`, exactly one page; RX `0xf00` is not pow2 and slots up to `0x1000`). The 2 MB contiguous
+    DMA allocation — double the 8PreX's — succeeded.
+  - **★ OPEN, AND A GENUINE DEFAULT-VALUE PROBLEM: 0.37-0.83 overruns/s at 60 channels.** NOT the
+    platform SMI — that fires every 40-58 s (0.02/s), twenty times rarer — and narrower streams
+    (2/8/16 ch) are clean over the same window. Cause is `max_buffer`'s **128-frame pin**: buffer 128 /
+    period 32 = a 2.67 ms buffer asking a non-realtime client to service 11.5 MB/s at ~1500 wakeups/s.
+    **That default was chosen on a 20-channel 8Pre, and a 60-channel device moves 3x the bytes per
+    period — but ceiling == floor, so a Red user cannot raise it from userspace at all**, only via the
+    module parameter. Argues the default should scale with channel count rather than being a hard pin.
+    Untried: `echo 2048 | sudo tee /sys/module/snd_clarett/parameters/max_buffer` (read at `open()`, so
+    no reload needed) — do that first when picking this up.
+  - **Still untested on the Red:** playback, any rate above 48 kHz (`max_rate` stays 0 until those are
+    pitch-checked), and the digital-loopback ramp (needs a `SET_MUX` from a bench tool, there being no
+    map pair to give the router a GUI).
 - **★★ THE VENDOR STREAMED, so the capture carries the Red's DATA PLANE too — unplanned and the most
   valuable part.** From `tools/bar_profile.py`:
   - **`0x0204 = 0x40` (64) and `0x0304 = 0x3c` (60) are the per-direction CHANNEL COUNTS** — an
