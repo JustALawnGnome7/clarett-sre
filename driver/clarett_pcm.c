@@ -497,6 +497,21 @@ MODULE_PARM_DESC(tx_guard,
  * a request for more is silently granted less. Raise this on a host whose scheduling stalls exceed that
  * (a firmware SMI, a loaded general-purpose desktop); a value above the floor restores a real range that
  * applications can choose within.
+ *
+ * The floor is measured, not assumed. Swept 128..4096 on a stall-free host against the widest device in
+ * the range (60 capture channels at 48 kHz, client at SCHED_FIFO), every ceiling delivered its EXACT
+ * expected period count with no client overrun, no late tick, no engine overrun and no bad read. The
+ * governing quantity is the servicer's worst-case excess over the nominal period, which measured
+ * ~205-233 us and — the part that matters — did NOT scale with the period, so it is scheduling overhead
+ * rather than anything the buffer size influences. Against a 2.7 ms buffer that is a ~11x margin, so the
+ * default is not marginal even at the widest geometry.
+ *
+ * To decide whether a given host needs a larger ceiling, do NOT read gapmax directly: it tracks the
+ * NOMINAL period (period/rate) plus that ~220 us, so the same figure means health at a large period and
+ * ruin at a small one. Divide by the nominal period first. The unambiguous signals are readmax (tens of
+ * microseconds on a healthy host; tens of MILLISECONDS means a platform freeze caught mid-readl) and the
+ * late/overrun/badread counters. A host showing a ~40 ms readmax needs a ceiling above its stall — the
+ * full ring — and no smaller value will help it, because the stall is not a buffering problem.
  */
 static unsigned int max_buffer = CLARETT_MIN_BUFFER_FRAMES;
 module_param(max_buffer, uint, 0644);
