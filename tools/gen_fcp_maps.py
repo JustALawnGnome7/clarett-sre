@@ -1000,9 +1000,23 @@ RED_OUT_PINS = {
 # construction.
 RED_N_ANALOGUE_OUT = 14
 
+# alsa-scarlett-gui parses a channel NUMBER out of every routing source and sink name
+# (get_num_from_string), and a sink it cannot number aborts the whole routing build
+# ("had no number", then an assert). The descriptor calls the Red's S/PDIF pair L/R, so the
+# devmap keeps that -- it has to match the devmap's own port names -- and ALSA sees 1/2, the
+# same device_name/alsa_name split the analogue outputs already use.
+RED_SPDIF_ALSA = {0x186: 1, 0x187: 2, 0x408: 1, 0x409: 2}
+
 def red_sink_name(pin, devname):
     if 0x400 <= pin < 0x400 + RED_N_ANALOGUE_OUT:
         return f"Analogue Output {pin - 0x400 + 1}"
+    if pin in RED_SPDIF_ALSA and devname.startswith("S/PDIF"):
+        return f"S/PDIF Output {RED_SPDIF_ALSA[pin]}"
+    return devname
+
+def red_alsa_source_name(pin, devname):
+    if pin in RED_SPDIF_ALSA and devname.startswith("S/PDIF"):
+        return f"S/PDIF {RED_SPDIF_ALSA[pin]}"
     return devname
 
 def red_source_name(pin):
@@ -1085,7 +1099,8 @@ def build_red_8line():
         if nm is None:
             continue
         dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
-        alsa_sources.append(OD([("device_name", nm), ("alsa_name", nm)]))
+        alsa_sources.append(OD([("device_name", nm),
+                                ("alsa_name", red_alsa_source_name(pin, nm))]))
     for pin in sorted({d for _, d in pairs}, key=lambda p: (_dest_rank(p), p)):
         nm, mix_idx = red_dest_name(pin)
         if nm is None:
@@ -1144,9 +1159,11 @@ def build_red_8line():
         "The mixer matrix needs nothing from this map and comes up on its own: fcp-server reads "
         "MIX_INFO from the device and builds the gain grid, and a Red answers 32 mixes x 32 inputs. "
         "All this map supplies is mixer-input-index on the Mixer Input destinations, which is what "
-        "binds each grid column to a router pin. Note fcp-server names mixes 'A' + i, so on a "
-        "32-mix device the last six come out as [ \\ ] ^ _ ` rather than letters -- cosmetic, "
-        "upstream, and not something a map can correct.",
+        "binds each grid column to a router pin. Mixes past 26 are named AA, AB, ... (bijective "
+        "base 26); fcp-server's original 'A' + i ran off the end of the alphabet into "
+        "\"Mix [\", \"Mix \\\", \"Mix ]\", which GKeyFile rejects as key names -- so a client "
+        "storing state in one (alsa-scarlett-gui does) silently dropped two whole mixes. Fixed "
+        "in fcp-server and alsa-scarlett-gui together; a map cannot influence it either way.",
         "Sources and destinations are the factory-default patch recovered from the vendor bring-up, "
         "widened to the full PCM and Mix ranges. Pins outside it may well be routable; verify on the "
         "bench before adding any (pick a destination, try the pin, confirm with GET_MUX).",

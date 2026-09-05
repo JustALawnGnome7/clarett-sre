@@ -30,6 +30,13 @@ python3 tools/gen_fcp_maps.py
 cp fcp-server-data/fcp-*.json ../fcp-support/data/
 ```
 
+**Order matters when both trees are installed, and getting it wrong is silent.**
+`fcp-support`'s own `make install` ships `data/*.json` into the same `$(DATADIR)`, so a
+`make install` there AFTER one here overwrites these maps with whatever that tree happens to
+hold. Copy first (above), or re-run `sudo make install` in this tree last. The symptom is a
+map that regresses to an older revision with no error anywhere -- diff the installed copy
+against `fcp-server-data/` when something that was fixed stops being fixed.
+
 Note the notes inside the shipped files are written for a reader of *that* tree:
 they don't cite paths in this one, and they describe the maps rather than the
 reverse-engineering behind them. The detail behind a given number lives here, in
