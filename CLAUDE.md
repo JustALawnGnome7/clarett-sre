@@ -1376,10 +1376,15 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     address: 2-11 ms after the `0x414` high-word write it raises `0x400` bit 0 with no command in
     flight, and it will not answer a command sent before that. `clarett_hw_init()` used to sleep a
     fixed 3.22 ms there (copied from the vendor trace gap, which was the vendor host's interrupt
-    landing, not a pause) — that covers a warm device (2-3 ms) and misses a cold one (3-4 ms after a
-    few seconds off, ~10 ms after 7 s or more). `clarett_program_resp_addr()` now waits for the bit
-    (`CLARETT_ADDR_ACK_MS` = 500) and fails the probe on timeout. **Seven cold power-ups on two models
-    then detected on the first command with no settle and no retry.**
+    landing, not a pause) — that covers a warm device (2-3 ms) and misses a cold one. The latency is
+    per model and depends on what the firmware is doing at the moment of the write: the 4Pre takes
+    ~10.8 ms on any cold attach, the 2Pre 2.0 ms when the address is written promptly after link-up
+    and ~10 ms when written 5 s later. `clarett_program_resp_addr()` waits for the bit
+    (`CLARETT_ADDR_ACK_MS` = 500) and fails the probe on timeout. **Every power cycle on both models
+    (eight so far) detected on the first command with no settle and no retry.**
+    **Cold-attach signature, driver-independent:** PCIe link up, down at +0.3 s, up at +1.8 s; DROM
+    unreadable until ~+6.5 s (`vendor=0x0`/`0xff13`, CRC mismatch). Every power cycle shows it; a cable
+    replug with the unit powered shows none of it.
     - **It was in the traces all along:** every attach capture (12 of 12, four Claretts + the Red) has
       the same interrupt sweep with `0x400 = 0x1` between the `0x414` write and the first doorbell.
     - **One variable per run, with negative controls (4Pre, sysfs rebinds):** nothing written → no bit
@@ -1394,6 +1399,10 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       (all of those varied how to retry, none waited for the acknowledgement). The Thunderbolt DROM
       identifies the model on hosts that enumerate it (leah: `device_name` Clarett2Pre/4Pre, DROM
       device 0xd/0xc) — the "nothing identifies it pre-mailbox" claim was about the PCI function only.
+    - **The rest of the vendor attach sequence went too (same day, 4Pre):** `clarett_hw_init()` is now
+      serial/fw reads, `0x510=8`, `0x500=8`, `0x104` enable, address + wait. The five dummy reads, the
+      cause-block sweep and ~25 ms of trace-copied sleeps were removed with no change in acknowledgement
+      latency, cold or warm, and clean capture/playback/fcp-server afterwards.
     - **Method:** for each write in an attach sequence ask what the device does IN RESPONSE to it, and
       read the interrupt sweep after it as an answer, not as noise. Reproduce a "cold" fault warm by
       racing the window before spending power cycles on it.

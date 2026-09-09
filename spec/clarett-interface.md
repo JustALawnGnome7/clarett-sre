@@ -117,8 +117,10 @@ GET responses do **not** appear in the BAR. The host allocates a response buffer
 programs its bus address into `0x410`/`0x414`, and the device DMAs each response
 there. **The device acknowledges the address**: 2-11 ms after the `0x414` write it
 raises `0x400` bit 0 (one MSI on vector 0), and it will not answer a command sent
-before that. Measured 2-3 ms on a warm device, 3-4 ms after a power-off of a few
-seconds, and about 10 ms after 7 s or more off. The acknowledgement carries no DMA;
+before that. Measured 2-3 ms on a warm device and up to 11 ms on a cold attach; the
+figure is per model and depends on what the device's firmware is doing at the moment
+of the write (a 4Pre takes ~11 ms cold, a 2Pre 2 ms cold if written promptly after
+link-up and ~10 ms if written 5 s later). The acknowledgement carries no DMA;
 the buffer is untouched. Writing the low word alone does not raise it; rewriting the
 address raises it again. A host waits for this bit (a few hundred ms is ample) and
 only then sends its first command. The response begins with a 16-byte echoed FCP header (echoed `cmd` at

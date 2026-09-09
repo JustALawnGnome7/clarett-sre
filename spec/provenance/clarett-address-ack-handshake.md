@@ -66,28 +66,57 @@ command's wait and misread as the command's accept. Two rebinds with the wait in
 place immediately afterwards came up clean, so the wedge does not persist across a
 re-init that waits.
 
-## 3. Cold power cycles, both models, first touch at PCI enable
+## 3. Power cycles and cable replugs, both models, first touch at PCI enable
 
-Probe loaded with a 5 s wait before the address write (a spontaneous bit 0 at
+Cold = power switch off and on. Warm = Thunderbolt cable out and in with the unit
+powered. Probe loaded with a 5 s wait before the address write (a spontaneous bit 0 at
 power-on would have shown there), then the address write and a 5 s bounded wait, then
-`STREAM_INFO` at once. Off time measured host-side from Thunderbolt disconnect to PCI
-re-enable.
+`STREAM_INFO` at once.
 
-| # | model | off for | bit 0 in the 5 s before the write | bit 0 after the high write | detected |
+| # | model | attach | bit 0 in the 5 s before the write | bit 0 after the high write | detected |
 |---|---|---|---|---|---|
-| 1 | 4Pre | 17 s | absent | 10.56 ms | first command |
-| 2 | 4Pre | 3.7 s | absent | 4.04 ms | first command |
-| 3 | 4Pre | 7.0 s | absent | 10.61 ms | first command |
-| 4 | 2Pre | 15.5 s | absent | 10.08 ms | first command |
-| 5 | 2Pre | 5.3 s | absent | 3.30 ms | first command |
-| 6 | 2Pre | 8.1 s | absent | 9.48 ms | first command |
-| 7 | 2Pre | 4.2 s | absent | 3.33 ms | first command |
+| 1 | 4Pre | cold | absent | 10.56 ms | first command |
+| 2 | 4Pre | warm | absent | 4.04 ms | first command |
+| 3 | 4Pre | cold | absent | 10.61 ms | first command |
+| 4 | 2Pre | cold | absent | 10.08 ms | first command |
+| 5 | 2Pre | warm | absent | 3.30 ms | first command |
+| 6 | 2Pre | cold | absent | 9.48 ms | first command |
+| 7 | 2Pre | warm | absent | 3.33 ms | first command |
 
-The device never raises bit 0 on its own. Off for about 7 s or longer the reply
-takes about 10 ms; off for under about 5 s, 3-4 ms; warm, 2-3 ms. The old fixed
-3.22 ms sleep sat at the warm figure, which is why a quick replug usually survived
-and a real power cycle wedged. Two of the 2Pre attaches had the Thunderbolt link flap
-(found, disconnected, found again) during the wait and were unaffected.
+The device never raises bit 0 on its own. Every address write in this table came 5 s
+after PCI enable, because of the negative-control wait. The old fixed 3.22 ms sleep sat
+at the sysfs-rebind figure (2-3 ms), which is why a rebind or a replug usually survived
+and a power cycle wedged.
+
+## 3a. Cold attach signature, and what sets the latency
+
+With the minimal init (§4a) the address is written about 0.17 s after link-up:
+
+| model | attach | PCIe link | Thunderbolt DROM | acknowledgement |
+|---|---|---|---|---|
+| 4Pre | cold | up, down at +0.33 s, up again at +1.8 s | unreadable until +6.9 s | 10.83 ms |
+| 4Pre | warm | single link-up | read at +0.4 s | 3.89 ms |
+| 4Pre | cold | flap as above | unreadable until +6.3 s | 10.83 ms |
+| 2Pre | cold | flap as above | unreadable until +6.6 s | 2.04 ms |
+| 2Pre | warm | single link-up | read at +0.4 s | 2.02 ms |
+| 2Pre | warm (unit swapped in) | single link-up | read at +0.4 s | 1.99 ms |
+
+A power cycle has a signature independent of the driver: the PCIe link comes up,
+drops about 0.3 s later, and comes back about 1.5 s after that; the kernel enumerates
+the bridge chain twice; and the Thunderbolt driver's first DROM read, about 6 s after
+the second link-up, returns garbage (`vendor=0x0` or `0xff13`, "DROM size mismatch" or
+"CRC32 mismatch"), is rejected, and succeeds about 0.25 s later. Every power cycle shows
+the whole signature and no cable replug shows any of it, on both models. The driver
+only ever saw the second link-up; the first enumeration was torn down by the drop
+before probe ran.
+
+The acknowledgement latency is per model and depends on what the firmware is doing at
+the moment of the write. The 4Pre takes about 10.8 ms after a power cycle. The 2Pre
+takes 2.0 ms after a power cycle when the address is written promptly, and 9.5-10.1 ms
+(§3) when the write came 5 s after enable, inside the window where the DROM is still
+unreadable. The driver does not depend on this: the bounded wait takes the device at
+whatever speed it answers, and every attach in both tables registered on the first
+command.
 
 ## 4. What changed
 
@@ -96,6 +125,21 @@ and a real power cycle wedged. Two of the 2Pre attaches had the Thunderbolt link
 Removed: `settle_ms`, `wait_ready_ms`, `CLARETT_READY_RETRY_MS` and the 30 s re-init
 loop. The probe asks `STREAM_INFO` once. Verified on leah: three warm rebinds of the
 2Pre with the production code acknowledged at 2.1-2.2 ms and registered.
+
+## 4a. The rest of the attach sequence is not needed either
+
+With the handshake in place, `clarett_hw_init()` was cut to: read serial and firmware words,
+write `0x510 = 8` and `0x500 = 8`, write `0x104 = 0xf000003f`, program the address and wait.
+Gone: the reads of `0x000`/`0x004`/`0x008`/`0x514`/`0x58c` and the fw-info tail, the
+five-register read-to-clear sweep after the address write, and six `usleep_range` calls
+(about 25 ms) copied from the vendor trace's inter-group gaps. Tested on the 4Pre the same
+day: three warm rebinds (2.0-2.2 ms acknowledgement), then a cold attach after 6.7 s off
+(10.83 ms), a warm one after 2.8 s (3.89 ms) and a cold one after 14.9 s (10.83 ms), all
+registering on the first command; a 3 s 20-channel capture delivered the exact byte count,
+playback ran, fcp-server registered 565 controls, no servicer anomalies. The latencies are the
+same as with the full sequence, so the removed accesses were the vendor host's bookkeeping and
+its interrupt latency, not device requirements. The two MIDI-block writes were kept untested
+in isolation; MIDI is known to work with them present.
 
 ## 5. Claims retired
 
@@ -115,10 +159,7 @@ loop. The probe asks `STREAM_INFO` once. Verified on leah: three warm rebinds of
 
 ## 6. Method
 
-The trace had shown this from the first capture. It was missed because the sweep
-after the address write was read as noise and its gap as a pause, and because the
-cold-attach experiments all varied how to retry rather than what the device had said.
-The productive step was to ask, for each write in the attach sequence, what the
-device did in response to it, and to test that with one variable changed per run and
-a negative control on the same device. The whole set of experiments took an afternoon
-against a device on the bench; the failed diagnosis had taken weeks.
+The trace had shown this from the first capture: the sweep after the address write
+was read as noise and its gap as a pause. For each write in an attach sequence, ask
+what the device does in response to it, and test that with one variable changed per
+run and a negative control on the same device.

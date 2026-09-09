@@ -35,15 +35,25 @@ acknowledgement, and characterize failures by their onset, not their endpoint.**
 
 **The driver never arms the device.** A unit that has been armed once self-arms across a power
 cycle — its config reads, input metering, and control writes all work with no host bring-up,
-because the arm state is flash-persisted. Probe runs the pre-mailbox init, waits for the device to
-acknowledge the response-buffer address, asks `STREAM_INFO` once, detects the model from the answer,
-and leaves the device's own routing untouched.
+because the arm state is flash-persisted. Probe reads the serial and firmware words, writes the
+two MIDI-block enables and the IRQ enable, programs the response-buffer address and waits for the
+device to acknowledge it, asks `STREAM_INFO` once, detects the model from the answer, and leaves the
+device's own routing untouched. That is the whole of `clarett_hw_init()`. The vendor's attach
+sequence also reads `0x000`/`0x004`/`0x008`/`0x514`/`0x58c` and the fw-info tail, sweeps the five
+cause blocks after the address write, and spaces the groups by 1-8 ms; removing all of that changed
+nothing — same acknowledgement latencies, first-command detection on cold and warm attaches, clean
+capture and playback — so those were the vendor host's own bookkeeping and interrupt latency, not
+anything the device needs.
 
 **The address acknowledgement is the readiness handshake.** After the high word of the response
 DMA address is written to `0x414`, the device raises `0x400` bit 0 — the same bit that later means
 "request accepted" per command — and it will not answer a command sent before that. It arrives
-2-3 ms after a warm rebind, 3-4 ms after a power-off of a few seconds, and about 10 ms after the
-unit has been off for 7 s or more. `clarett_program_resp_addr()` waits for it with a
+2-3 ms after a warm rebind and up to 11 ms on a cold attach, per model and depending on what the
+device's firmware is doing at the moment of the write (a 4Pre ~11 ms cold; a 2Pre 2 ms cold when the
+address is written promptly, ~10 ms when written 5 s after link-up). A cold attach also announces
+itself outside the driver: the PCIe link drops ~0.3 s after first coming up and returns ~1.5 s later,
+and the Thunderbolt DROM is unreadable for ~6 s after that. A cable replug with the unit powered shows
+none of this. `clarett_program_resp_addr()` waits with a
 `CLARETT_ADDR_ACK_MS` (500 ms) bound and fails the probe with `-ENODEV` if it never comes. A
 `dev_dbg` line reports the measured latency.
 
