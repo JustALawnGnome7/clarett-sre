@@ -115,7 +115,7 @@ static int __clarett_fcp(struct clarett *c, u32 opcode, const u8 *data, u16 len,
 	mutex_lock(&c->mbox_lock);
 
 	/* zero the response header so clarett_resp_wait can't match a stale echo
-	 * (the arm repeats opcodes back-to-back, CONFIG_PUSH x122) */
+	 * (a session repeats opcodes back-to-back) */
 	memset(c->resp_buf, 0, FCP_RESP_DATA_OFF);
 	dma_wmb();
 

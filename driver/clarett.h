@@ -314,7 +314,7 @@ struct snd_rawmidi_substream;
  *
  * So the vendor was POLLING whether its clock had locked, not enabling a stream — which also explains
  * its 3-second stall before streaming with zero MMIO writes in it. Consequence for us: the stream
- * handshake has NO enabling function beyond SET_CLOCK and the CONFIG_PUSH burst; issuing these three
+ * handshake has NO enabling function beyond SET_CLOCK; issuing these three
  * is inert. They are kept (and still issued) only to keep our command stream byte-identical to the
  * vendor's, and because their responses are worth reading — a device reporting unlocked would explain
  * a dead engine. Ours reports LOCKED at 48000, so the data-plane stall is not a clock problem.
@@ -344,21 +344,17 @@ struct snd_rawmidi_substream;
  * The two trailing words are undecoded. A band past 2 is not an error: one model answers zeros,
  * another repeats band 2.
  *
- * The other opcodes here are session-open queries the vendor issues at attach, not fully decoded:
- * 0x005000 {u16 id} reads a fixed port-name string; 0x007002/0x007003 {u32 speed, u16 count}
- * declare the TX/RX stream width; category 6 queries answer rate and clock state.
+ * The other opcodes here are session-open queries the vendor issues at attach, not fully decoded;
+ * the category 6 ones answer rate and clock state.
  */
 #define FCP_STREAM_INFO          0x007001
 #define CLARETT_SPEED_BANDS      3
 #define FCP_READ_SEG             0x800005
 #define FCP_INIT_2               0x000002
-#define FCP_CONFIG_PUSH          0x005000
 #define FCP_GET_60               0x006000
 #define FCP_GET_61               0x006001
 #define FCP_GET_62               0x006002
 #define FCP_GET_70               0x007000
-#define FCP_GET_72               0x007002
-#define FCP_GET_73               0x007003
 
 /*
  * Device bring-up opcodes seen in the vendor attach capture. Not fully decoded, and the driver does
@@ -366,7 +362,7 @@ struct snd_rawmidi_substream;
  * SET_MUX are live opcodes — they are what a routing or mixer edit issues. Named for documentation.
  *   0x000001 subsystem enable {u16 id}; 0x001000/0x002000/0x003000/0x004000 subsystem-count
  *   queries; 0x002002 SET_MIX {u16 mix, u16 coeff[30]}; 0x003002 SET_MUX; 0x004001/0x004005
- *   subsystem-4 setup; 0x005000 CONFIG_PUSH {u16 id}.
+ *   subsystem-4 setup; 0x005000 {u16 id} reads a fixed port-name string.
  */
 #define FCP_INIT_1               0x000001
 #define FCP_SET_MIX              0x002002
@@ -463,16 +459,6 @@ struct clarett_model {
 	u8 n_clock_srcs;
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
 						 * the PCM path derives per-direction fragments from channel counts */
-	/*
-	 * Per-channel stream-routing CONFIG_PUSH ids, re-issued in-session at PCM prepare (the device resets
-	 * stream routing when idle; the probe-time push goes stale). Captured from the VM rate-change handshake:
-	 * one CONFIG_PUSH{u16 id} per stream channel. tx[] after GET_7.2, rx[] after
-	 * GET_7.3, matching the wire order. NULL/0 = skip the burst (8PreX ids not yet captured).
-	 */
-	const u8 *stream_tx_ids;
-	const u8 *stream_rx_ids;
-	u8 n_stream_tx_ids;
-	u8 n_stream_rx_ids;
 };
 
 /*

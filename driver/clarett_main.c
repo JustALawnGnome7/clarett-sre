@@ -492,7 +492,7 @@ static void clarett_error_probe(struct clarett *c)
 		{ "READ_SEG{0,8}",            FCP_READ_SEG, { 0,0,0,0,  8,0,0,0 }, 8 },
 		{ "STREAM_INFO{0}",           FCP_STREAM_INFO, { 0 }, 1 },
 		{ "GET_6.2",                  0x006002,     { 0 }, 0 },
-		{ "CONFIG_PUSH{0x1e}",        0x005000,     { 0x1e, 0 }, 2 },
+		{ "port name{0x1e}",          0x005000,     { 0x1e, 0 }, 2 },
 		{ "GET_DATA{0xc8,8}",         FCP_GET_DATA, { 0xc8,0,0,0, 8,0,0,0 }, 8 },
 		/* Status-vocabulary probes: error conditions at DIFFERENT validation stages than
 		 * bad-offset/unknown-opcode, run on a WORKING session (a walled one flattens all to 3):
@@ -979,11 +979,9 @@ static void clarett_engine_program(struct clarett *c, dma_addr_t r0, dma_addr_t 
 	 * (2) the global enable (0x20c=1) comes BEFORE the geometry/base writes, as the VM does (DMA only starts
 	 * on the 0x110=7 arm, which stays last, so there is no null-base fault).
 	 *
-	 * NO per-arm FCP. The VM issues SET_CLOCK / CONFIG_PUSH / 0x6004 / 0x6005 only in the in-session
-	 * handshake (clarett_stream_handshake, run from PCM prepare BEFORE this), and issues NO DATA_CMD at all
-	 * during 2Pre stream start. The old SET_CLOCK + DATA_CMD{5} here were redundant/wrong (the device latches
-	 * the clock during the handshake's CONFIG_PUSH) and one SET_CLOCK was timing out (-110). A null base arg
-	 * skips that block (capture-only passes r0=0).
+	 * NO per-arm FCP. The VM issues SET_CLOCK / 0x6004 / 0x6005 only in the in-session handshake
+	 * (clarett_stream_handshake, run from PCM prepare BEFORE this), and issues NO DATA_CMD at all during
+	 * 2Pre stream start. A null base arg skips that block (capture-only passes r0=0).
 	 */
 	writel(0xf, bar + REG_IRQ0_CAUSE);				/* 0x100 = 0xf: ack cause block */
 	writel(0x10, bar + REG_STREAM_IRQ_CFG);				/* 0x108 */
@@ -2058,33 +2056,6 @@ static const struct clarett_preamp clarett_8prex_preamps[] = {
 };
 
 /*
- * Per-channel stream-routing CONFIG_PUSH ids, DERIVED (not captured) from the global source-id
- * enumeration proven byte-for-byte on the 2Pre AND 4Pre captures: the id space
- * is model-independent with per-category reserved blocks —
- *   Analogue N -> 0x0d + (N-1)   (block reserves 8: 0x0d..0x14)
- *   S/PDIF   N -> 0x15 + (N-1)   (0x15..0x16)
- *   ADAT     N -> 0x17 + (N-1)   (block reserves 16: 0x17..0x26 — why loopback is 0x27 even on the
- *                                 8-ADAT 2Pre/4Pre, which use only 0x17..0x1e)
- *   Loopback N -> 0x27 + (N-1)
- *   Playback N -> 0x2b + (N-1)   (TX)
- * The 8PreX just fills more of each block. Order follows the XML: TX = Playback 1..28; RX = the
- * record-outputs order (Analogue 1-8, S/PDIF 1-2, Loopback 1-2, then ADAT 1-16). Without these the
- * stream-config handshake pushes nothing, the device streams at a narrower default width, and a 28ch
- * playback ring is consumed as ~12ch — the stereo pair smears onto outputs 1-2/5-6/9-10 (28 mod 12 = 4).
- */
-static const u8 clarett_8prex_stream_tx[] = {
-	0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
-	0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
-};
-static const u8 clarett_8prex_stream_rx[] = {
-	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,	/* Analogue 1-8 */
-	0x15, 0x16,					/* S/PDIF 1-2 */
-	0x27, 0x28,					/* Loopback 1-2 (mid-block, matching record-outputs) */
-	0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,	/* ADAT 1-8 */
-	0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,	/* ADAT 9-16 */
-};
-
-/*
  * Selectable clock sources for the "Clock Source" control, Internal first. Values are the SET_CLOCK
  * enums (clarett.h): Internal 24, S/PDIF 3, ADAT 0 — hardware-verified on the 2Pre and 8Pre, and shared
  * by the whole line. The 8PreX's second ADAT port and wordclock input are [XML]-derived and could not be
@@ -2125,10 +2096,6 @@ static const struct clarett_model clarett_8prex = {
 						 * correct pitch at 96k and 192k, full 28ch width, no glitches. Rate-
 						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
 	.stream_frag = STREAM_SIZE_VAL,
-	.stream_tx_ids = clarett_8prex_stream_tx,
-	.n_stream_tx_ids = ARRAY_SIZE(clarett_8prex_stream_tx),
-	.stream_rx_ids = clarett_8prex_stream_rx,
-	.n_stream_rx_ids = ARRAY_SIZE(clarett_8prex_stream_rx),
 };
 
 /*
@@ -2136,7 +2103,7 @@ static const struct clarett_model clarett_8prex = {
  * (Focusrite's Clarett 2Pre device XML): shared offsets/commands, the first 4 of the 8PreX output
  * gains, 2 combo-jack preamps with the Line/Inst encoding (Line=1, Inst=2 — Mic is auto-detected by the
  * jack, not a software mode; see clarett_mode_li. The alsa-map's enum values carry the mapping).
- * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (GET_7.2=0x04 / GET_7.3=0x0e in the boot
+ * Channel counts 4 playback / 14 record are HARDWARE-CONFIRMED (the 0x007002=0x04 / 0x007003=0x0e width declarations in the boot
  * trace). Detected by its (4,14) geometry (clarett_detect_model). The PRE-mailbox surface really
  * is undifferentiated — every MMIO reg / config read / PCI config byte is identical to the 8PreX, and
  * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
@@ -2169,13 +2136,6 @@ static const struct clarett_preamp clarett_2pre_preamps[] = {
 	{ clarett_mode_li, clarett_mode_li_vals, 2 },
 };
 
-/* Per-channel stream-routing CONFIG_PUSH ids, captured verbatim from the 2Pre rate-change handshake:
- * 4 TX (playback) + 14 RX (record) channels, re-pushed at PCM prepare. */
-static const u8 clarett_2pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e };
-static const u8 clarett_2pre_stream_rx[] = {
-	0x0d, 0x0e, 0x15, 0x16, 0x27, 0x28, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
-};
-
 static const struct clarett_model clarett_2pre = {
 	.name = "Clarett 2Pre",
 	.slug = "clarett-2pre",
@@ -2194,10 +2154,6 @@ static const struct clarett_model clarett_2pre = {
 						 * or glitches. Width is rate-independent (no SMUX shrink). */
 	.stream_frag = 0,			/* legacy engine-start probe unused on the 2Pre; PCM uses
 						 * clarett_frag_bytes() per direction */
-	.stream_tx_ids = clarett_2pre_stream_tx,
-	.n_stream_tx_ids = ARRAY_SIZE(clarett_2pre_stream_tx),
-	.stream_rx_ids = clarett_2pre_stream_rx,
-	.n_stream_rx_ids = ARRAY_SIZE(clarett_2pre_stream_rx),
 };
 
 /*
@@ -2205,10 +2161,8 @@ static const struct clarett_model clarett_2pre = {
  * cross-checked against a live FC boot-to-stream capture [TRACE]. Auto-detected after the
  * arm by its (8,20) geometry, live-confirmed (clarett_detect_model).
  *
- *   [TRACE] channel counts 8 playback / 20 record (GET_7.2=0x08 / GET_7.3=0x14, read 6x; XML-consistent:
+ *   [TRACE] channel counts 8 playback / 20 record (0x007002=0x08 / 0x007003=0x14 width declarations, read 6x; XML-consistent:
  *           8 Playback pins, 18 record + 2 loopback = 20 record-output pins).
- *   [TRACE] stream-routing CONFIG_PUSH ids — captured verbatim from the in-session rate handshake
- *           (#674-#702): 8 TX after GET_7.2, 20 RX after GET_7.3, in wire order.
  *   [XML]   inputs: only Analogue 1-2 have a mode (Line=1/Inst=2; Mic is auto-detected by the combo
  *           XLR/TRS jack, not a software option — see clarett_mode_li), at mode@166/167 cmd 6;
  *           Analogue 1-4 each have Air at air@174..177 cmd 7; Analogue 5-8 have no preamp controls.
@@ -2233,14 +2187,6 @@ static const struct clarett_preamp clarett_4pre_preamps[] = {
 	{ NULL, NULL, 0 },
 };
 
-/* [TRACE] per-channel stream-routing CONFIG_PUSH ids, captured from the 4Pre rate handshake:
- * 8 TX (playback) + 20 RX (record), re-pushed at PCM prepare. */
-static const u8 clarett_4pre_stream_tx[] = { 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32 };
-static const u8 clarett_4pre_stream_rx[] = {
-	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
-	0x27, 0x28, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
-};
-
 static const struct clarett_model clarett_4pre = {
 	.name = "Clarett 4Pre",
 	.slug = "clarett-4pre",
@@ -2251,18 +2197,14 @@ static const struct clarett_model clarett_4pre = {
 	.in_prefix = "Line In",			/* match scarlett2 Clarett 4Pre USB */
 	.mode_label = "Level",
 	.has_spdif_source = true,
-	.capture_channels = 20,			/* [TRACE] GET_7.3=0x14 record-outputs pin count */
-	.playback_channels = 8,			/* [TRACE] GET_7.2=0x08 playback pin count */
+	.capture_channels = 20,			/* [TRACE] 0x007003=0x14 record-outputs pin count */
+	.playback_channels = 8,			/* [TRACE] 0x007002=0x08 playback pin count */
 	.clock_srcs = clarett_clock_srcs,
 	.n_clock_srcs = ARRAY_SIZE(clarett_clock_srcs),
 	.max_rate = 192000,			/* HW-CONFIRMED double + quad speed for CAPTURE: analogue on ch0 reads
 						 * correct pitch at 96k and 192k, full 20ch width, no glitches. Rate-
 						 * independent geometry (no SMUX shrink). Single-speed playback confirmed. */
 	.stream_frag = 0,			/* PCM uses clarett_frag_bytes() per direction (asymmetric) */
-	.stream_tx_ids = clarett_4pre_stream_tx,
-	.n_stream_tx_ids = ARRAY_SIZE(clarett_4pre_stream_tx),
-	.stream_rx_ids = clarett_4pre_stream_rx,
-	.n_stream_rx_ids = ARRAY_SIZE(clarett_4pre_stream_rx),
 };
 
 /*
@@ -2299,23 +2241,6 @@ static const struct clarett_out_gain clarett_8pre_gains[] = {
 	{ "Line 09 (Headphones 2 L)", 48 }, { "Line 10 (Headphones 2 R)", 49 },
 };
 
-/*
- * Per-channel stream-routing CONFIG_PUSH ids, DERIVED from the same model-independent global source-id
- * enumeration as the 8PreX (see clarett_8prex_stream_tx). The 8Pre's physical input layout is identical
- * to the 4Pre (Analogue 1-8, S/PDIF 1-2, ADAT 1-8, Loopback mid-block), so its RX ids come out equal to
- * the 4Pre's; TX is Playback 1-20 -> 0x2b..0x3e.
- */
-static const u8 clarett_8pre_stream_tx[] = {
-	0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34,
-	0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e,
-};
-static const u8 clarett_8pre_stream_rx[] = {
-	0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,	/* Analogue 1-8 */
-	0x15, 0x16,					/* S/PDIF 1-2 */
-	0x27, 0x28,					/* Loopback 1-2 (mid-block, matching record-outputs) */
-	0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,	/* ADAT 1-8 */
-};
-
 static const struct clarett_model clarett_8pre = {
 	.name = "Clarett 8Pre",
 	.slug = "clarett-8pre",
@@ -2336,10 +2261,6 @@ static const struct clarett_model clarett_8pre = {
 						 * Rate-independent geometry (no SMUX shrink), as on the 2Pre. Playback at
 						 * high speed follows the shared engine but is not separately verified here. */
 	.stream_frag = 0,
-	.stream_tx_ids = clarett_8pre_stream_tx,
-	.n_stream_tx_ids = ARRAY_SIZE(clarett_8pre_stream_tx),
-	.stream_rx_ids = clarett_8pre_stream_rx,
-	.n_stream_rx_ids = ARRAY_SIZE(clarett_8pre_stream_rx),
 };
 
 /*
@@ -2360,8 +2281,6 @@ static const struct clarett_model clarett_8pre = {
  *    since the in-kernel control layer was removed, and the Red's preamps carry phantom, phase,
  *    stereo-link and separate mic/line/inst gains that this struct cannot describe anyway.
  *  - meter_sources: the Red's front-panel meter bridge has never been observed.
- *  - stream_tx_ids/rx_ids: the per-channel CONFIG_PUSH burst is uncaptured, as on the 8PreX. Zero
- *    skips it.
  * The control plane therefore reaches userspace only through the FCP hwdep, and there is no
  * fcp-server map pair for this slug yet — see fcp-server-data/README.md.
  *

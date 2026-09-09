@@ -71,7 +71,7 @@ rather than registering a placeholder, and the error names which condition it sa
 mailbox, or one answering for itself and refusing. Replug or reload once the unit has settled.
 
 The driver used to carry the full vendor bring-up behind a `force_arm=1` parameter: a de-blobbed
-typed init table per model (a `CONFIG_PUSH` burst, subsystem enables, an 8 KB config sync, and
+typed init table per model (port-name reads, subsystem enables, an 8 KB config sync, and
 `SET_MIX` + `SET_MUX`), replayed against a virgin device. It was removed along with the four
 generated `arm_<model>.h` tables, on the working assumption that every unit in the field
 has been through Focusrite Control at least once and is therefore already armed. Nothing observed
