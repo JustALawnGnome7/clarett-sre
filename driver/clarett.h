@@ -349,6 +349,7 @@ struct snd_rawmidi_substream;
  * declare the TX/RX stream width; category 6 queries answer rate and clock state.
  */
 #define FCP_STREAM_INFO          0x007001
+#define CLARETT_SPEED_BANDS      3
 #define FCP_READ_SEG             0x800005
 #define FCP_INIT_2               0x000002
 #define FCP_CONFIG_PUSH          0x005000
@@ -458,21 +459,6 @@ struct clarett_model {
 						 * shrinks), so raising this just advertises the higher SET_CLOCK rates.
 						 * Gate per model: bump only after a hardware pitch-check confirms the data
 						 * plane (see the max_rate module param, which overrides this for testing). */
-	/*
-	 * ADAT S/MUX: the frame stays capture_channels wide at every rate, but the device stops WRITING the
-	 * ADAT channels that S/MUX removes (8 -> 4 -> 2 per port at single/double/quad speed). Those slots
-	 * are not silence, and blanking the ring once does not make them silent: the engine keeps writing a
-	 * sparse residue into them — one non-zero sample every 32 frames, an impulse train at roughly
-	 * -25 dBFS — and only into the channels dropped at the immediately preceding speed tier (channels
-	 * dropped a full tier earlier stay exactly zero). So the dead tail has to be blanked per period, on
-	 * the frames handed to ALSA; clarett_set_rx_live() latches the split at prepare and
-	 * clarett_rx_drain() does the blanking. These are the counts of leading capture channels the device
-	 * still writes at double and quad speed; the dead remainder is a contiguous tail on every model.
-	 * 0 = all channels live (no ADAT, or unknown). Derived from the [XML] <record-outputs> pin-m/pin-h
-	 * overrides, where "0x0" means the slot is gone at that speed and above.
-	 */
-	u8 rx_live_mid;				/* capture channels written at 88.2/96 kHz */
-	u8 rx_live_high;			/* capture channels written at 176.4/192 kHz */
 	const struct clarett_clock_src *clock_srcs;	/* selectable clock sources, Internal first */
 	u8 n_clock_srcs;
 	u32 stream_frag;			/* legacy engine-start probe only (uniform per-descriptor DMA bytes);
@@ -655,10 +641,26 @@ struct clarett {
 					 * is truthful before anything streams; lets userspace read the rate
 					 * with NO device traffic (fcp-server needs it to pick the per-rate
 					 * meter layout, and polling the mailbox for it would be gratuitous). */
+	/*
+	 * ADAT S/MUX: the frame stays capture_channels wide at every rate, but the device stops WRITING the
+	 * ADAT channels that S/MUX removes (8 -> 4 -> 2 per port at single/double/quad speed). Those slots
+	 * are not silence, and blanking the ring once does not make them silent: the engine keeps writing a
+	 * sparse residue into them — one non-zero sample every 32 frames, an impulse train at roughly
+	 * -25 dBFS — and only into the channels dropped at the immediately preceding speed tier (channels
+	 * dropped a full tier earlier stay exactly zero). So the dead tail has to be blanked per period, on
+	 * the frames handed to ALSA; clarett_set_rx_live() latches the split at prepare and
+	 * clarett_rx_drain() does the blanking.
+	 *
+	 * rx_live[band] is the count of leading capture channels the device still writes at that speed
+	 * band, read from the device at probe (STREAM_INFO's capture word per band; the dead remainder is
+	 * a contiguous tail on every model). A band the device would not answer falls back to the full
+	 * width.
+	 */
+	u8 rx_live[CLARETT_SPEED_BANDS];
 	u32 rx_live_bytes;		/* leading bytes of each capture frame the device fills at the negotiated
 					 * rate, and the S/MUX-removed tail after them. Latched at prepare from
-					 * clarett_model.rx_live_{mid,high}; the drain blanks the tail because the
-					 * engine still leaves a sparse residue there. 0 dead = full width. */
+					 * rx_live[]; the drain blanks the tail because the engine still leaves a
+					 * sparse residue there. 0 dead = full width. */
 	u32 rx_dead_bytes;
 	u32 irq_descs;			/* effective RX IRQ cadence (descriptors between markers); 0 = default 16.
 					 * dyn_period derives it from the negotiated ALSA period (clarett_irq_descs). */
