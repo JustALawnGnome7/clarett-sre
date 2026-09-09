@@ -36,7 +36,7 @@ acknowledgement, and characterize failures by their onset, not their endpoint.**
 **The driver never arms the device.** A unit that has been armed once self-arms across a power
 cycle — its config reads, input metering, and control writes all work with no host bring-up,
 because the arm state is flash-persisted. Probe waits for that session to answer
-(`clarett_detect_model()` polls `GET_7.1` for up to `wait_ready_ms`), detects the model from it,
+(`clarett_detect_model()` polls `STREAM_INFO` for up to `wait_ready_ms`), detects the model from it,
 and leaves the device's own routing untouched.
 
 A unit still waking from a cold power-up **cannot answer its first mailbox command**, and that
@@ -136,12 +136,12 @@ The entire Clarett Thunderbolt line shares PCI id `1cb5:0002` and presents a byt
 **pre-mailbox** surface — every MMIO register, config-space read, the fw-info header, and even
 the dummy serial are identical across models (verified on real 2Pre/4Pre/8PreX hardware). But
 from its flash-persisted (self-armed) state the device reports its own stream geometry:
-`GET_7.1{band 0}` answers `{u16 playback_channels, u16 capture_channels}`, a pair unique per
+`STREAM_INFO{band 0}` answers `{u16 playback_channels, u16 capture_channels}`, a pair unique per
 model (live-confirmed `(4,14)` 2Pre, `(8,20)` 4Pre, `(28,28)` 8PreX). Probe reads this directly
 to detect the model — no host bring-up needed, since the device self-arms from flash.
 
 **Detection is the only path — there is no override, by design.** The id_table's 2Pre exists
-only as a placeholder until `GET_7.1` answers; nothing model-dependent may be sized before that.
+only as a placeholder until `STREAM_INFO` answers; nothing model-dependent may be sized before that.
 If the device does not
 answer, or answers with a geometry no `clarett_model` claims, probe **fails with `-ENODEV` and
 registers no card**, logging the raw `playback=/capture=` pair. It does not fall back to a

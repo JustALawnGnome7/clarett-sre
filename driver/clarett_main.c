@@ -202,7 +202,7 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
  * checked across 2Pre/4Pre/8PreX captures), and there is no userspace shortcut either: the line is
  * entirely Thunderbolt 2, firmware-tunneled rather than enumerated as kernel-managed TB routers, so
  * no DROM device_name appears in sysfs. But the device reports its own stream geometry:
- * GET_7.1{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model — live-confirmed
+ * STREAM_INFO{band 0} answers {u16 playback_ch, u16 capture_ch}, unique per model — live-confirmed
  * (4,14) 2Pre and (8,20) 4Pre.
  *
  * Everything downstream is sized from c->model: channel counts, DMA ring and descriptor geometry,
@@ -214,7 +214,7 @@ static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, cla
  */
 
 /*
- * Ask the device who it is: GET_7.1{band 0} returns {u16 playback_ch, u16 capture_ch}
+ * Ask the device who it is: STREAM_INFO{band 0} returns {u16 playback_ch, u16 capture_ch}
  * (+16 more bytes, meaning open), a pair unique per model. Runs before the meter worker
  * starts, so nothing else touches resp_buf between the (landed-gated) completion and the parse.
  * Returns NULL if the query fails or the pair matches no known model.
@@ -242,17 +242,17 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 	*collapsed = false;
 
 	/*
-	 * GET_7.1's reply arrives by DMA, invisible in every MMIO trace — so a model's identity
+	 * STREAM_INFO's reply arrives by DMA, invisible in every MMIO trace — so a model's identity
 	 * pair is only trustworthy once read back from that model's live hardware (2Pre/4Pre are;
 	 * 8Pre/8PreX are XML-inferred). Instrument every early return with the raw response so a
 	 * first attach of an unconfirmed model pins the cause (transport vs. status vs. unmatched)
 	 * in one line, and surfaces the actual pair to fold back into the table.
 	 */
-	err = clarett_fcp(c, FCP_GET_71, &band0, 1);
+	err = clarett_fcp(c, FCP_STREAM_INFO, &band0, 1);
 	if (err) {
 		if (!quiet)
 			dev_warn(&c->pci->dev,
-				 "model auto-detect: GET_7.1 transport failed (%d)\n", err);
+				 "model auto-detect: STREAM_INFO transport failed (%d)\n", err);
 		*collapsed = true;	/* GET didn't complete at all — the path is dead */
 		return NULL;
 	}
@@ -264,7 +264,7 @@ static const struct clarett_model *clarett_detect_model(struct clarett *c, bool 
 	if (status != FCP_RESP_ERR_OK || size < 4) {
 		if (!quiet)
 			dev_warn(&c->pci->dev,
-				 "model auto-detect: GET_7.1 bad response (status=%u size=%u raw playback=%u capture=%u)\n",
+				 "model auto-detect: STREAM_INFO bad response (status=%u size=%u raw playback=%u capture=%u)\n",
 				 status, size, pb, cap);
 		*collapsed = true;	/* GET refused (status=3/size=0) while SETs pass — collapse */
 		return NULL;
@@ -443,10 +443,10 @@ static void clarett_error_probe(struct clarett *c)
 		{ "unknown opcode 0x0000ff",  0x0000ff,     { 0 }, 0 },
 		/* Opcode survey: the vendor's cold ladder got err=0 + real data on ALL of these. Does the
 		 * device answer ANY of them for us (err=0), or is everything denied? READ_SEG is the segment
-		 * "open" the vendor issues at seq 0; the GET_7/GET_6 are device queries; CONFIG_PUSH{id} is the
+		 * "open" the vendor issues at seq 0; STREAM_INFO/GET_6 are device queries; 0x005000{id} is the
 		 * per-id NAME query (vendor id 0x1e -> "ADAT 8"); GET_DATA{0xc8} hits the persistent appspace. */
 		{ "READ_SEG{0,8}",            FCP_READ_SEG, { 0,0,0,0,  8,0,0,0 }, 8 },
-		{ "GET_7.1{0}",               0x007001,     { 0 }, 1 },
+		{ "STREAM_INFO{0}",           FCP_STREAM_INFO, { 0 }, 1 },
 		{ "GET_6.2",                  0x006002,     { 0 }, 0 },
 		{ "CONFIG_PUSH{0x1e}",        0x005000,     { 0x1e, 0 }, 2 },
 		{ "GET_DATA{0xc8,8}",         FCP_GET_DATA, { 0xc8,0,0,0, 8,0,0,0 }, 8 },
@@ -2097,7 +2097,7 @@ static const struct clarett_model clarett_8prex = {
  * trace). Detected by its (4,14) geometry (clarett_detect_model). The PRE-mailbox surface really
  * is undifferentiated — every MMIO reg / config read / PCI config byte is identical to the 8PreX, and
  * these TB2 units expose no DROM device_name — which is why detection has to wait until the device is
- * armed enough to answer GET_7.1.
+ * armed enough to answer STREAM_INFO.
  * PCM uses the per-direction descriptor path (shared with the 8PreX): on hardware the engine dereferences
  * the ring base as a descriptor table (descriptor mode
  * is the engine's default and is not flipped by the stream-config FCP handshake we can replay). Asymmetric
@@ -2313,7 +2313,7 @@ static const struct clarett_model clarett_8pre = {
  * deliberately CONTROL-PLANE EMPTY. It shares PCI id 1cb5:0002 with every Clarett, so the id_table
  * already matches it and this entry exists purely so clarett_detect_model() stops refusing it.
  *
- * Geometry is HARDWARE-MEASURED: GET_7.1 answered playback=64 capture=60 on a real unit. The [XML]
+ * Geometry is HARDWARE-MEASURED: STREAM_INFO answered playback=64 capture=60 on a real unit. The [XML]
  * independently predicts exactly that — 64 <playback> elements, and 58 <record> + 2 <loopback> = 60
  * capture channels — which is the strongest confirmation available for a pair read out by DMA.
  *
@@ -2347,8 +2347,8 @@ static const struct clarett_clock_src red_8line_clock_srcs[] = {
 static const struct clarett_model red_8line = {
 	.name = "Red 8Line",
 	.slug = "red-8line",
-	.capture_channels = 60,			/* HW-MEASURED via GET_7.1; [XML] 58 record + 2 loopback agrees */
-	.playback_channels = 64,		/* HW-MEASURED via GET_7.1; [XML] 64 <playback> agrees */
+	.capture_channels = 60,			/* HW-MEASURED via STREAM_INFO; [XML] 58 record + 2 loopback agrees */
+	.playback_channels = 64,		/* HW-MEASURED via STREAM_INFO; [XML] 64 <playback> agrees */
 	/*
 	 * S/MUX, [XML] <record-outputs> pin-m/pin-h, same cascade rule as the Clarett models ("0x0" = gone
 	 * at that speed AND above). The Red differs in KIND, though: rather than simply losing channels it

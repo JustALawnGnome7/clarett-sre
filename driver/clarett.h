@@ -338,15 +338,17 @@ struct snd_rawmidi_substream;
 #define FCP_STREAM_COMMIT        FCP_SYNC_RATE
 
 /*
- * Firmware init-handshake opcodes, observed at device attach from the vendor app and not fully
- * decoded: CONFIG_PUSH registers config items by id (arms the config space so SET_DATA writes
- * actually reach hardware), and GET_6x/GET_7x/READ_SEG are version/identity queries.
+ * STREAM_INFO {u8 speed_band} -> {u16 playback_ch, u16 capture_ch, u32, u32}: the device's stream
+ * geometry at single (0), double (1) and quad (2) speed. The band-0 pair is unique per model and is
+ * what clarett_detect_model() keys on; the higher bands shrink by the channels ADAT S/MUX removes.
+ * The two trailing words are undecoded. A band past 2 is not an error: one model answers zeros,
+ * another repeats band 2.
  *
- * Probe no longer replays any of this — the device restores its own session from flash, so the
- * bring-up is a no-op on a configured unit. What survives is the subset the stream path still
- * needs: clarett_stream_handshake() re-issues CONFIG_PUSH and the GET_7.x queries at every arm,
- * and clarett_detect_model() uses GET_7.1's channel-count answer as the model identity.
+ * The other opcodes here are session-open queries the vendor issues at attach, not fully decoded:
+ * 0x005000 {u16 id} reads a fixed port-name string; 0x007002/0x007003 {u32 speed, u16 count}
+ * declare the TX/RX stream width; category 6 queries answer rate and clock state.
  */
+#define FCP_STREAM_INFO          0x007001
 #define FCP_READ_SEG             0x800005
 #define FCP_INIT_2               0x000002
 #define FCP_CONFIG_PUSH          0x005000
@@ -354,7 +356,6 @@ struct snd_rawmidi_substream;
 #define FCP_GET_61               0x006001
 #define FCP_GET_62               0x006002
 #define FCP_GET_70               0x007000
-#define FCP_GET_71               0x007001
 #define FCP_GET_72               0x007002
 #define FCP_GET_73               0x007003
 
