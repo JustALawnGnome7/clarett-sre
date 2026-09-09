@@ -849,9 +849,9 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 	 * arms and fails exactly as we do — 0x110=7, one period event, 0x110=0 + 0x100=0xf, retry —
 	 * four times over, then issues this batch, re-arms once, and the counter starts advancing.
 	 */
-	e_en1    = clarett_fcp(c, FCP_STREAM_ENABLE, NULL, 0);
+	e_en1    = clarett_fcp(c, FCP_SYNC_READ, NULL, 0);
 	e_en2    = clarett_fcp(c, FCP_GET_62, NULL, 0);
-	e_commit = clarett_fcp(c, FCP_STREAM_COMMIT, NULL, 0);
+	e_commit = clarett_fcp(c, FCP_SYNC_RATE, NULL, 0);
 
 	dev_dbg(&c->pci->dev,
 		 "stream-handshake: SET_CLOCK{%u,%u}=%d batch=%s(err=%d) "
@@ -1094,7 +1094,7 @@ int clarett_create_pcm(struct clarett *c)
 	 * it is; the ring/buffer detail here is bring-up instrumentation. */
 	dev_dbg(&c->pci->dev,
 		 "PCM registered (playback %uch / capture %uch, S32_LE @%u, bufs tx=%zu rx=%zu B @%pad)\n",
-		 c->model->playback_channels, c->model->capture_channels, CLARETT_PCM_RATE,
+		 c->model->playback_channels, c->model->capture_channels, CLARETT_DEFAULT_RATE,
 		 txbuf, rxbuf, &c->stream_dma);
 
 	return 0;

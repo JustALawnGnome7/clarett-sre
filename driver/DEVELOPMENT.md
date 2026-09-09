@@ -300,8 +300,7 @@ echo 'func clarett_stream_service +p' | sudo tee /sys/kernel/debug/dynamic_debug
 `-p` in place of `+p` turns them off again. To catch probe-time lines, pass it at load instead:
 `sudo make load ARGS="dyndbg='+p'"`.
 
-The remaining `dev_info` sites all sit behind an opt-in module parameter (`stream_probe`,
-`error_probe`, `seed_dump`, `resp_trace`, `tx_trace`), so
+The remaining `dev_info` sites all sit behind an opt-in module parameter (`error_probe`, `seed_dump`, `resp_trace`, `tx_trace`), so
 enabling one of those still prints at info as before.
 
 ## Module parameters
