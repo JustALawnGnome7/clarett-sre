@@ -335,7 +335,9 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
 - **Completion**: the handshake is the two phase bits in **`0x400`** (read-to-clear): **bit0 =
   request accepted**, **bit1 = response DMA landed**. bit1 is the gate for the trailing ack and for
   reading the response — the echo word at response offset 0 lands first and the payload tail trails
-  it by µs. Established over 10753 traced vendor commands (bit1 seen exactly once before every ack,
+  it by µs. **bit0 is ALSO raised once, with no command in flight, to acknowledge the response-buffer
+  address written at `0x410`/`0x414` (2-11 ms after the high word); no command is answered before it
+  (Sep 9 2026, `spec/provenance/clarett-address-ack-handshake.md`).** Established over 10753 traced vendor commands (bit1 seen exactly once before every ack,
   never twice) and hardware-confirmed; a native-speed capture caught `0x1` then `0x2` on successive
   reads, each read consuming what it returned. One vec0 interrupt per phase bit, or one carrying both.
 - **`0x100` is a SUMMARY register, not a per-vector cause block, and is NOT read-to-clear.** bit29
@@ -1365,46 +1367,36 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
-  routing untouched. **It waits `settle_ms` (30 s) BEFORE touching the device at all** — a cold attach
-  cannot answer and asking early wedges it unrecoverably (see the SOLVED entry below); `wait_ready_ms`
-  then bounds a backstop retry. If the device never answers, probe **fails loudly (`-ENODEV`, no card
-  registered)** instead of the old fake-2Pre placeholder — reload to retry.
-  - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
-    the Dock G4).** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
-    pre-mailbox init. **This is an observation, not a root cause.**
-    **Observed:** an in-probe first touch ~140 ms after enumeration fails reliably; a first touch at 1 s
-    or later has never failed. 3 s is margin over the only failing point measured, and is
-    **hardware-confirmed on the probe path** — `enabling device` 17:40:59.141 → model line
-    17:41:02.201, 3.06 s, first attempt. (That check mattered: every 1 s data point came from a manual
-    sysfs bind, and binds never fail, so it was not obvious the number transferred to the probe path.) When it fails, the
-    command completes (DONE raised) but never DMAs a response; the ack is correctly withheld (acking an
-    unlanded response is what caused the wall), and the device then answers that command in place of
-    every later one — stale `rseq`, blanket `err=3`. **Nothing recovers that**, which is why the fix is
-    a don't-touch window and not a retry.
-    **RULED OUT on hardware — do not retry any of these:**
-    | hypothesis | killed by |
-    |---|---|
-    | recover the wedge by retrying | tight polling at 2/10/180 s budgets; 25 s spacing; replaying the init every 5 s (13 attempts); both combined |
-    | reset the mailbox (`0x510`/`0x500` + DMA addr) | 38 resets, refused identically |
-    | the response is merely late | `resp_timeout_ms=3000`: 3.002 s elapsed with nothing, next command answered in 84 us |
-    | device wake time from power-up | a 1 s delay after enumeration passes 4/4 |
-    | unstable/flapping enumeration | 3/3 flapped runs PASSED |
-    **THE UNEXPLAINED ASYMMETRY — start here if it resurfaces:** a manual sysfs bind has **never** failed
-    (5/5, including at 1 s) while the automatic probe failed consistently with no settle. Same device,
-    same timing window, different invocation path. That is not a timing question.
-    - Every probe pays the wait, including a reload or sysfs rebind: unbinding disables the PCI device
-      (`clarett_remove` + devres) and re-enabling brings it back in whatever state a fresh attach is in.
-      An attempt to skip it for devices present at module load was **reverted** — a rebind 32 s after a
-      good registration failed on its first command, command register visibly going `0000 -> 0002`.
-    - **★ METHOD — six hypotheses died in one session, each killed by the next measurement.** Every
-      experiment varied HOW WE RETRY; none varied WHETHER WE TOUCH IT AT ALL, because the first attempt
-      looks free (on a warm device it always succeeds). Two ingredients were also tested only separately,
-      never together. And three drafted conclusions were withdrawn when the operator supplied a step
-      absent from the pasted log — a power cycle done to free a busy `rmmod`, and an `rmmod` that had
-      failed. **Reconstruct the operator's actions, not just the kernel log, before attributing a
-      recovery.** Also: **the rig cannot resolve this further** — manual power cycles, one run at a time,
-      on a chain that flaps unpredictably, cannot distinguish 4/4 from 4/5. Characterising the remaining
-      asymmetry needs scripted power control and run counts, not more one-off bisection.
+  routing untouched. **It waits for the device to ACKNOWLEDGE THE RESPONSE-BUFFER ADDRESS (`0x400`
+  bit 0 after the `0x414` write) before the first command** — see the SOLVED entry below; `settle_ms`,
+  `wait_ready_ms` and the 30 s re-init loop are gone. If the address is never acknowledged, or the
+  device never answers, probe **fails loudly (`-ENODEV`, no card registered)** — replug or reload.
+  - **★★★ COLD-ATTACH REFUSAL — SOLVED (Sep 9 2026, leah T480, 2Pre + 4Pre; full record in
+    `spec/provenance/clarett-address-ack-handshake.md`).** The device ACKNOWLEDGES the response-buffer
+    address: 2-11 ms after the `0x414` high-word write it raises `0x400` bit 0 with no command in
+    flight, and it will not answer a command sent before that. `clarett_hw_init()` used to sleep a
+    fixed 3.22 ms there (copied from the vendor trace gap, which was the vendor host's interrupt
+    landing, not a pause) — that covers a warm device (2-3 ms) and misses a cold one (3-4 ms after a
+    few seconds off, ~10 ms after 7 s or more). `clarett_program_resp_addr()` now waits for the bit
+    (`CLARETT_ADDR_ACK_MS` = 500) and fails the probe on timeout. **Seven cold power-ups on two models
+    then detected on the first command with no settle and no retry.**
+    - **It was in the traces all along:** every attach capture (12 of 12, four Claretts + the Red) has
+      the same interrupt sweep with `0x400 = 0x1` between the `0x414` write and the first doorbell.
+    - **One variable per run, with negative controls (4Pre, sysfs rebinds):** nothing written → no bit
+      in 5 s; low word alone → none; high word → arrives every time; rewrite → arrives again; response
+      buffer untouched (status interrupt, not DMA). A `STREAM_INFO` sent 0 or 1 ms after the write:
+      "accepted but unanswered" then "response never landed", 6/6 — **the cold-attach signature
+      reproduced on a warm device in under a second.** The "accepted" was the address acknowledgement
+      satisfying the command's accept wait.
+    - **Every earlier claim in this entry is retired:** "nothing recovers it" (a re-init that WAITS
+      recovers it; every recorded failed recovery re-sent the command inside the window), "manual bind
+      never fails, probe does — not a timing question" (it was exactly timing), and the RULED OUT table
+      (all of those varied how to retry, none waited for the acknowledgement). The Thunderbolt DROM
+      identifies the model on hosts that enumerate it (leah: `device_name` Clarett2Pre/4Pre, DROM
+      device 0xd/0xc) — the "nothing identifies it pre-mailbox" claim was about the PCI function only.
+    - **Method:** for each write in an attach sequence ask what the device does IN RESPONSE to it, and
+      read the interrupt sweep after it as an answer, not as noise. Reproduce a "cold" fault warm by
+      racing the window before spending power cycles on it.
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:

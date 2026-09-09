@@ -35,40 +35,30 @@ acknowledgement, and characterize failures by their onset, not their endpoint.**
 
 **The driver never arms the device.** A unit that has been armed once self-arms across a power
 cycle — its config reads, input metering, and control writes all work with no host bring-up,
-because the arm state is flash-persisted. Probe waits for that session to answer
-(`clarett_detect_model()` polls `STREAM_INFO` for up to `wait_ready_ms`), detects the model from it,
+because the arm state is flash-persisted. Probe runs the pre-mailbox init, waits for the device to
+acknowledge the response-buffer address, asks `STREAM_INFO` once, detects the model from the answer,
 and leaves the device's own routing untouched.
 
-A unit still waking from a cold power-up **cannot answer its first mailbox command**, and that
-failure is self-perpetuating: the command completes (DONE raised) but never DMAs a response, so the
-trailing ack is withheld — as it must be, since acking an unlanded response is what caused the
-manifestation wall — and the device is left holding it unretired, answering it in place of every
-later command. **Nothing recovers it** — not tight polling, not 25 s spacing, not replaying the init
-every 5 s; all were tried and all fail.
+**The address acknowledgement is the readiness handshake.** After the high word of the response
+DMA address is written to `0x414`, the device raises `0x400` bit 0 — the same bit that later means
+"request accepted" per command — and it will not answer a command sent before that. It arrives
+2-3 ms after a warm rebind, 3-4 ms after a power-off of a few seconds, and about 10 ms after the
+unit has been off for 7 s or more. `clarett_program_resp_addr()` waits for it with a
+`CLARETT_ADDR_ACK_MS` (500 ms) bound and fails the probe with `-ENODEV` if it never comes. A
+`dev_dbg` line reports the measured latency.
 
-So the driver does not ask early. `settle_ms` (default 3 s) leaves the device **untouched** after
-attach, before even the pre-mailbox init.
+How this was established, one variable per run on a 2Pre and a 4Pre: no bit 0 in a 5 s window with
+nothing written; none after the low word alone; bit 0 after the high word every time; a rewrite
+raises it again; the response buffer stays untouched, so it is a status interrupt, not a DMA. A
+`STREAM_INFO` sent 0 or 1 ms after the write was "accepted" (that acknowledgement, misread by the
+command's wait) and never answered, 6 of 6 — the cold-attach refusal in full — and the same command
+after the wait was answered on 7 of 7 cold power-ups with no settle and no retry. Every vendor trace
+shows the same interrupt landing between the address write and the first command; the driver used
+to sleep 3.22 ms there, which covers the warm case and misses the cold one by a factor of three.
 
-**This is an observation, not a diagnosis.** An in-probe first touch ~140 ms after enumeration fails
-reliably; a first touch at 1 s or later has not failed in any run. 3 s is margin over the only
-failing point ever measured. The mechanism is not established, and a long list of plausible ones has
-been eliminated on hardware — recovering the wedge by retrying (tight polling at 2/10/180 s budgets,
-25 s spacing, replaying the init every 5 s, and both combined), resetting the mailbox via
-`0x510`/`0x500` plus the DMA address, raising the response deadline to 3 s, device wake time from
-power-up (a 1 s delay passes 4/4), and unstable enumeration (3/3 flapped runs passed). None of those
-is worth retrying.
-
-One asymmetry is unexplained and is where to resume: a manual sysfs bind has never failed, 5/5
-including at 1 s, while the automatic probe failed consistently with no settle — same device, same
-timing window, different invocation path.
-
-Every probe pays the wait, including a reload or sysfs rebind, since unbinding disables the PCI
-device and re-enabling brings it back in whatever state a fresh attach is in. `settle_ms=0` skips the wait when you know the device has been up and
-untouched.
-
-If it still has not answered when the budget expires, probe **fails loudly** (`-ENODEV`, no card)
-rather than registering a placeholder, and the error names which condition it saw — a wedged
-mailbox, or one answering for itself and refusing. Replug or reload once the unit has settled.
+If the address is acknowledged but the first command is still not answered, probe **fails loudly**
+(`-ENODEV`, no card) rather than registering a placeholder, and the error names which condition it
+saw — a wedged mailbox, or one answering for itself and refusing. Replug or reload to retry.
 
 The driver used to carry the full vendor bring-up behind a `force_arm=1` parameter: a de-blobbed
 typed init table per model (port-name reads, subsystem enables, an 8 KB config sync, and
@@ -317,16 +307,6 @@ The operationally relevant ones:
   double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to
   test double/quad speed on a not-yet-confirmed model — the stream width is rate-independent, so verify
   with a known tone (correct pitch on the analogue channel) before trusting a rate on an ADAT model.
-- `wait_ready_ms` (default 100000, runtime-writable) — total budget for the readiness retry at
-  probe, which leaves the device untouched for `CLARETT_READY_RETRY_MS` (30 s), then replays the
-  pre-mailbox init and asks once. A
-  warm device answers the first attempt in ~90 us and never spends any of it; the budget exists
-  for a unit still waking from a cold power-up, which does not latch the init and cannot answer.
-  **The budget only works with both the quiet and the init replay** — mailbox retries alone
-  recover nothing (2 s, 10 s, 180 s tight polling, 25 s spacing), and init replays alone recover
-  nothing (13 attempts at 5 s).
-  Probe is asynchronous so the worst case does not stall the PCI hotplug worker. Writable at runtime because it is read only inside probe and a Thunderbolt device
-  re-probes on every power cycle, so a write applies to the next attach without needing a reload.
 - `resp_timeout_ms` (default 100, runtime-writable) — deadline for one command's response DMA to
   land before the trailing ack is withheld. Diagnostic; raising it does not rescue a wedged
   mailbox (measured: a 3 s deadline elapsed with nothing while the next command answered in 84 us).

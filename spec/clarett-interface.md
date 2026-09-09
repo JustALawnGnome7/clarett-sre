@@ -89,7 +89,9 @@ returned by DMA into a host-allocated buffer.
 | `0x8000`–`0x801f` | Read-only firmware-info header                                |
 | `0x8020`          | FCP request mailbox (header + data)                           |
 
-`0x400` is a 2-bit command-phase register, not an event queue. The data-plane ring
+`0x400` carries the two command-phase bits (bit 0 accepted, bit 1 response landed)
+plus asynchronous device events in bits 2 and up. Bit 0 is also raised once, with no
+command in flight, to acknowledge the response-buffer address (§2.3). The data-plane ring
 blocks that share the `0x200`/`0x300` bases are detailed in §4.1, and the MIDI UART
 in §5; both are listed here only so the map is complete.
 
@@ -113,7 +115,13 @@ reply to its request.
 
 GET responses do **not** appear in the BAR. The host allocates a response buffer,
 programs its bus address into `0x410`/`0x414`, and the device DMAs each response
-there. The response begins with a 16-byte echoed FCP header (echoed `cmd` at
+there. **The device acknowledges the address**: 2-11 ms after the `0x414` write it
+raises `0x400` bit 0 (one MSI on vector 0), and it will not answer a command sent
+before that. Measured 2-3 ms on a warm device, 3-4 ms after a power-off of a few
+seconds, and about 10 ms after 7 s or more off. The acknowledgement carries no DMA;
+the buffer is untouched. Writing the low word alone does not raise it; rewriting the
+address raises it again. A host waits for this bit (a few hundred ms is ample) and
+only then sends its first command. The response begins with a 16-byte echoed FCP header (echoed `cmd` at
 `+0`, echoed `seq`); response data follows at `+16`. For a `GET_DATA{off, len}`
 the returned bytes satisfy `resp[16 + i] == config[off + i]`.
 
@@ -675,14 +683,21 @@ the model, and starts using it.
 
 ### 6.1 Readiness
 
-The session is not necessarily live the instant the PCIe function appears: a cold
-Thunderbolt attach can race it, and the first command's response may not land. The
-host polls an identity query (§6.2) until it answers, and only then treats the
-device as present. A budget of ~2 s covers the observed worst case; a device that
-never answers is not usable and should be refused rather than assumed.
+The device signals readiness itself: the response-buffer address acknowledgement
+(§2.3). A host programs `0x410`/`0x414`, waits for `0x400` bit 0, and then sends its
+first command, which is answered. Seven cold power-ups on two models were detected on
+the first command with no other delay.
 
-This readiness race is the sole cause of a device that appears "unarmed". Replaying
-the vendor initialisation does **not** rescue it — only waiting does.
+A command sent before the acknowledgement is not answered. Its accept wait is
+satisfied by the acknowledgement itself, so the failure presents as "accepted but no
+response", and the next command is not answered either. Rewriting the address and
+waiting for the acknowledgement recovers it. Nothing else does: retrying the command,
+resetting `0x510`/`0x500`, or waiting longer for the response were all tried and all
+fail, because none of them re-arms the address.
+
+This is the sole cause observed of a device that appears "unarmed" or "not ready". A
+device that does not acknowledge the address within a few hundred ms is not usable and
+should be refused rather than assumed.
 
 ### 6.2 Model identification
 

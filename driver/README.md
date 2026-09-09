@@ -235,11 +235,10 @@ sudo rm /var/lib/alsa/asound.state          # only if no other card needs it
   tracks correctly.
 - **No per-output mute** — the hardware has none (only master Mute/Dim, reaching the outputs
   that opt in).
-- **Rarely, no card appears right after a cold Thunderbolt attach** — if the driver loads before
-  the interface has finished coming up, it waits briefly and, if the device still isn't
-  responding, refuses to register rather than come up half-working (it logs *"device did not
-  become ready"*). Just reload the module (`sudo make unload && sudo make load`) — the
-  device settles within a moment.
+- **If no card appears after an attach**, the kernel log names why: the driver refuses to
+  register rather than come up half-working when the device does not acknowledge its response
+  buffer or does not answer its first command. Replug the interface or reload the module
+  (`sudo make unload && sudo make load`).
 
 ## How it works / contributing
 
