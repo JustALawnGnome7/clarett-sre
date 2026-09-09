@@ -295,11 +295,17 @@ struct snd_rawmidi_substream;
  * PERSISTS while nothing is streaming and across a driver reload. Probe seeds cur_rate from it so
  * /proc/asound/cardN/clarett is truthful before the first stream.
  *
- * FCP_SYNC_READ is NOT the clean 0/1 lock flag its name suggests: it returns 1 or 3 depending on model
- * and stream state (a 2Pre and 4Pre read 3 while streaming at 48 kHz where an 8Pre and 8PreX read 1),
- * so it looks like a bitfield whose upper bit is undecoded. fcp-server collapses it with !!, which is
- * why the exposed "Sync Status" is still sane. Suspected cause of that control being unreliable as a
- * clock-source probe on the 8PreX.
+ * FCP_SYNC_READ is NOT the clean 0/1 lock flag its name suggests: bit0 is the lock, and bit1 is set
+ * on its own while the clock is in transition. Measured on a 4Pre by polling it every ~23 ms after a
+ * SET_CLOCK: selecting an absent S/PDIF source reads 1 at 1 ms, 2 at ~23 ms, then 0 from ~46 ms on;
+ * selecting Internal reads 0 until ~90 ms, then 1. A 2Pre and 4Pre also read 3 while streaming at
+ * 48 kHz where an 8Pre and 8PreX read 1. The device raises the sync-change notification (0x400 bit3)
+ * ~14 ms after SET_CLOCK on the way to Unlocked, inside the bit1-only window, so a reader that
+ * re-reads on the notification and collapses the value with !! (fcp-server) sees 2 and reports
+ * Locked; on the way to Locked the notification arrives ~84 ms after the command, once bit0 is
+ * already set, so that direction reads correctly. Only bit0 should be reported as the lock. No
+ * notification follows a change between two unlocked sources (S/PDIF to ADAT with neither present),
+ * so the bit tracks the lock state, not the selection.
  */
 #define FCP_SYNC_READ            0x006004   /* lock status bitfield */
 #define FCP_SYNC_RATE            0x006005   /* u32 rate, live */

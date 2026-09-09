@@ -1237,6 +1237,22 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     control inert on any desktop (Sep 9 2026, 4Pre):** PipeWire holds a PCM open permanently, so the arm
     never came and the device was never told — the control read S/PDIF while Sync Status stayed Locked with
     nothing connected. The "re-clocking mid-stream tears audio" premise for the deferral was never measured.
+    **Hardware-confirmed fixed (Sep 9 2026, 4Pre, PipeWire streaming throughout):** a fresh fcp-server read
+    after selecting S/PDIF shows Unlocked, Internal restores Locked, in every leg (streaming, idle, re-arm).
+    The stream stays `RUNNING` with `hw_ptr` advancing either way — the DMA engine is host-serviced, so
+    the ALSA side cannot show whether the converters went quiet; that needs a listening check.
+    **★ REMAINING BUG IS IN fcp-server, NOT THE DRIVER — `Sync Status` reads Locked after an unlock because
+    of a race with the sync-change notification.** Measured with `tools/fcp_cmd` polling `SYNC_READ`
+    (`0x006004`) every ~23 ms after a `SET_CLOCK` (fcp-server stopped): on the way to Unlocked the reply
+    goes `1 → 2 (~23 ms) → 0 (from ~46 ms)` and the `0x8` notification lands ~14 ms after the command,
+    inside the `2` window; on the way to Locked it goes `0 → 1 (~90 ms)` and the notification lands
+    ~84 ms after the command, once bit0 is already set. fcp-server re-reads on the notification and
+    collapses the value with `!!`, so `2` becomes Locked and, with no further notification, stays there.
+    bit0 is the lock; bit1 alone is a transition state. Fix belongs in `fcp_sync_read()` (fcp-support
+    `server/fcp.c`): report `buf & 1`, not `!!buf`. Also observed: no notification at all for S/PDIF → ADAT
+    with neither present, so bit3 tracks the lock state, not the selection. `fcp-server@N` is
+    `BindsTo=dev-snd-controlC%i.device` with `Restart=on-failure` — stop it in the SAME shell as any
+    bench-tool run, or the hwdep reads back `Device or resource busy`.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
     parameter would have slaved both. It is **not a config-space byte** — `<clocking>` has
