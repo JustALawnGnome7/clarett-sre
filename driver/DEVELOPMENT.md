@@ -300,8 +300,8 @@ echo 'func clarett_stream_service +p' | sudo tee /sys/kernel/debug/dynamic_debug
 `-p` in place of `+p` turns them off again. To catch probe-time lines, pass it at load instead:
 `sudo make load ARGS="dyndbg='+p'"`.
 
-The remaining `dev_info` sites all sit behind an opt-in module parameter (`error_probe`, `seed_dump`, `resp_trace`, `tx_trace`), so
-enabling one of those still prints at info as before.
+The remaining `dev_info` sites all sit behind an opt-in module parameter (`resp_trace`,
+`tx_trace`), so enabling one of those still prints at info as before.
 
 ## Module parameters
 
@@ -331,12 +331,6 @@ The operationally relevant ones:
   land before the trailing ack is withheld. Diagnostic; raising it does not rescue a wedged
   mailbox (measured: a 3 s deadline elapsed with nothing while the next command answered in 84 us).
 
-A few parameters are A/B levers retained from localizing the control-plane crossing —
-`legacy_mbox_cycle`, which reproducibly re-creates the wall and is therefore the negative
-control for re-verifying the gated ack on new hardware, and `premailbox_reads`, which still has
-an observable effect on the device. Their `MODULE_PARM_DESC` strings carry the detail. The rest
-were removed once the questions they tested were settled; git history has them if one reopens.
-
 ## Settings persistence (internals)
 
 The device owns its settings — they live in the interface's NVRAM and survive power cycles,
@@ -363,6 +357,5 @@ in-kernel scarlett2 / 4th-gen Scarlett policy.
   correctly. This is the device's host-authored appspace behaviour (the same reason `alsactl`
   restore fights it), not a driver bug; there is no reliable read of the true preamp state on a
   fresh boot from this region. The hardware is always correct — the mismatch is display-only and
-  self-heals on first touch. Diagnostic levers for any future dig: `seed_dump=1` (one-shot full
-  `[0,256)` shadow dump at probe) and `put_trace=1` (log each control write's offset/value).
+  self-heals on first touch.
 - Single-card only; no module params for index/id.

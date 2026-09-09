@@ -33,19 +33,6 @@
 static void clarett_build_rings(struct clarett *c);	/* rebuilt at prepare when dyn_period changes cadence */
 
 /*
- * Replay the vendor's pre-arm re-init batch in the stream handshake (see clarett_stream_handshake).
- * TESTED ON A 4Pre AND IT CHANGES NOTHING: the device accepts every command (err=0) but the engine
- * still raises one period event with ctr=0. Default OFF because it overlaps the probe-time bring-up
- * that is documented to wedge GET_DATA when re-run on an armed device, and it has no demonstrated
- * benefit to weigh against that. Kept as a lever for retesting on other models.
- */
-static bool stream_batch;
-module_param(stream_batch, bool, 0644);
-MODULE_PARM_DESC(stream_batch,
-		 "Replay the vendor's pre-arm re-init batch (INIT_2, subsystem enables 1-8, count "
-		 "queries, 0x004001 x6) before arming the stream engine (default off; no effect on a 4Pre).");
-
-/*
  * dyn_period: derive the RX IRQ cadence from the negotiated ALSA period instead of the fixed 256-frame
  * default, so a DAW can pick a smaller device buffer (down to one 16-frame fragment). It rebuilds the
  * descriptor ring at a finer marker cadence; both directions are locked to one period (option a: DAWs use a
@@ -803,7 +790,7 @@ static int clarett_pcm_hw_free(struct snd_pcm_substream *ss)
 static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 {
 	u8 clk[8];
-	int e_clk, e_en1, e_en2, e_commit, batch_err = 0, i;
+	int e_clk, e_en1, e_en2, e_commit;
 	int clk_src = clarett_clock_source(c);
 
 	if (!rate)
@@ -814,50 +801,14 @@ static void clarett_stream_handshake(struct clarett *c, unsigned int rate)
 
 	e_clk = clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk));
 
-	/*
-	 * The vendor's pre-arm RE-INIT batch (from a 4Pre boot-to-stream capture). Our engine
-	 * state at arm is byte-identical to the vendor's — its failing arms read 0x218=0xe
-	 * 0x21c=0xd->0xe 0x318=0x3 0x31c=0x3 and so do we — and it arms and stalls exactly as we do
-	 * four times over. What it does differently is issue this batch, then re-arm once, after
-	 * which the 0x300 counter advances. The commands look like a subset of probe-time bring-up
-	 * (subsystem enables + count queries), re-issued per stream start; semantics are not decoded,
-	 * so this is a verbatim replay. ids 1..8 and idx 0..5 are as observed on the 4Pre.
-	 */
-	if (stream_batch) {
-		static const u32 count_queries[] = { 0x001000, 0x002000, 0x003000, 0x004000 };
-		u8 arg[4];
-
-		clarett_fcp(c, FCP_INIT_2, NULL, 0);
-		for (i = 1; i <= 8; i++) {
-			arg[0] = i; arg[1] = 0;
-			batch_err |= clarett_fcp(c, FCP_INIT_1, arg, 2);
-		}
-		clarett_fcp(c, FCP_INIT_2, NULL, 0);
-		for (i = 0; i < (int)ARRAY_SIZE(count_queries); i++)
-			batch_err |= clarett_fcp(c, count_queries[i], NULL, 0);
-		for (i = 0; i < 6; i++) {
-			clarett_put_le32(arg, i);
-			batch_err |= clarett_fcp(c, 0x004001, arg, 4);
-		}
-	}
-
-	/*
-	 * The pre-arm triple, in the vendor's order: 0x6004, 0x6002, 0x6005 — NOT 0x6004 twice.
-	 * Every occurrence of these opcodes in the 4Pre boot-to-stream capture is that triple (sometimes
-	 * doubled for full duplex, which is where the old "VM issues twice" note came from), and the
-	 * triple at 21:58:18.70 is what immediately precedes the one arm that streams: the vendor
-	 * arms and fails exactly as we do — 0x110=7, one period event, 0x110=0 + 0x100=0xf, retry —
-	 * four times over, then issues this batch, re-arms once, and the counter starts advancing.
-	 */
+	/* The pre-arm triple, in the vendor's order: 0x6004, 0x6002, 0x6005 (see FCP_SYNC_READ). */
 	e_en1    = clarett_fcp(c, FCP_SYNC_READ, NULL, 0);
 	e_en2    = clarett_fcp(c, FCP_GET_62, NULL, 0);
 	e_commit = clarett_fcp(c, FCP_SYNC_RATE, NULL, 0);
 
 	dev_dbg(&c->pci->dev,
-		 "stream-handshake: SET_CLOCK{%u,%u}=%d batch=%s(err=%d) "
-		 "0x6004=%d 0x6002=%d 0x6005=%d\n",
-		 rate, clk_src, e_clk, stream_batch ? "yes" : "off", batch_err,
-		 e_en1, e_en2, e_commit);
+		 "stream-handshake: SET_CLOCK{%u,%u}=%d 0x6004=%d 0x6002=%d 0x6005=%d\n",
+		 rate, clk_src, e_clk, e_en1, e_en2, e_commit);
 }
 
 /*

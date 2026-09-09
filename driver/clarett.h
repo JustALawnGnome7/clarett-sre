@@ -311,29 +311,12 @@ struct snd_rawmidi_substream;
  * The two trailing words are undecoded. A band past 2 is not an error: one model answers zeros,
  * another repeats band 2.
  *
- * The other opcodes here are session-open queries the vendor issues at attach, not fully decoded;
- * the category 6 ones answer rate and clock state.
+ * 0x006002 {} -> {u32 rate, u16 source, u16 source}: the current rate and clock source. The vendor
+ * issues it immediately after SET_CLOCK and again in the pre-arm triple.
  */
 #define FCP_STREAM_INFO          0x007001
 #define CLARETT_SPEED_BANDS      3
-#define FCP_READ_SEG             0x800005
-#define FCP_INIT_2               0x000002
 #define FCP_GET_62               0x006002
-#define FCP_INIT_1               0x000001
-
-/*
- * 0x000001 is also the CAPABILITY READ: {u16 category} -> one byte, non-zero = that opcode category
- * is live on this session. fcp-server calls it first and refuses the device unless INIT (0x000) and
- * DATA (0x800) both answer non-zero, so it is the authoritative "is the session really up?" test.
- * The driver itself does not run it: probe waits for the identity query to answer instead, which is
- * the same evidence one command earlier. A capability-dump bench tool dumps every category, and is
- * what distinguishes a device that never came up from one whose session collapsed (a collapsed
- * session denies DATA while a DATA-category read is still answering — the self-contradiction is
- * the tell).
- */
-#define FCP_CAP_READ             FCP_INIT_1
-#define FCP_CAT_INIT             0x000
-#define FCP_CAT_DATA             0x800
 
 /*
  * Per-model descriptor (multi-model support). One const instance per supported
