@@ -93,25 +93,26 @@ MODULE_PARM_DESC(max_rate,
 		 "0 (default) uses each model's hardware-confirmed cap. 44.1 and 48 kHz are always offered.");
 
 /*
- * Clock source sent with SET_CLOCK at each stream arm: 24=Internal, 0=ADAT, 3=S/PDIF on every model
- * (the 2Pre XML claims 4 for S/PDIF; measured, 4 locks to any external source and 3 is the one that
- * tracks S/PDIF alone — see clarett.h). The 8PreX alone adds 1=ADAT 2 and 2=Wordclock, both untested.
- * Default Internal. Set to 0 to slave to an incoming ADAT clock (needed to receive a digital ADAT input
- * cleanly). The source is NOT a config-space byte — it lives only in the SET_CLOCK payload — so it
- * cannot be mapped as an fcp-server global control, and there is no clock-source ALSA control yet.
+ * Clock source sent with SET_CLOCK at each stream arm and whenever the "Clock Source" control changes:
+ * 24=Internal, 0=ADAT, 3=S/PDIF on every model (the 2Pre XML claims 4 for S/PDIF; measured, 4 locks to
+ * any external source and 3 is the one that tracks S/PDIF alone — see clarett.h). The 8PreX alone adds
+ * 1=ADAT 2 and 2=Wordclock, both untested. Default Internal. Set to 0 to slave to an incoming ADAT clock
+ * (needed to receive a digital ADAT input cleanly). The source is NOT a config-space byte — it lives
+ * only in the SET_CLOCK payload — so it cannot be mapped as an fcp-server global control; the ALSA
+ * control below is the driver's own.
  *
  * PER-CARD, indexed by ALSA card number (the one /proc/asound/cards shows), because a two-card rig needs
  * one master and one slave: feeding one Clarett's ADAT output into another's input requires the source
  * card on Internal and the sink card on ADAT, and a scalar parameter would slave both. Writable at
- * runtime; takes effect at the next stream arm. The negotiated PCM rate must match the external clock's
- * rate when the source is not Internal.
+ * runtime; a sysfs write takes effect at the next stream arm, a control write immediately. The
+ * negotiated PCM rate must match the external clock's rate when the source is not Internal.
  */
 static int clock_source[SNDRV_CARDS] = { [0 ... SNDRV_CARDS - 1] = CLARETT_CLOCK_INTERNAL };
 /* NULL count, not a &num: with a count the sysfs read shows only the entries explicitly set at load
  * (nothing at all by default), which makes the live setting unreadable. NULL shows the whole array. */
 module_param_array(clock_source, int, NULL, 0644);
 MODULE_PARM_DESC(clock_source,
-		 "Per-card SET_CLOCK source at stream arm, indexed by ALSA card number: 24=Internal "
+		 "Per-card SET_CLOCK source, indexed by ALSA card number: 24=Internal "
 		 "(default), 0=ADAT, 3=S/PDIF (8PreX also has 1=ADAT 2, 2=Wordclock). PCM rate must match "
 		 "the external clock when not Internal.");
 
@@ -190,6 +191,8 @@ static int clarett_clock_src_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_
 	struct clarett *c = snd_kcontrol_chip(kctl);
 	const struct clarett_model *m = c->model;
 	unsigned int i = ucontrol->value.enumerated.item[0];
+	u32 rate = READ_ONCE(c->cur_rate) ? READ_ONCE(c->cur_rate) : CLARETT_DEFAULT_RATE;
+	u8 clk[8];
 	int value;
 
 	if (i >= m->n_clock_srcs)
@@ -201,21 +204,18 @@ static int clarett_clock_src_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_
 	clarett_set_clock_source(c, value);
 
 	/*
-	 * Apply it now if nothing is streaming, so Sync Status reflects the choice immediately instead of
-	 * waiting for the next stream arm — that is what makes the drop-down feel live in the GUI. The rate
-	 * here is nominal (nothing is streaming); the arm sends the negotiated one. While a stream IS
-	 * running we deliberately do not touch the device: re-clocking mid-stream would tear the audio, so
-	 * the change lands at the next arm.
+	 * Apply it immediately, streaming or not, at the rate the device is running. A desktop holds a PCM
+	 * open permanently (PipeWire adopts the card), so deferring the change to the next stream arm would
+	 * leave the control accepting values the device never sees. Selecting an absent external source
+	 * while streaming is expected to drop Sync Status to Unlocked and disturb the audio: that is the
+	 * device reporting the truth, which is the point of the control. The arm re-sends the stored source
+	 * with the negotiated rate, so the selection also survives the next open.
 	 */
-	if (!READ_ONCE(c->stream_on)) {
-		u8 clk[8];
-
-		clarett_put_le32(clk, CLARETT_DEFAULT_RATE);
-		clarett_put_le32(clk + 4, value);
-		if (clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk)))
-			dev_dbg(&c->pci->dev, "clock source %s: SET_CLOCK failed\n",
-				m->clock_srcs[i].name);
-	}
+	clarett_put_le32(clk, rate);
+	clarett_put_le32(clk + 4, value);
+	if (clarett_fcp(c, FCP_SET_CLOCK, clk, sizeof(clk)))
+		dev_dbg(&c->pci->dev, "clock source %s: SET_CLOCK failed\n",
+			m->clock_srcs[i].name);
 	return 1;
 }
 
@@ -233,8 +233,6 @@ int clarett_add_clock_control(struct clarett *c)
 		return 0;
 	return snd_ctl_add(c->card, snd_ctl_new1(&clarett_clock_src_ctl, c));
 }
-
-
 
 /*
  * Per-ring geometry is derived per-model at runtime (clarett.h: clarett_pcm_rx_samples() &c.). The ALSA

@@ -1228,8 +1228,11 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `{rate, source}` while fcp-server has no notion of the sample rate — the same gap that blocks the
     per-rate meter fix. The driver already sends SET_CLOCK at every arm and knows the rate, so it owns this.
     Backed by the `clock_source[]` module param, so control and sysfs are ONE value (a sysfs write bypasses
-    the control's change notification). Changing it while idle sends SET_CLOCK immediately so Sync Status
-    updates live; while streaming the change is deferred to the next arm rather than re-clocking mid-stream.
+    the control's change notification). A control write sends `SET_CLOCK{cur_rate, value}` immediately,
+    streaming or not. **It used to defer the change to the next arm while a stream was open, which made the
+    control inert on any desktop (Sep 9 2026, 4Pre):** PipeWire holds a PCM open permanently, so the arm
+    never came and the device was never told — the control read S/PDIF while Sync Status stayed Locked with
+    nothing connected. The "re-clocking mid-stream tears audio" premise for the deferral was never measured.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
     parameter would have slaved both. It is **not a config-space byte** — `<clocking>` has
