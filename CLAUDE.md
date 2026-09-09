@@ -656,6 +656,13 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
   copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +
   systemd template) still installs from fcp-support (`sudo make install` there).
+  **An fcp-support checkout that carries copies of the Clarett maps in its `data/` overwrites ours on
+  every `make install` there** (leah's does, Sep 9 2026). The symptom is userspace-only and looks like a
+  driver fault: the maps' `notify-client` masks revert to the wildcard-era `1`, fcp-server's
+  `notification & notify_client` test drops the real `0x400000` word, and the front-panel knob stops
+  tracking while the driver logs every event relayed. Check
+  `grep -o '"notify-client": [0-9]*' /usr/local/share/fcp-server/fcp-devmap-clarett-*.json` shows
+  `6291456`, and run this repo's `sudo make install` after any fcp-support install.
 - **PREFIX is `/usr/local` everywhere — don't qualify it.** fcp-support and alsa-scarlett-gui both
   default there, and this repo's Makefile now matches, so a bare `sudo make install` in each of the
   three is correct and consistent. The prefix must agree because fcp-server compiles its DATADIR in
