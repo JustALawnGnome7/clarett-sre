@@ -61,49 +61,6 @@ MODULE_PARM_DESC(tx_trace,
  * NOT fall back to a placeholder — that masked a not-ready device as a working card. It fails loudly.
  */
 
-/*
- * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
- * alignment by 8 bytes per 4 KB page — LCM(0x380 fragment, 4096 page) = 28672 B = 512 frames — because our
- * RX buffer was ONE contiguous coherent region, so the engine streamed across fragment boundaries and the
- * page drift accumulated. Giving each RX fragment its own page-safe SLOT (a power of two, so it divides the
- * page) over a page-aligned area makes every fragment page-contained, forcing per-fragment DMA like the
- * vendor's scatter-gather. HARDWARE-CONFIRMED on the 2Pre: slot 0x400 -> channels 2-13 silent, ch0 a clean
- * dropout-free tone, engine clocks normally. Default (-1) = auto = roundup_pow_of_two(fragment). 0 = the old
- * contiguous layout (drifts — kept for A/B). >0 = fragment audio bytes + this many (manual experiment).
- */
-static int rx_frag_pad = -1;
-module_param(rx_frag_pad, int, 0444);
-MODULE_PARM_DESC(rx_frag_pad,
-		 "RX fragment slot: -1 = auto page-safe pow2 (default, fixes the even-channel drift), "
-		 "0 = contiguous (old, drifts), >0 = audio bytes + this padding (manual).");
-
-static int tx_frag_pad = -1;
-module_param(tx_frag_pad, int, 0444);
-MODULE_PARM_DESC(tx_frag_pad,
-		 "TX fragment slot (mirror of rx_frag_pad): -1 = auto page-safe pow2 (default), "
-		 "0 = contiguous (the old back-to-back TX ring that folded 28ch->4 on the 8PreX), "
-		 ">0 = audio bytes + this padding. The working RX path and the vendor TX ring are both "
-		 "non-contiguous; this makes our TX match.");
-
-static int dma_bits = 32;
-module_param(dma_bits, int, 0444);
-MODULE_PARM_DESC(dma_bits,
-		 "DMA coherent mask width (bits). Default 32 lands the stream buffer at the top of 32-bit "
-		 "IOVA space (~0xffe00000); the VM's buffers sat mid-range (~1.5-1.9 GB). Lower this (e.g. "
-		 "31 -> <2GB, 30 -> <1GB) to force the allocation into the VM's range and test whether the "
-		 "engine's burst-then-stall is sensitive to buffer address. Long shot: PTR advances at "
-		 "0xffe00000 with no fault, so the high address is not obviously the blocker.");
-
-static bool monitor_enables = true;
-module_param(monitor_enables, bool, 0444);
-MODULE_PARM_DESC(monitor_enables,
-		 "At probe, write the monitor HW-enable bits (0x48/0x49, cmd3) so global Mute/Dim affect "
-		 "Monitor Out 1-2. Default true. FC's captured 2Pre control session does NOT send these, so "
-		 "they are additive writes we make beyond FC. Set 0 to make our command stream an exact "
-		 "SUBSET of FC's and A/B whether any extra write we make is "
-		 "wedging control manifestation. If toggles still don't manifest with both off, the on-wire "
-		 "surface is fully exhausted and the gap is conclusively off-wire DMA.");
-
 static const struct clarett_model clarett_8prex, clarett_2pre, clarett_4pre, clarett_8pre,
 				  red_8line;	/* defined below; chosen by clarett_detect_model() */
 
@@ -411,8 +368,8 @@ static int clarett_stream_service(void *data)
 	 * Tick-lateness telemetry (audible-skip diagnosis). The period counters cannot show
 	 * this: they accumulate the HARDWARE ctr delta, so a late servicer catches up on the next tick and
 	 * the totals stay perfectly smooth while the audio glitches. What matters is the wall-clock gap
-	 * between period events — nominal is CLARETT_CTR_FRAMES*step/rate, which is NOT a constant: dyn_period
-	 * ties the IRQ cadence to the negotiated ALSA period, so it spans 0.33 ms (cadence 1) to tens of ms,
+	 * between period events — nominal is CLARETT_CTR_FRAMES*step/rate, which is NOT a constant: the IRQ
+	 * cadence follows the negotiated ALSA period, so it spans 0.33 ms (cadence 1) to tens of ms,
 	 * and the rate varies too. clarett_tick_late_us() derives the threshold from both — do not reintroduce
 	 * a fixed one. A gap far over nominal means the TX refill landed late and the engine read ring content the app had not been
 	 * copied into yet. step_max is the same signal without a clock: the counter delta per event is
@@ -1269,9 +1226,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 
 	pci_set_master(pci);
 
-	if (dma_bits < 28 || dma_bits > 64)
-		dma_bits = 32;
-	err = dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(dma_bits));
+	err = dma_set_mask_and_coherent(&pci->dev, DMA_BIT_MASK(32));
 	if (err)
 		goto err_free;
 
@@ -1282,10 +1237,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		err = -ENOMEM;
 		goto err_free;
 	}
-	/* The >4G lead: every working FC capture programs 0x414 != 0 (buffer above
-	 * 4 GiB); log our address so the A/B is visible from the kernel log alone. */
-	dev_dbg(&pci->dev, "resp buffer dma addr %pad (0x414 high word 0x%x, dma_bits=%d)\n",
-		&c->resp_dma, upper_32_bits(c->resp_dma), dma_bits);
+	dev_dbg(&pci->dev, "resp buffer dma addr %pad\n", &c->resp_dma);
 
 	/* Vendor attach order: MSI is enabled in config space before the first BAR access,
 	 * so the device never sees a session start from a host without an interrupt path.
@@ -1341,24 +1293,13 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		clarett_read_rx_live(c);
 	}
 
-	/* RX fragment slot stride: default = page-safe pow2 (fixes the even-channel drift);
-	 * 0 = contiguous (old); >0 = audio + manual padding. */
-	{
-		u32 frag = clarett_frag_bytes(c->model->capture_channels);
-
-		c->rx_slot = rx_frag_pad < 0 ? roundup_pow_of_two(frag)
-			   : rx_frag_pad == 0 ? frag
-					      : frag + rx_frag_pad;
-	}
-	/* TX fragment slot stride, mirror of rx_slot: the working RX and the vendor TX are both
-	 * non-contiguous; our contiguous TX ring folded 28ch->4 on the 8PreX. Default page-safe pow2. */
-	{
-		u32 frag = clarett_frag_bytes(c->model->playback_channels);
-
-		c->tx_slot = tx_frag_pad < 0 ? roundup_pow_of_two(frag)
-			   : tx_frag_pad == 0 ? frag
-					      : frag + tx_frag_pad;
-	}
+	/*
+	 * Fragment slot strides: each fragment gets a page-safe power-of-two slot so no fragment straddles
+	 * a 4 KB page. A contiguous ring drifts the capture channel alignment by 8 bytes per page (2Pre,
+	 * 0x380 fragment) and folds 28 playback channels onto 4 (8PreX, 0x700 fragment); the slots fix both.
+	 */
+	c->rx_slot = roundup_pow_of_two(clarett_frag_bytes(c->model->capture_channels));
+	c->tx_slot = roundup_pow_of_two(clarett_frag_bytes(c->model->playback_channels));
 
 	/* Seed the shadow from the device so mixer "get" reflects real state at load and the
 	 * enable-byte RMW below is safe. Best-effort: if it fails we skip the enable writes. */
@@ -1372,7 +1313,7 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	 * master flag alone does nothing until an output opts in. This is a hardware-side write, so it
 	 * is needed whoever owns the controls — fcp-server drives the same Mute/Dim bytes. Needs the
 	 * seeded shadow for a correct read-modify-write, so only attempt it when seeding succeeded. */
-	if (!seeded && monitor_enables) {
+	if (!seeded) {
 		err = clarett_enable_monitor_hw_controls(c);
 		if (err)
 			dev_warn(&pci->dev,

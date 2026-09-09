@@ -515,12 +515,9 @@ struct clarett {
 
 	/* Data-plane engine state. stream_on is set once clarett_engine_arm() has programmed the rings. */
 	bool stream_on;
-	u32 rx_slot;			/* RX descriptor fragment SLOT stride in bytes (>= audio bytes/fragment).
-					 * = audio bytes when contiguous (rx_frag_pad=0); larger to break buffer
-					 * contiguity (scatter-gather experiment for the page-drift glitch). */
-	u32 tx_slot;			/* TX descriptor fragment SLOT stride, mirror of rx_slot (the working
-					 * RX path is non-contiguous; the contiguous TX ring folded 28ch->4 on the
-					 * 8PreX). = audio bytes when contiguous (tx_frag_pad=0); page-safe pow2 default. */
+	u32 rx_slot;			/* RX descriptor fragment slot stride in bytes: the fragment rounded up to
+					 * a power of two, so no fragment straddles a page. */
+	u32 tx_slot;			/* TX descriptor fragment slot stride, same rule. */
 	u32 cur_rate;			/* sample rate last programmed with SET_CLOCK, published at
 					 * /proc/asound/cardN/clarett. Seeded at probe from the device so it
 					 * is truthful before anything streams; lets userspace read the rate
@@ -548,8 +545,8 @@ struct clarett {
 					 * sparse residue there. 0 dead = full width. */
 	u32 rx_dead_bytes;
 	u32 irq_descs;			/* effective RX IRQ cadence (descriptors between markers); 0 = default 16.
-					 * dyn_period derives it from the negotiated ALSA period (clarett_irq_descs). */
-	u32 lock_period;		/* dyn_period: frame count both directions share this session (0 = none).
+					 * Derived from the negotiated ALSA period at prepare (clarett_irq_descs). */
+	u32 lock_period;		/* frame count both directions share this session (0 = none).
 					 * The first configured direction pins it; the other is constrained to match. */
 	void *stream_buf;		/* coherent streaming ring buffer */
 	dma_addr_t stream_dma;
@@ -694,8 +691,8 @@ static inline u32 clarett_frag_bytes(u8 channels)
 }
 /*
  * Effective RX IRQ cadence (descriptors between periodic IRQ markers). CLARETT_IRQ_DESCS (16) is the
- * default; the dyn_period path (clarett_pcm.c) overrides c->irq_descs per-stream from the negotiated ALSA
- * period so a DAW can pick a smaller buffer. A zero field reads as the default, so it is safe before probe
+ * default; prepare (clarett_pcm.c) overrides c->irq_descs per-stream from the negotiated ALSA period so a
+ * DAW can pick a smaller buffer. A zero field reads as the default, so it is safe before probe
  * sets it. Must divide CLARETT_STREAM_NDESC so the markers (and the wrap on the last entry) place evenly.
  */
 static inline u32 clarett_irq_descs(const struct clarett *c)
@@ -729,7 +726,7 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  * Layout of the 0x300 cause word.
  *
  * BIT30 == PERIOD OVERRUN: the device sets it on an event raised while the PREVIOUS period had not yet
- * been acknowledged. Established on hardware (2Pre) by a dyn_period cadence sweep, and it is
+ * been acknowledged. Established on hardware (2Pre) by a cadence sweep, and it is
  * about as clean as a black-box result gets:
  *
  *   cadence   period    events/s   stepmax      bit30 in 60 s
@@ -770,7 +767,7 @@ static inline u32 clarett_irq_period_frames(const struct clarett *c)
  * A period-event gap over clarett_tick_late_us() counts as a LATE tick in the servicer's telemetry.
  *
  * This WAS a fixed 16 ms, calibrated when the period was always ~5.3 ms (step 0xd). It cannot be a
- * constant now: dyn_period derives the IRQ cadence from the negotiated ALSA period, so nominal spans
+ * constant now: the IRQ cadence follows the negotiated ALSA period, so nominal spans
  * 16 frames (0.33 ms at 48k, cadence 1) to thousands, and the rate itself varies 44.1-192 kHz. A fixed
  * threshold is wrong in BOTH directions — measured on a 1024-frame period (21.33 ms nominal),
  * every healthy tick exceeded 16 ms, so late == the period count in every window and the documented
