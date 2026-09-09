@@ -406,22 +406,10 @@ struct clarett_model {
 
 #define CLARETT_MBOX_TIMEOUT_MS  100
 /*
- * Interval between readiness attempts.
- *
- * What a cold attach needs is not a longer wait before asking, nor a longer silence between asks — it
- * is the PRE-MAILBOX INIT itself replayed once the device is awake. Measured on an 8Pre: with hw_init
- * done once at ~1 s, mailbox attempts at 0, 25, 50 and 75 s ALL fail; but a first attempt whose hw_init
- * runs at 20 s succeeds at 20 s in, and so does any later bind or module reload — every one of which
- * re-runs hw_init. A device caught mid-wake evidently does not latch those writes, and nothing done
- * afterwards over the mailbox recovers it.
- *
- * BOTH ingredients are required, and each alone is measured useless: re-asking over the mailbox without
- * replaying the init fails at 50 ms, 25 s and 180 s spacing alike, and replaying the init every 5 s
- * fails across 13 attempts. The two successes both had a LONG quiet followed by a fresh init — 20 s and
- * 30 s — so the retry does both: leave the device completely alone for this interval, then replay the
- * init and ask once.
+ * Bound on the device's acknowledgement of the response-buffer address (REG_NOTIFY_CAUSE bit0 after
+ * the REG_DMA_ADDR_HI write). Measured 2-3 ms warm and up to 11 ms after a cold power-up.
  */
-#define CLARETT_READY_RETRY_MS		30000u
+#define CLARETT_ADDR_ACK_MS		500u
 #define CLARETT_MAX_PAYLOAD      64      /* clarett_set_data single-write cap (small configs) */
 #define CLARETT_MBOX_DATA_MAX    1024    /* mailbox data region past MBOX_DATA; SET_MUX = 412 */
 #define CLARETT_CONFIG_SIZE      256     /* shadow of the device config/app space       */

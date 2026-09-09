@@ -20,6 +20,7 @@
 #include <linux/bitmap.h>
 #include <linux/string.h>
 #include <linux/jiffies.h>
+#include <linux/ktime.h>
 #include <sound/core.h>
 #include <sound/info.h>
 #include <sound/control.h>
@@ -51,66 +52,14 @@ MODULE_PARM_DESC(tx_trace,
  * control writes all work with no host bring-up (hardware-confirmed device-wide — 2Pre and 8Pre, no arm:
  * model auto-detected, meters live, Inst/Line relay switching). Every unit that has ever been through
  * Focusrite Control is in that state, so a host-side ~232-command replay is redundant on real hardware,
- * and its SET_MUX/SET_MIX steps would reset the user's routing to the vendor default. Probe waits for the
- * flash-persisted session to answer (clarett_detect_model) and detects the model from it, arming nothing.
+ * and its SET_MUX/SET_MIX steps would reset the user's routing to the vendor default. Probe runs the
+ * pre-mailbox init, waits for the device to acknowledge the response-buffer address (clarett_hw_init),
+ * asks the flash-persisted session for its stream geometry (clarett_detect_model) and detects the model
+ * from it, arming nothing.
  *
- * If the device never answers within wait_ready_ms, probe does NOT fall back to a placeholder — that
- * masked a not-ready / collapsed device as a working card. It fails loudly so the condition gets
- * attention; a used device usually just needs a moment, so reload to retry.
+ * If the device never acknowledges the address, or answers with a geometry no model claims, probe does
+ * NOT fall back to a placeholder — that masked a not-ready device as a working card. It fails loudly.
  */
-
-/*
- * Total budget for the readiness retry, which backs off geometrically (see the loop in probe). It has to
- * cover a device still waking from a cold power-up: measured on an 8Pre, a first command issued ~1 s
- * after enumeration is not answered and 10 s is still too early, while tens of seconds of quiet lets it
- * through. This is only meaningful WITH the backoff — the same budget spent polling tightly recovers
- * nothing, at any size.
- *
- * Costs a warm attach nothing: the first attempt answers in ~90 us and the budget is never touched.
- * Probe is asynchronous, so the worst case does not stall the PCI hotplug worker.
- *
- * Writable at runtime because it is read only inside probe, and a Thunderbolt device re-probes on every
- * power cycle — so a write applies to the next attach without needing the card free.
- */
-static unsigned int wait_ready_ms = 100000;
-module_param(wait_ready_ms, uint, 0644);
-MODULE_PARM_DESC(wait_ready_ms,
-		 "Total budget (ms) for the backing-off readiness retry at probe before giving up "
-		 "(default 100000). A warm device answers the first attempt and never spends it.");
-
-/*
- * Leave the device untouched for this long after attach, before the pre-mailbox init.
- *
- * WHAT IS OBSERVED, and it is less than a diagnosis: an in-probe first touch ~140 ms after enumeration
- * fails reliably, and a first touch at 1 s or later has not failed in any run. 3 s is margin over the
- * only failing point ever measured, not a tuned value — the mechanism is NOT established.
- *
- * When it does fail, the command completes (DONE raised) but never DMAs a response; the trailing ack is
- * withheld — it must be, since acking an unlanded response is what caused the manifestation wall — and
- * the device is then left holding it unretired, answering it in place of every later command (stale
- * rseq, blanket err=3). Nothing recovers that, which is why this is a don't-touch window and not a
- * retry.
- *
- * RULED OUT, each on hardware, so none of these is worth trying again: recovering the wedge by retrying
- * (tight polling at 2/10/180 s budgets, 25 s spacing, replaying this init every 5 s, and the two
- * combined); resetting the mailbox via 0x510/0x500 + the DMA address (38 resets); raising the response
- * deadline to 3 s (the response is never sent, not late); device wake time from power-up (a 1 s delay
- * passes 4/4); and an unstable enumeration (3/3 runs flapped and passed).
- *
- * One asymmetry remains unexplained and is the place to start if this resurfaces: a manual sysfs bind
- * has never failed, 5/5 including at 1 s, while the automatic probe failed consistently without any
- * settle — same device, same timing window, different invocation path.
- *
- * Every probe pays it, including a reload or sysfs rebind: unbinding disables the PCI device and
- * re-enabling brings it back in whatever state a fresh attach is in.
- */
-static unsigned int settle_ms = 3000;
-module_param(settle_ms, uint, 0644);
-MODULE_PARM_DESC(settle_ms,
-		 "Leave the device untouched for this long (ms) after attach before the first init "
-		 "(default 3000). Touching the device ~140 ms after enumeration wedges it unrecoverably; "
-		 "a first touch at 1 s or later has not failed. Margin over the observed failure, not a "
-		 "tuned value — the mechanism is not established. 0 disables the wait.");
 
 /*
  * RX fragment slot stride (even-channel capture drift — FIXED). The capture drifted its channel
@@ -300,9 +249,44 @@ u32 clarett_rl(struct clarett *c, u32 off)
 	return readl(c->bar0 + off);
 }
 
-static void clarett_hw_init(struct clarett *c)
+/*
+ * Program the response DMA buffer address and wait for the device to acknowledge it.
+ *
+ * The device answers the high word of the address with REG_NOTIFY_CAUSE bit0 — the same bit that
+ * later reports "request accepted" per command — and it will not answer a mailbox command sent
+ * before that. Established on hardware (2Pre, 4Pre) by varying one thing at a time: no bit0 in a 5 s
+ * window with nothing written; none after the low word alone; bit0 after the high word every time,
+ * 2-3 ms after a warm rebind and up to 11 ms after a cold power-up (per model, and depending on what
+ * the firmware is doing at the moment of the write);
+ * a rewrite of the same address raises it again. A STREAM_INFO sent 0-1 ms after the write is
+ * "accepted" (that acknowledgement, misread) and never answered, 6/6, which is the cold-attach
+ * refusal in full; the same command after the wait was answered 7/7 cold power-ups with no settle
+ * and no retry. Every vendor trace shows the same interrupt landing between the address write and
+ * the first command. The bound is ~50x the worst case seen.
+ */
+static int clarett_program_resp_addr(struct clarett *c)
+{
+	ktime_t t0 = ktime_get();
+
+	reinit_completion(&c->mbox_accepted);
+	clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
+	clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
+	if (!wait_for_completion_timeout(&c->mbox_accepted,
+					 msecs_to_jiffies(CLARETT_ADDR_ACK_MS))) {
+		dev_err(&c->pci->dev,
+			"device did not acknowledge the response buffer address within %u ms\n",
+			CLARETT_ADDR_ACK_MS);
+		return -ENODEV;
+	}
+	dev_dbg(&c->pci->dev, "response buffer address acknowledged after %lld us\n",
+		ktime_us_delta(ktime_get(), t0));
+	return 0;
+}
+
+static int clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
+	int err;
 
 	/*
 	 * The vendor's pre-mailbox attach sequence, byte-for-byte and in its order: the reads of
@@ -317,7 +301,9 @@ static void clarett_hw_init(struct clarett *c)
 	 * (hw_init runs in probe/process context, so sleeping is fine). The ~17-20 us *intra*-burst spacing
 	 * in the trace is x-no-mmap trap overhead — a VM measurement artifact (~100 ns on native hardware) —
 	 * so those accesses are left back-to-back. Gaps vary boot-to-boot with scheduling; these are the
-	 * measured cold-boot representatives.
+	 * measured cold-boot representatives. The one gap that is NOT a pause is the ~3 ms between the
+	 * address write and the cause sweep: that is the device's acknowledgement interrupt landing, and
+	 * it is waited for (clarett_program_resp_addr), not slept through.
 	 */
 	{
 		u32 r000, r004, r008, r514, r58c_a, r58c_b;
@@ -338,10 +324,9 @@ static void clarett_hw_init(struct clarett *c)
 		usleep_range(880, 950);			/* ~0.88 ms */
 		clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);	/* 0x104 — vendor writes this BEFORE the DMA addr */
 		usleep_range(5640, 5800);		/* ~5.64 ms */
-		clarett_wl(c, REG_DMA_ADDR_LO, lower_32_bits(c->resp_dma));
-		usleep_range(1850, 1950);		/* ~1.85 ms */
-		clarett_wl(c, REG_DMA_ADDR_HI, upper_32_bits(c->resp_dma));
-		usleep_range(3200, 3350);		/* ~3.22 ms */
+		err = clarett_program_resp_addr(c);
+		if (err)
+			return err;
 		{
 			/*
 			 * Read-to-clear cause blocks, in the vendor's order (0x100, 0x300, 0x200, 0x400).
@@ -377,6 +362,7 @@ static void clarett_hw_init(struct clarett *c)
 	}
 
 	memset(c->shadow, 0, sizeof(c->shadow));
+	return 0;
 }
 
 /*
@@ -1371,74 +1357,29 @@ static int clarett_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	clarett_enable_msi(c);
 	clarett_setup_irq(c);
 
-	if (settle_ms)
-		msleep(settle_ms);	/* cold attach: do not touch the device before it can answer */
-	clarett_hw_init(c);
+	err = clarett_hw_init(c);
+	if (err)
+		goto err_free;
 
 	/*
 	 * Establish the session. The driver never arms: a device that has been armed once self-arms from
-	 * flash, so reads, input metering and control writes all work with no host bring-up. Wait for that
-	 * flash-persisted session to answer, detect the model from it, and leave the device's own routing
-	 * alone.
-	 *
-	 * A cold Thunderbolt attach can race device readiness (command #0's response may not land), so poll
-	 * clarett_detect_model quietly — a warn per attempt would be noise — until it answers or the settle
-	 * budget expires.
+	 * flash, so reads, input metering and control writes all work with no host bring-up. Ask that
+	 * session for its stream geometry, detect the model from it, and leave the device's own routing
+	 * alone. One attempt: the address acknowledgement in clarett_hw_init is the readiness handshake,
+	 * and a device that has given it answers its first command.
 	 */
 	{
 		bool collapsed = false;
-		const struct clarett_model *det = NULL;
-		unsigned long deadline = jiffies + msecs_to_jiffies(wait_ready_ms);
-		int tries = 0;
-
-		/*
-		 * Readiness retry, with the emphasis on QUIET rather than on frequency.
-		 *
-		 * Recovering a device caught mid-wake needs TWO things together, and each alone is measured
-		 * useless: a long stretch of being left completely alone, AND a fresh pre-mailbox init
-		 * after it. Re-asking over the mailbox without replaying the init fails at 50 ms, 25 s and
-		 * 180 s spacing; replaying the init every 5 s fails across 13 attempts. Both successes had
-		 * a long quiet followed by a fresh init (20 s and 30 s). So each retry waits out the full
-		 * interval untouched, then re-inits and asks once.
-		 *
-		 * The first command also wedges the mailbox when it fails — it completes but never DMAs a
-		 * response, so the trailing ack is withheld (it must be; acking an unlanded response is
-		 * what caused the manifestation wall) and the device answers that command in place of
-		 * every later one. Re-running init clears that too, which is why a reload has always
-		 * worked where waiting never did.
-		 *
-		 * A warm device answers the first attempt in ~90 us and never re-inits.
-		 */
-		for (;;) {
-			tries++;
-			det = clarett_detect_model(c, &collapsed, true);
-			if (det || !collapsed || time_after(jiffies, deadline))
-				break;
-			msleep(CLARETT_READY_RETRY_MS);
-			clarett_hw_init(c);	/* replay the init; the device may be awake now */
-		}
-		if (tries > 1)
-			dev_dbg(&pci->dev, "readiness: %d attempts, session %s\n",
-				tries, det ? "answered" : "still refusing");
-		/*
-		 * One non-quiet pass on ANY failure, to log the detail before deciding: a refusal's
-		 * status/size, or the raw geometry pair of an unmatched device (the poll above runs
-		 * quiet, and it breaks out of the loop immediately on an unmatched-but-valid reply —
-		 * which would otherwise leave nothing logged at all).
-		 */
-		if (!det)
-			det = clarett_detect_model(c, &collapsed, false);
+		const struct clarett_model *det = clarett_detect_model(c, &collapsed, false);
 
 		if (collapsed) {
 			/*
-			 * Never became ready. Do NOT register a placeholder — that masked a not-ready or
-			 * collapsed device as a working card. Fail the probe loudly so it gets attention.
+			 * Acknowledged the address but did not answer. Do NOT register a placeholder — that
+			 * masked a not-ready or collapsed device as a working card. Fail loudly.
 			 */
 			dev_err(&pci->dev,
-				"device did not become ready within %u ms over %d attempts (mailbox %s) — refusing "
-				"to register. A unit still waking from power-up cannot answer, and each command "
-				"renews that state; replug or reload to retry once it has settled.\n",
-				wait_ready_ms, tries,
+				"device did not answer its first command (mailbox %s) — refusing to register; "
+				"replug or reload to retry.\n",
 				c->mbox_wedged ? "wedged: no response, or one echoing another command's seq"
 					       : "answering, but refusing the request");
 			err = -ENODEV;
@@ -1890,8 +1831,9 @@ MODULE_DEVICE_TABLE(pci, clarett_ids);
 static struct pci_driver clarett_driver = {
 	.name = KBUILD_MODNAME,
 	/*
-	 * Probe can wait tens of seconds for a cold device to answer (see wait_ready_ms). Asynchronous
-	 * so that wait runs on its own worker instead of stalling the PCI hotplug path behind it.
+	 * Probe sleeps through the vendor's init spacing and waits on the device's address
+	 * acknowledgement. Asynchronous so those waits run on their own worker instead of stalling
+	 * the PCI hotplug path behind them.
 	 */
 	.driver = { .probe_type = PROBE_PREFER_ASYNCHRONOUS },
 	.id_table = clarett_ids,
