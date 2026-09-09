@@ -286,83 +286,20 @@ static int clarett_program_resp_addr(struct clarett *c)
 static int clarett_hw_init(struct clarett *c)
 {
 	void __iomem *bar = c->bar0;
-	int err;
 
-	/*
-	 * The vendor's pre-mailbox attach sequence, byte-for-byte and in its order: the reads of
-	 * caps/0x4/0x8/0x514/0x58c, all four cause blocks and the fw-info header, the 0x510/0x500
-	 * device-enable writes, the DMA-response address and the 0x104 cause latch. The device answers
-	 * FCP error=0 from mailbox command #0, so whatever gates accept/refuse is decided before the
-	 * first command; this is the whole host-visible surface before it. readl() returns are
-	 * discarded except serial/fw (kept for dev_info).
-	 *
-	 * INTER-ACCESS TIMING is matched to the vendor too. The cold-ladder trace shows the vendor spaces
-	 * these register GROUPS by ~0.8-8 ms of real driver-side pause, reproduced below with usleep_range
-	 * (hw_init runs in probe/process context, so sleeping is fine). The ~17-20 us *intra*-burst spacing
-	 * in the trace is x-no-mmap trap overhead — a VM measurement artifact (~100 ns on native hardware) —
-	 * so those accesses are left back-to-back. Gaps vary boot-to-boot with scheduling; these are the
-	 * measured cold-boot representatives. The one gap that is NOT a pause is the ~3 ms between the
-	 * address write and the cause sweep: that is the device's acknowledgement interrupt landing, and
-	 * it is waited for (clarett_program_resp_addr), not slept through.
-	 */
-	{
-		u32 r000, r004, r008, r514, r58c_a, r58c_b;
+	c->serial_hi = readl(bar + REG_SERIAL_HI);
+	c->serial_lo = readl(bar + REG_SERIAL_LO);
+	c->fw_app = readl(bar + REG_INFO + 0x00);
+	c->fw_fpga = readl(bar + REG_INFO + 0x04);
 
-		readl(bar + REG_INFO);			/* 0x8000 — vendor's first touch */
-		r004 = readl(bar + 0x004);
-		r008 = readl(bar + 0x008);
-		r000 = readl(bar + REG_CAPS);		/* 0x000 */
-		c->serial_hi = readl(bar + REG_SERIAL_HI);	/* 0x014 (vendor reads hi before lo) */
-		c->serial_lo = readl(bar + REG_SERIAL_LO);	/* 0x010 */
-		usleep_range(7000, 7200);		/* vendor gap ~7.07 ms */
-		r514 = readl(bar + 0x514);
-		usleep_range(1300, 1400);		/* ~1.30 ms */
-		clarett_wl(c, 0x510, 0x8);
-		r58c_a = readl(bar + 0x58c);		/* ~21 us (native) — back-to-back */
-		usleep_range(780, 850);			/* ~0.78 ms */
-		clarett_wl(c, 0x500, 0x8);
-		usleep_range(880, 950);			/* ~0.88 ms */
-		clarett_wl(c, REG_IRQ0_ENABLE, 0xf000003f);	/* 0x104 — vendor writes this BEFORE the DMA addr */
-		usleep_range(5640, 5800);		/* ~5.64 ms */
-		err = clarett_program_resp_addr(c);
-		if (err)
-			return err;
-		{
-			/*
-			 * Read-to-clear cause blocks, in the vendor's order (0x100, 0x300, 0x200, 0x400).
-			 * These are the confirmed trigger of the Analogue-2 gain LED flash at probe — the
-			 * device's first-ever physical response — isolated to the read-to-clear itself, since
-			 * dropping just these reads stops the flash while the info/version reads do not. On a
-			 * cold boot they report (and clear) whatever the device latched at power-on, so the
-			 * logged value is the physical event being cleared.
-			 */
-			u32 c100 = readl(bar + REG_IRQ0_CAUSE);
-			u32 c300 = readl(bar + STREAM_BLK1);
-			u32 c200 = readl(bar + STREAM_BLK0);
-			u32 c400 = readl(bar + REG_NOTIFY_CAUSE);
-			u32 c500 = readl(bar + 0x500);
-
-			dev_dbg(&c->pci->dev,
-				"pre-mailbox causes: 0x100=0x%08x 0x300=0x%08x 0x200=0x%08x 0x400=0x%08x 0x500=0x%08x\n",
-				c100, c300, c200, c400, c500);
-		}
-		usleep_range(8220, 8400);		/* ~8.22 ms */
-		r58c_b = readl(bar + 0x58c);
-		dev_dbg(&c->pci->dev,
-			"pre-mailbox regs: caps(0x0)=0x%08x 0x4=0x%08x 0x8=0x%08x 0x514=0x%08x 0x58c=0x%08x/0x%08x\n",
-			r000, r004, r008, r514, r58c_a, r58c_b);
-		c->fw_app  = readl(bar + REG_INFO + 0x00);	/* 0x8000 */
-		c->fw_fpga = readl(bar + REG_INFO + 0x04);	/* 0x8004 */
-		readl(bar + REG_INFO + 0x08);		/* rest of the 8-word fw-info header */
-		readl(bar + REG_INFO + 0x0c);
-		readl(bar + REG_INFO + 0x10);
-		readl(bar + REG_INFO + 0x14);
-		readl(bar + REG_INFO + 0x18);
-		readl(bar + REG_INFO + 0x1c);
-	}
+	/* The two MIDI-block writes every vendor attach makes; the block's control layout is not
+	 * decoded beyond these values. */
+	clarett_wl(c, REG_MIDI_CTRL, 0x8);
+	clarett_wl(c, REG_MIDI_STATUS, 0x8);
+	clarett_wl(c, REG_IRQ0_ENABLE, IRQ0_ENABLE_ALL);
 
 	memset(c->shadow, 0, sizeof(c->shadow));
-	return 0;
+	return clarett_program_resp_addr(c);
 }
 
 /*
