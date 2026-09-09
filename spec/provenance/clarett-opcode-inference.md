@@ -158,3 +158,74 @@ python3 tools/fcp_decode.py --brief captures/8pre_boot_to_stream.log |
 The width-vs-descriptor-count check in §3 was a throwaway script: decode each of the four boot
 captures, and for every `0x007002`/`0x007003` line count the `0x005000` lines that follow before
 any other opcode appears.
+
+## 9. On hardware — 4Pre and 2Pre (Sep 9 2026)
+
+Everything below was read live through the hwdep with `tools/fcp_cmd.c` (the generic bench tool:
+opcode, response length and request bytes on the command line). fcp-server stopped for the duration.
+Items 1-3 of §7 are settled; item 4 became moot.
+
+### `0x007001` is STREAM_INFO `{u8 speed_band}` and bands 1-2 are the S/MUX widths `[HW]`
+
+Reply `{u16 playback, u16 capture, u32, u32}`. The vendor asks bands 0, 1 and 2 on every model.
+
+| model | band 0 | band 1 | band 2 | band 3 |
+|---|---|---|---|---|
+| 4Pre | 8 / **20**, 14, 17 | 8 / **16**, 9, 17 | 8 / **14**, 9, 14 | all zero |
+| 2Pre | 4 / **14**, 14, 17 | 4 / **10**, 9, 17 | 4 / **8**, 9, 14 | repeats band 2 |
+
+The capture words at bands 1 and 2 equal the `rx_live_mid`/`rx_live_high` values the driver carried
+per model (4Pre 16/14, 2Pre 10/8; the 8Pre trace's `0x007003` declarations give 20/16/14 too). The
+driver now reads them at probe (`clarett_read_rx_live()`) and the per-model fields are gone. The
+trailing two words (14/9/9 and 17/17/14, identical on both models) are undecoded. Out-of-range bands
+are not an error but behave differently per model, so stop at band 2.
+
+### `0x005000` is a FIXED string table, identical on both models `[HW]`
+
+| id | name | id | name |
+|---|---|---|---|
+| 0x01-0x02 | `Clarett8Pre` (on a 4Pre and a 2Pre alike) | 0x0d-0x14 | `Input 1`..`Input 8` |
+| 0x03 | `Internal` | 0x15-0x16 | `S/PDIF 1`..`2` |
+| 0x04 | `Word Clock` | 0x17-0x26 | `ADAT 1`..`ADAT 16` |
+| 0x05 | `S/PDIF` | 0x27-0x28 | `Loop 1`..`2` |
+| 0x06 | `ADAT` | 0x29-0x2a | `MIDI In`, `MIDI Out` |
+| 0x07-0x08 | `ADAT1`, `ADAT2` | 0x2b-0x46 | `Output 1`..`Output 28` |
+| 0x09-0x0c | `Analog`, `S/PDIF`, `ADAT`, `LOOP` | 0x47+ | clamps to `Output 28` (4Pre) / `Output 5Pre` (2Pre, a read past the table) |
+
+So it confirms the model-independent id enumeration §3 derived, and it cannot enumerate a model's
+ports (a 4Pre names ADAT 9-16 and Output 28). Ids 3-8 are the clock-source names, which resolves the
+§5 `[OPEN]` on ids 3/5/6 (and 4/7/8).
+
+### The per-channel `0x005000` burst is NOT needed to stream `[HW]`
+
+Streaming with the whole stage removed (the `0x007002`/`0x007003` declarations and every `0x005000`),
+capture and playback:
+
+| model | rates | result |
+|---|---|---|
+| 4Pre | 48 / 96 / 192 kHz | exact byte counts, same six live channels as with the burst, `late=0 badreads=0` |
+| 2Pre | 48 / 96 kHz | exact byte counts, channels 0-1 live, `late=0 badreads=0 overrun=0` at 48k |
+| Red 8Line | 48 kHz | streamed with the stage skipped from the start (§ Red range in CLAUDE.md) |
+
+The stage is removed from the driver. The 8PreX symptom it was kept for (28 ch folding to 12) matches
+the TX page-straddle bug fixed later, not the burst. Untested: the 8PreX itself.
+
+### Category 6 and the rest `[HW]`
+
+| query | 4Pre | 2Pre |
+|---|---|---|
+| `0x006000` (any payload) | `0x00030018 0x00050003` | `0x00030018 0x00050004` |
+| `0x006001` | 44100, 48000 | same |
+| `0x006002` | 48000, `0x18`, `0x18` | same |
+| `0x006005` | 48000 | same |
+| `0x800005 {0,8}` | `{1, 3}` | `{1, 4}` |
+| `0x800005 {0,12}` | `{1, 3, 0}` | — |
+| `METER_INFO` | `00 02 0c` | same |
+| `MIX_INFO` | `10 1e 10 0d 07` | same |
+| `MUX_INFO` | 74 / 70 / 68 | 64 / 60 / 58 |
+| `FLASH_INFO` | `0x3f0000`, 6 segments, 2, 1000 | same |
+
+`0x006000` and `0x800005` both carry a 3 on the 4Pre and a 4 on the 2Pre. The 2Pre's XML gives its
+S/PDIF clock value as 4 where every other model uses 3, so one of those words is plausibly the
+per-model S/PDIF clock enum. Two data points; a hypothesis, not a finding. `0x006002`'s `0x18`
+words are the current source (Internal = 24). `0x007000` answers all zeros with or without a payload.

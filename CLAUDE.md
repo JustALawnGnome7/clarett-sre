@@ -453,7 +453,11 @@ tools/fcp_*.c                         Bench tools driving the hwdep directly (st
                                       fcp_meter_watch: which meter slot a channel moves; fcp_mux_probe:
                                       MUX_READ windowing; fcp_cap_read: the per-category CAP_READ bytes
                                       + a GET_DATA probe (diagnoses fcp-server's "does not support
-                                      required INIT category" — unarmed device vs zero capabilities).
+                                      required INIT category" — unarmed device vs zero capabilities);
+                                      fcp_cmd: ANY opcode with request bytes from the command line,
+                                      response hex-dumped — the first thing to reach for on an
+                                      undecoded query (what found the STREAM_INFO bands, §9 of
+                                      spec/provenance/clarett-opcode-inference.md).
 vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).
