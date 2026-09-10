@@ -68,7 +68,8 @@ MODULE_PARM_DESC(stream_batch,
  *
  * The period is only half of what an app feels as latency. The total ALSA buffer used to be PINNED to the
  * 4096-frame ring, so an app that keeps its buffer full ran 85 ms of playback latency no matter how small a
- * period it asked for; it is now any power-of-two fraction of the ring down to CLARETT_MIN_BUFFER_FRAMES.
+ * period it asked for; it is now any power-of-two fraction of the ring down to CLARETT_MIN_BUFFER_FRAMES, and
+ * at most CLARETT_MAX_PERIODS of the app's own period.
  */
 #define CLARETT_DYN_MIN_FRAMES	CLARETT_FRAG_FRAMES	/* one fragment = 16 frames (cadence 1); the verified floor */
 static bool dyn_period = true;
@@ -475,28 +476,21 @@ MODULE_PARM_DESC(tx_guard,
 		 "no effect on reported latency; see clarett_pcm.c before changing it.");
 
 /*
- * Largest ALSA buffer offered, in frames; 0 = the whole 4096-frame ring.
+ * Largest ALSA buffer offered, in frames; 0 = the whole 4096-frame ring, the default.
  *
- * This is a latency control, not a capacity one, and the reason it has to exist is an asymmetry in
- * alsa-lib: snd_pcm_hw_params_choose() resolves every parameter with set_first (the minimum) EXCEPT
- * BUFFER_SIZE, which it resolves with set_last. So an app that pins only the period — which is most of
- * them, including DAWs that display a period count they never actually request — silently receives
- * whatever ceiling is advertised here. Merely permitting a small buffer changes nothing for such an app;
- * the ceiling is the only thing it reads.
+ * An optional hard cap, and no longer the latency control. What it used to be for is now done by the
+ * period rule (CLARETT_MAX_PERIODS): alsa-lib's snd_pcm_hw_params_choose() resolves every parameter with
+ * set_first (the minimum) EXCEPT BUFFER_SIZE, which it resolves with set_last, so an app that pins only
+ * the period — most of them, including DAWs that display a period count they never actually request — is
+ * handed the largest buffer allowed. With nothing but the ring as the limit, a DAW at a 16-frame period ran
+ * 85 ms of playback latency. The rule ties that largest value to the app's own period instead.
  *
- * Default CLARETT_MIN_BUFFER_FRAMES. Lowering the ceiling universally was once believed to cost the
- * desktop its deep buffer, on the theory that PipeWire at a 1024-frame quantum needs 2048 frames for its
- * two periods. That is false, and measurement on hardware says so twice over (2Pre and 8Pre): PipeWire
- * negotiates EXACTLY the advertised ceiling at every value down to CLARETT_MIN_BUFFER_FRAMES, and adapts
- * by shrinking the ALSA node's period — its graph quantum never moves. Ordinary playback does not break
- * at a low ceiling; it simply runs the node more often.
- *
- * Note what the default implies, because it is deliberate rather than incidental: the ceiling equals
- * CLARETT_MIN_BUFFER_FRAMES, so the permitted range collapses to a single value and the buffer is
- * effectively PINNED. Every client is handed 128 frames — 2.7 ms at 48 kHz — whatever it requests, and
- * a request for more is silently granted less. Raise this on a host whose scheduling stalls exceed that
- * (a firmware SMI, a loaded general-purpose desktop); a value above the floor restores a real range that
- * applications can choose within.
+ * It used to default to CLARETT_MIN_BUFFER_FRAMES, which made the ceiling equal the floor and PINNED every
+ * client at 128 frames whatever it asked for — and that broke a client moving audio in blocks larger than
+ * the pin (see CLARETT_MAX_PERIODS). Setting it now caps every client below what the rule would allow; a
+ * value at the floor reinstates the pin. Lowering it does not break PipeWire, measured on hardware twice
+ * (2Pre and 8Pre): PipeWire negotiates exactly the advertised ceiling at every value down to the floor and
+ * adapts by shrinking the ALSA node's period — its graph quantum never moves.
  *
  * The floor is measured, not assumed. Swept 128..4096 on a stall-free host against the widest device in
  * the range (60 capture channels at 48 kHz, client at SCHED_FIFO), every ceiling delivered its EXACT
@@ -510,15 +504,16 @@ MODULE_PARM_DESC(tx_guard,
  * NOMINAL period (period/rate) plus that ~220 us, so the same figure means health at a large period and
  * ruin at a small one. Divide by the nominal period first. The unambiguous signals are readmax (tens of
  * microseconds on a healthy host; tens of MILLISECONDS means a platform freeze caught mid-readl) and the
- * late/overrun/badread counters. A host showing a ~40 ms readmax needs a ceiling above its stall — the
- * full ring — and no smaller value will help it, because the stall is not a buffering problem.
+ * late/overrun/badread counters. A host showing a ~40 ms readmax needs a buffer above its stall — ask the
+ * app for one; with this left at the ring every size up to 85 ms is available — and no smaller buffer will
+ * help it, because the stall is not a buffering problem.
  */
-static unsigned int max_buffer = CLARETT_MIN_BUFFER_FRAMES;
+static unsigned int max_buffer;
 module_param(max_buffer, uint, 0644);
 MODULE_PARM_DESC(max_buffer,
 		 "Largest ALSA buffer offered, in frames (rounded down to a power of two, floored at "
-		 "128; 0 = the full 4096-frame ring). Apps that do not request a buffer size are given "
-		 "this, so it sets their latency.");
+		 "128; default 0 = the full 4096-frame ring). Buffers are otherwise limited to four "
+		 "periods of the app's own period, so this is only needed as a hard cap.");
 
 /* The advertised buffer ceiling in frames: the ring, or the max_buffer override rounded down to a power
  * of two so the ceiling is itself an attainable value under the pow2 constraint. */
@@ -655,6 +650,54 @@ static int clarett_rule_lock_period(struct snd_pcm_hw_params *params, struct snd
 }
 
 /*
+ * Most periods the ALSA buffer may hold — except where the period is so small that this many of them fall
+ * below CLARETT_MIN_BUFFER_FRAMES, where the floor wins (a 16-frame period may have 8).
+ *
+ * This is what bounds latency for an app that pins only the period: alsa-lib resolves BUFFER_SIZE with
+ * set_last, so such an app is handed the largest buffer the constraints allow, and tying that largest value
+ * to the period it chose keeps its latency proportional to its own request. A fixed ceiling cannot do that
+ * without also shortchanging clients that ask for more. Pinned at 128 frames (the old max_buffer default),
+ * it gave a JUCE client — which asks for four periods of its block size and then reads and writes whole
+ * blocks — 4 x 32 = 128 frames for any block of 64 or more. From a 128-frame block up, its read-then-write
+ * loop overran capture and underran playback every cycle, and because JUCE sets the stop threshold to the
+ * boundary nothing stopped the stream: it was heard as garbled, repeating audio rather than as dropouts.
+ *
+ * Four is what both JUCE and PipeWire request, so each gets exactly what it asks for.
+ */
+#define CLARETT_MAX_PERIODS	4
+
+/* BUFFER_SIZE <= max(CLARETT_MAX_PERIODS * period, floor), taken at the largest period still allowed. */
+static int clarett_rule_buffer_by_period(struct snd_pcm_hw_params *params, struct snd_pcm_hw_rule *rule)
+{
+	struct snd_interval *ps = hw_param_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	struct snd_interval *bs = hw_param_interval(params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE);
+	struct snd_interval t;
+
+	if (ps->max > UINT_MAX / CLARETT_MAX_PERIODS)
+		return 0;			/* period still unbounded: nothing to say yet */
+	snd_interval_any(&t);
+	t.max = max_t(unsigned int, CLARETT_MAX_PERIODS * ps->max, CLARETT_MIN_BUFFER_FRAMES);
+	t.integer = 1;
+	return snd_interval_refine(bs, &t);
+}
+
+/* The same relation read the other way, so refinement converges from either side: a buffer above the
+ * floor needs a period of at least 1/CLARETT_MAX_PERIODS of it. */
+static int clarett_rule_period_by_buffer(struct snd_pcm_hw_params *params, struct snd_pcm_hw_rule *rule)
+{
+	struct snd_interval *bs = hw_param_interval(params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE);
+	struct snd_interval *ps = hw_param_interval(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	struct snd_interval t;
+
+	if (bs->min <= CLARETT_MIN_BUFFER_FRAMES)
+		return 0;
+	snd_interval_any(&t);
+	t.min = DIV_ROUND_UP(bs->min, CLARETT_MAX_PERIODS);
+	t.integer = 1;
+	return snd_interval_refine(ps, &t);
+}
+
+/*
  * Advertised rate set. 44.1 and 48 kHz (single speed) are always offered; 88.2/96 (double) and 176.4/192
  * (quad) are added up to the effective cap — the max_rate module override if set, else the model's
  * hardware-confirmed clarett_model.max_rate. All six are SET_CLOCK enums the device lists.
@@ -701,8 +744,8 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 	runtime->hw.rates            = clarett_rate_caps(c, &runtime->hw.rate_min, &runtime->hw.rate_max);
 	runtime->hw.channels_min     = chans;
 	runtime->hw.channels_max     = chans;
-	/* Ceiling: the ring, unless max_buffer lowers it. An app that pins only the period is handed this
-	 * (alsa-lib resolves BUFFER_SIZE with set_last), so it is what sets that app's latency. */
+	/* Ceiling: the ring, unless max_buffer lowers it. What an app that pins only the period actually
+	 * receives is bounded lower still, by the period rule registered below (CLARETT_MAX_PERIODS). */
 	if (dyn_period)
 		buf = (size_t)clarett_buffer_max_frames(buf / frame) * frame;
 
@@ -732,6 +775,17 @@ static int clarett_pcm_open(struct snd_pcm_substream *ss)
 		 * guarantees that (16..2048 all divide the 4096-frame ring), and DAW/PipeWire buffers are pow2.
 		 */
 		err = snd_pcm_hw_constraint_pow2(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+		if (err < 0)
+			return err;
+		/* At most CLARETT_MAX_PERIODS of the app's own period (above the floor), in both directions. */
+		err = snd_pcm_hw_rule_add(runtime, 0, SNDRV_PCM_HW_PARAM_BUFFER_SIZE,
+					  clarett_rule_buffer_by_period, NULL,
+					  SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
+		if (err < 0)
+			return err;
+		err = snd_pcm_hw_rule_add(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+					  clarett_rule_period_by_buffer, NULL,
+					  SNDRV_PCM_HW_PARAM_BUFFER_SIZE, -1);
 		if (err < 0)
 			return err;
 		/* Lock both directions to one period (option a). */

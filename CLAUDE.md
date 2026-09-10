@@ -830,6 +830,63 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
 
 ## Driver limitations / TODO
 
+- **★★★ THE 128-FRAME PIN BROKE A REAL JUCE APP — REPLACED BY A PER-STREAM PERIOD RULE (Sep 10 2026,
+  8PreX, TONE3000; `CLARETT_MAX_PERIODS` in `clarett_pcm.c`).** Answers retest item 4 below: it did not
+  survive real use. TONE3000 (JUCE 9.0.1's ALSA backend) garbled audio at every buffer above 64 samples.
+  JUCE calls `set_periods_near(4)` BEFORE `set_period_size_near(block)`, so under the pin every block of 64
+  or more was granted **period 32 / buffer 128** while JUCE kept reading and writing whole blocks (its UI
+  still said 64; `/proc` said 32/128 — the two are different quantities). It also links playback to
+  capture, never prefills, and sets `stop_threshold` to the boundary, so playback runs one block behind the
+  hardware by design and holds only while block < buffer: slack 64 at a 64 block, 0 at 128, negative at
+  256+ — a lap overwritten every cycle, heard as garbling and never reported as an xrun. TONE3000's UI
+  marks 128 "(recommended)", i.e. the default setting was the broken one.
+  - **Fix:** `max_buffer` defaults to 0 (the ring) again. Its latency job — alsa-lib resolves
+    BUFFER_SIZE with set_last, so an app that pins only the period gets the ceiling — is now done per
+    stream by two hw rules: buffer ≤ max(4 × period, `CLARETT_MIN_BUFFER_FRAMES`) and the converse
+    (period ≥ buffer/4 above the floor). A 16-frame period still gets 8 periods (the floor). `max_buffer`
+    survives as an optional hard cap; setting it to 128 reproduces the old pin exactly, which is how the
+    baseline below was taken.
+  - **Negotiation, measured (JUCE sequence | period-only):** 16 → 32/128 | 16/128; 32 → 32/128;
+    64 → 64/256; 128 → 128/512; 256 → 256/1024; 512 → 512/2048; 1024 → 1024/4096. Live TONE3000 at a
+    128 block: period 128 / buffer 512 (was 32/128).
+  - **JUCE-exact duplex loop** (JUCE's negotiation and sw params, streams linked, no prefill, read N then
+    write N; 15 s each, non-RT client; "lost" = cycles where the hardware had lapped the write position):
+    | block | 64 | 128 | 256 | 512 | 1024 |
+    |---|---|---|---|---|---|
+    | old pin (`max_buffer=128`) | 2 (freeze) | **5624 / 5625** (no freeze) | **2804 / 2805** | **1394 / 1395** | — |
+    | period rule | 2 (freeze) | 0 | 10 (freeze) | 3 (freeze) | 0 |
+    Every loss under the rule sits in an ASRock ≥42 ms freeze window, per leg, from the `stream-svc`
+    timestamps; every freeze-free leg was clean, and 1024 (an 85 ms buffer) rode a 63 ms freeze with
+    nothing lost. A well-behaved prefilled client likewise xruns only in freeze windows (64: 1 freeze →
+    1/1; 128: 1 → 3/3; 256: 4 → 9/9 capture/playback). On this board only a buffer above the freeze —
+    1024-frame blocks — is glitch-free; that is the platform, not the driver.
+  - **Harness lessons (each cost a wrong reading first):** a read-then-write client that neither links
+    nor prefills underruns every cycle whatever the driver does, because its lead drains to zero each
+    cycle; one that recovers an xrun without re-prefilling collapses into that state after the first
+    freeze; and with debug output on, the `stream-svc:` line count is every 2 s window, not anomalies —
+    count windows with gapmax ≥ 40 ms instead. Mirror the real client before counting xruns.
+  - **TONE3000 by ear on the new module: 64, 128, 256 and 512 all clean (user-confirmed)**, with round-trip
+    latency rising with the buffer as it should (4 periods of the block).
+  - **PipeWire, re-checked on the new module:** takes the card and streams normally, negotiating period
+    256 / buffer 1024 — exactly what its node requests (`api.alsa.period-size = 256`,
+    `api.alsa.period-num = 4`, `api.alsa.disable-tsched = true`), so the rule is not what sets PipeWire's
+    geometry, and the old ring default would grant the same. Those values come from a user-level
+    WirePlumber drop-in, not from PipeWire's defaults. **Consequence on the ASRock:** a 1024-frame (21 ms)
+    buffer is below the ~42-60 ms freeze, and it caps `52-clarett-noidle.conf`'s
+    `api.alsa.headroom = 3072` at the buffer size, so desktop playback through PipeWire will still skip at
+    freezes unless the period settings are raised (for example 1024 x 4 = 4096 frames). A user-config
+    matter, not a driver one.
+  - **★ FOUND WHILE TESTING, OPEN — A DEVICE-SIDE ENGINE WEDGE.** Mid-sweep, after roughly 90 arm/stop
+    cycles on the ASRock, every stream began failing with EIO about 110 ms after start (ALSA's wait
+    timeout). The handshake answered `err=0` throughout, and `engine armed` was identical to a working
+    arm, but the engine never fetched a single descriptor: `stream-svc: stopped (periods=0 ... ptr0=0x0
+    ptr1=0x0)`, where healthy streams stop at `ptr0=0x11 ptr1=0x4-0x5` and even the vendor's failing arms
+    prefetch `0xe`/`0x3`. The control plane stayed healthy (every FCP status 0). **It survived a clean
+    module reload and cleared only on a power cycle of the unit**, and an identical re-run of the sweep did
+    not reproduce it. Not attributed to the period rule: that code only shapes negotiation and cannot reach
+    the device, and no driver state survives a reload. If it recurs, load with `dyndbg=+p` and compare the
+    failing arm against the last good one; note whether it follows a platform freeze during an arm or
+    teardown.
 - **★★ THE ALSA BUFFER WAS PINNED TO THE 4096-FRAME RING — THE REAL LATENCY CEILING, AND THE PERIOD WAS
   NEVER THE POINT (Aug 27 2026, 8Pre; fixed and measured on hardware).** A DAW at a 16-frame
   period reported 1.75 ms round trip and sounded far worse; `/proc/asound/card4/pcm*/sub*/status` settled
@@ -854,7 +911,9 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
     `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay`
     went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** **Default is now `CLARETT_MIN_BUFFER_FRAMES` = 128
-    (Sep 2 2026, operator's call over a recommendation of 256).** The old default of 0 (the ring) is gone;
+    (Sep 2 2026, operator's call over a recommendation of 256).** **[SUPERSEDED Sep 10 2026: the default
+    is 0 again and latency is bounded per stream by `CLARETT_MAX_PERIODS` — see the ★★★ bullet above.]**
+    The old default of 0 (the ring) was gone;
     its stated rationale — that PipeWire needs 2048 at a 1024-frame quantum and would regress — was
     **disproven twice**, on the 2Pre and again on the 8Pre.
     **KNOW WHAT 128 IMPLIES: it is the FLOOR as well, so ceiling == floor and the buffer is PINNED.**
@@ -1008,8 +1067,9 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
        DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
     3. **A realtime client.** Everything here ran at normal priority; a DAW runs SCHED_FIFO. Re-run the
        lead A/B and the buffer sweep with the client at RT before believing any break count.
-    4. **Does the 128 pin survive real use?** ceiling == floor means every app gets 2.7 ms with no way
-       up. Check a desktop session plus a DAW project on a host without the stall.
+    4. ~~**Does the 128 pin survive real use?**~~ **ANSWERED NO (Sep 10 2026):** a JUCE app garbled at
+       every buffer above 64 samples. Replaced by the `CLARETT_MAX_PERIODS` rule — see the ★★★ bullet at
+       the top of this section.
     5. **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
        impulse, count frames). NOTHING today measured plucked-string-to-speaker latency; the digital
        loopback cannot see the converters. This is the number the amp-modeling target is about.
