@@ -36,6 +36,8 @@ Requires:       dkms
 Requires:       gcc
 Requires:       make
 Requires:       kernel-devel
+# alsa-lib owns the directory the card configuration goes into.
+Requires:       alsa-lib
 
 %description
 An ALSA driver for the Focusrite Clarett Thunderbolt audio interfaces — Clarett 2Pre,
@@ -61,6 +63,9 @@ endorsed by Focusrite.
 %install
 mkdir -p %{buildroot}%{_usrsrc}/%{module_name}-%{version}
 cp -a . %{buildroot}%{_usrsrc}/%{module_name}-%{version}/
+# DKMS builds and installs modules and nothing else, so the ALSA card configuration is
+# installed by the package in its own right.
+install -D -m 644 alsa/Clarett.conf %{buildroot}%{_datadir}/alsa/cards/Clarett.conf
 
 %post
 # --rpm_safe_upgrade keeps an upgrade from tearing down the module the outgoing package's
@@ -76,3 +81,4 @@ dkms remove -m %{module_name} -v %{version} --all --rpm_safe_upgrade || :
 %license LICENSE LICENSES/Linux-syscall-note.txt
 %doc README.md DEVELOPMENT.md
 %{_usrsrc}/%{module_name}-%{version}
+%{_datadir}/alsa/cards/Clarett.conf

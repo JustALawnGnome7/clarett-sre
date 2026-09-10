@@ -8,6 +8,11 @@
 # The kernel module is separate: build it with `make -C driver` and load it with
 # insmod (see driver/README.md). This Makefile covers only the userspace data.
 #
+# One piece of userspace data is deliberately NOT here: the ALSA card config
+# (driver/alsa/Clarett.conf). alsa-lib reads it only from its own data directory,
+# /usr/share/alsa/cards, never from a PREFIX, and keys it on the driver's name --
+# so it ships with the driver: `sudo make -C driver alsa-install`.
+#
 # PREFIX MUST match the PREFIX fcp-server was built/installed with, because
 # fcp-server looks for its maps in $(PREFIX)/share/fcp-server (its compiled-in
 # DATADIR). The default matches fcp-support's own default (/usr/local), so
@@ -51,6 +56,7 @@ help:
 	@echo
 	@echo "PREFIX must match the fcp-server install PREFIX (both default /usr/local)."
 	@echo "Kernel module builds separately: make -C driver (see driver/README.md)."
+	@echo "ALSA card config (lists the card in apps): sudo make -C driver alsa-install"
 
 install: install-maps install-wireplumber
 

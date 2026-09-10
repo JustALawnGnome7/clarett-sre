@@ -4,6 +4,7 @@
 #   make modules_install  # install + depmod, so `modprobe snd-clarett` works (needs root)
 #   make load             # load in place, pulling in the ALSA modules it needs
 #   make dkms-install     # register with DKMS so it rebuilds on every kernel upgrade
+#   make alsa-install     # install alsa/Clarett.conf, so ALSA lists the card (needs root)
 #   make dist             # source tarball, the input to the RPM packaging
 #   make rpm-akmod        # build the akmod RPM (rebuilds itself for each new kernel)
 #   make rpm-kmod         # build a binary kmod RPM for one kernel (KVER=...)
@@ -50,12 +51,19 @@ KDIR ?= /lib/modules/$(shell uname -r)/build
 PKGNAME := snd-clarett
 CLARETT_VERSION := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"$$/\1/p' $(CURDIR)/dkms.conf)
 
-# LICENSES/ is a directory (holding the Linux-syscall-note exception that clarett_fcp_uapi.h's
-# SPDX tag refers to), so anything consuming DISTFILES has to recurse — hence `cp -r` below.
+# LICENSES/ (holding the Linux-syscall-note exception that clarett_fcp_uapi.h's SPDX tag refers
+# to) and alsa/ are directories, so anything consuming DISTFILES has to recurse — hence `cp -r`
+# below.
 DISTFILES := $(CLARETT_SRCS) $(CLARETT_HDRS) Makefile dkms.conf \
-             LICENSE LICENSES README.md DEVELOPMENT.md
+             LICENSE LICENSES README.md DEVELOPMENT.md alsa
 TARBALL   := $(PKGNAME)-$(CLARETT_VERSION).tar.gz
 DKMS_SRC  := /usr/src/$(PKGNAME)-$(CLARETT_VERSION)
+
+# alsa-lib loads cards/<driver>.conf only from its own compiled-in data directory, so this
+# deliberately follows no PREFIX: a copy under /usr/local/share/alsa is never read. Override
+# it for a distribution that relocates alsa-lib's data; DESTDIR stages as usual.
+ALSA_CARDS_DIR ?= /usr/share/alsa/cards
+ALSA_CONF      := alsa/Clarett.conf
 
 # Ask rpm where its build tree is rather than assuming ~/rpmbuild: %_topdir is
 # configurable, and a wrong guess would stage the spec somewhere %akmod_install
@@ -78,8 +86,8 @@ KVER       ?= $(shell uname -r)
 # module, and the missing one only surfaces later as "Unknown symbol" from insmod.
 MODDEPS = $(shell modinfo -F depends $(CURDIR)/snd-clarett.ko 2>/dev/null | tr ',' ' ')
 
-.PHONY: all clean modules_install load unload version dist dkms-install dkms-uninstall \
-        rpm-akmod rpm-kmod
+.PHONY: all clean modules_install load unload version dist alsa-install alsa-uninstall \
+        dkms-install dkms-uninstall rpm-akmod rpm-kmod
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) CLARETT_VERSION=$(CLARETT_VERSION) modules
@@ -106,6 +114,16 @@ load:
 unload:
 	rmmod snd_clarett
 
+# The card config is userspace data, but it lives with the driver rather than in the top-level
+# install because alsa-lib keys it on the name the driver registers the card under
+# (card->driver) — nothing fcp-server or the maps know about. DKMS and both RPMs install it
+# too; this target is for the `make load` / `modules_install` routes. Needs root.
+alsa-install:
+	install -D -m 644 $(ALSA_CONF) $(DESTDIR)$(ALSA_CARDS_DIR)/$(notdir $(ALSA_CONF))
+
+alsa-uninstall:
+	rm -f $(DESTDIR)$(ALSA_CARDS_DIR)/$(notdir $(ALSA_CONF))
+
 # Source tarball named the way rpmbuild expects (%{name}-%{version}/ prefix inside), so
 # packaging/snd-clarett-kmod.spec can consume it unmodified. Only the files needed to
 # build and understand the module go in — no build artefacts, no capture logs.
@@ -129,11 +147,14 @@ dkms-install:
 		dkms add -m $(PKGNAME) -v $(CLARETT_VERSION)
 	dkms build -m $(PKGNAME) -v $(CLARETT_VERSION)
 	dkms install -m $(PKGNAME) -v $(CLARETT_VERSION) --force
+	@# dkms installs modules and nothing else, so the card config goes in separately.
+	$(MAKE) --no-print-directory alsa-install
 	@echo "installed: modprobe snd-clarett now works, and rebuilds on kernel upgrade"
 
 dkms-uninstall:
 	-dkms remove -m $(PKGNAME) -v $(CLARETT_VERSION) --all
 	rm -rf $(DKMS_SRC)
+	$(MAKE) --no-print-directory alsa-uninstall
 
 # --- RPM packaging (Fedora / RPM Fusion kmodtool) ----------------------------
 #

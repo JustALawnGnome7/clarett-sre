@@ -148,7 +148,8 @@ snd-clarett` names the one that won.
 RPM; build instructions are in its header.
 
 Either route makes the module load on its own when the interface appears, through the
-PCI id alias — no `modprobe` and no udev rule needed once it is installed.
+PCI id alias — no `modprobe` and no udev rule needed once it is installed. Both also
+install the ALSA card configuration; see *Device lists in applications* below.
 
 ### Secure Boot
 
@@ -199,6 +200,30 @@ the kernel log.
 Capture and playback are available as standard ALSA PCM devices. **There is no default
 route** — playback is silent until you wire a PCM source to a physical output in the router
 (alsa-scarlett-gui). That is a mixer-config step, not a bug.
+
+### Device lists in applications
+
+Applications that build their device list from ALSA's name hints — JUCE-based ones among
+them — show the interface as *"Clarett 8PreX, Clarett 8PreX; Front output / input"* (the ALSA
+device `front:CARD=<id>,DEV=0`). That entry comes from `alsa/Clarett.conf`, which alsa-lib
+must find in `/usr/share/alsa/cards/` — it looks nowhere else. The DKMS and RPM routes install
+it; after `make load` or `make modules_install`, install it once with:
+
+```sh
+sudo make alsa-install      # sudo make alsa-uninstall removes it
+```
+
+Without it the card still works as `hw:<card>,0`, but it is missing from those applications'
+lists altogether.
+
+It opens the hardware directly, so it is exclusive in the same way `hw:` is: while PipeWire
+holds the card, the application gets *"Device or resource busy"*. Either run the application
+through PipeWire (`pw-jack <app>` with its JACK backend), or release the card from PipeWire
+while it runs — find the card's name with `pactl list cards short`, then:
+
+```sh
+pactl set-card-profile <card name> off         # pro-audio gives it back to PipeWire
+```
 
 ### MIDI
 

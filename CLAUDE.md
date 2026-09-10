@@ -395,6 +395,11 @@ driver/                               Out-of-tree module `snd-clarett` (hwdep tr
   packaging/*.spec                    Fedora RPM: snd-clarett-kmod.spec (kmodtool -> akmod + per-kernel
                                       kmod) and snd-clarett-dkms.spec. Driven by `make rpm-akmod` /
                                       `make rpm-kmod`; the by-hand recipe is in each header.
+  alsa/Clarett.conf                   alsa-lib card config -> /usr/share/alsa/cards/ (NOT a PREFIX: alsa-lib
+                                      reads cards/ only from its own datadir). Gives every snd_clarett card
+                                      a front:CARD=<id>,DEV=0 PCM and so a name-hint entry; keyed on
+                                      card->driver "Clarett". Shipped by both specs (kmod -common, dkms)
+                                      and `make dkms-install`; `make alsa-install` for the insmod route.
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
 wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) — do not hand-edit.
@@ -649,6 +654,21 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   (Don't read a set `XDG_DATA_DIRS` in the systemd user manager as the reason it works: on this box
   that is flatpak's `profile.d` rewriting it, which is incidental.) Packages should use `PREFIX=/usr`;
   `/etc/wireplumber/wireplumber.conf.d/` is read too but belongs to the user's own overrides.
+- **★ `driver/alsa/Clarett.conf` — WHY THE CARD WAS INVISIBLE TO JUCE APPS (Sep 10 2026, 8PreX in
+  TONE3000).** JUCE lists ALSA devices from name hints and skips `default:`/`sysdefault:`/`plughw:`,
+  while bare `hw:` is hidden by `defaults.namehint.showall off`. Other cards survive through
+  `front:CARD=…`, which alsa-lib creates only for drivers with a `cards/<driver>.conf` — none existed
+  for `Clarett`, so the card's only hint was `sysdefault:` and it vanished from the list. Verified
+  before shipping via `ALSA_CONFIG_DIR` on a copy of `/usr/share/alsa`: `arecord -L`/`aplay -L` list
+  `front:CARD=C8PreX,DEV=0` as "Clarett 8PreX, Clarett 8PreX / Front output / input", and the open
+  resolves to the hardware (stock: "Unable to find definition"). **A per-user asoundrc PCM of
+  `type hw` with a hint does NOT list** — alsa-lib omits standalone hw definitions; `type empty`
+  wrapping `hw:` does, and is the fallback where the card config cannot be installed. Still exclusive:
+  needs PipeWire's card profile `off`, or `pw-jack` + the app's JACK backend.
+  **Separately, and NOT the driver:** TONE3000's libasound segfaults in `snd_pcm_ioplug_poll_revents`
+  are a JUCE use-after-free — `ALSAThread::close()` waits 400 ms, then `snd_pcm_close()`s while the
+  audio thread is still in I/O on the PipeWire ALSA plugin. Still present in upstream JUCE master.
+  Read the coredump (`coredumpctl info`) before blaming the driver for an application crash.
 - **★ WHY THE WIREPLUMBER DROP-IN IS UNAVOIDABLE (Aug 20 2026) — and the old comment's reason was
   WRONG.** It claimed the Thunderbolt units "have no pci.ids entry, so WirePlumber falls back to the
   ALSA driver string". They do have one: `1cb5:0002` is listed as the whole-line name `Clarett`. The
