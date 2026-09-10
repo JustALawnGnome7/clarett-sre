@@ -870,12 +870,15 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   - **PipeWire, re-checked on the new module:** takes the card and streams normally, negotiating period
     256 / buffer 1024 — exactly what its node requests (`api.alsa.period-size = 256`,
     `api.alsa.period-num = 4`, `api.alsa.disable-tsched = true`), so the rule is not what sets PipeWire's
-    geometry, and the old ring default would grant the same. Those values come from a user-level
-    WirePlumber drop-in, not from PipeWire's defaults. **Consequence on the ASRock:** a 1024-frame (21 ms)
-    buffer is below the ~42-60 ms freeze, and it caps `52-clarett-noidle.conf`'s
+    geometry, and the old ring default would grant the same. **No config file sets those values** — none
+    of the user drop-ins (`51-alsa-pro-audio.conf` only sets channel positions for a USB Clarett node),
+    nor anything under `/etc`, `/usr/local` or `/usr/share` for WirePlumber or PipeWire — so PipeWire
+    derives them itself for the pro-audio profile, most likely from `52-clarett-noidle.conf`'s
+    `node.latency = "512/48000"` (a period of half the latency; UNVERIFIED). **Consequence on the
+    ASRock:** a 1024-frame (21 ms) buffer is below the ~42-60 ms freeze, and it caps that drop-in's
     `api.alsa.headroom = 3072` at the buffer size, so desktop playback through PipeWire will still skip at
-    freezes unless the period settings are raised (for example 1024 x 4 = 4096 frames). A user-config
-    matter, not a driver one.
+    freezes. If the derivation holds, raising `node.latency` is the lever. A user-config matter, not a
+    driver one.
   - **★ FOUND WHILE TESTING, OPEN — A DEVICE-SIDE ENGINE WEDGE.** Mid-sweep, after roughly 90 arm/stop
     cycles on the ASRock, every stream began failing with EIO about 110 ms after start (ALSA's wait
     timeout). The handshake answered `err=0` throughout, and `engine armed` was identical to a working
