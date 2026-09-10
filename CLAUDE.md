@@ -877,8 +877,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     `node.latency = "512/48000"` (a period of half the latency; UNVERIFIED). **Consequence on the
     ASRock:** a 1024-frame (21 ms) buffer is below the ~42-60 ms freeze, and it caps that drop-in's
     `api.alsa.headroom = 3072` at the buffer size, so desktop playback through PipeWire will still skip at
-    freezes. If the derivation holds, raising `node.latency` is the lever. A user-config matter, not a
-    driver one.
+    freezes. A user-config matter, not a driver one.
   - **★ FOUND WHILE TESTING, OPEN — A DEVICE-SIDE ENGINE WEDGE.** Mid-sweep, after roughly 90 arm/stop
     cycles on the ASRock, every stream began failing with EIO about 110 ms after start (ALSA's wait
     timeout). The handshake answered `err=0` throughout, and `engine armed` was identical to a working
