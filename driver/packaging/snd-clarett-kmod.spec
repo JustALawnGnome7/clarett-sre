@@ -39,7 +39,7 @@
 %global debug_package %{nil}
 
 Name:           %{kmod_name}-kmod
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Focusrite Clarett (Thunderbolt) audio interface kernel module
 
