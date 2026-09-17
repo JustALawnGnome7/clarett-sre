@@ -115,6 +115,11 @@ the notification `read()`/`poll()` relay.
   rate limit (fire one interval after the *first* of a burst) and not a debounce (one interval
   after the *last*): against a source that never goes idle, a debounce never fires at all — it
   was a debounce once, and userspace saw exactly one notification per session.
+- **The relay is suppressed while a stream runs** by default, because vec0 also fires on every
+  audio period and each wake costs `fcp-server` a re-read of every notifiable control. That
+  traffic is real, but the audible skips once blamed on it were only ever seen on a host with a
+  periodic firmware freeze, so the gate is unproven. `notify_while_streaming=1` turns it off.
+  While it is on, only the monitor region tracks mid-stream, via `monitor_poll`.
 
 ### Device maps
 
@@ -313,6 +318,9 @@ The operationally relevant ones:
 - `enable_pcm` (default on) — register the PCM devices; `0` for a mixer-only card.
 - `enable_midi` — register the DIN MIDI rawmidi.
 - `notify_ms` — rate limit for the front-panel notification relay.
+- `notify_while_streaming` (default off, runtime-writable) — keep relaying notifications while a
+  stream runs. Off suppresses the relay for the stream's duration, leaving `monitor_poll` to carry
+  the monitor controls; see the notification relay notes above.
 - `max_rate` — override the highest advertised sample rate for all models (`48000`/`96000`/`192000`).
   `0` (default) uses each model's hardware-confirmed cap: single speed (44.1/48) everywhere, plus
   double/quad on models where the high-rate data plane is confirmed (the 2Pre, to 192 kHz). Set it to

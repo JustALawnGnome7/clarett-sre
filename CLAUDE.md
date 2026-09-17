@@ -889,6 +889,56 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     the device, and no driver state survives a reload. If it recurs, load with `dyndbg=+p` and compare the
     failing arm against the last good one; note whether it follows a platform freeze during an arm or
     teardown.
+- **★★ THE "EXCESSIVE POLLING CAUSED THE SKIPS" CONCLUSION DOES NOT REPRODUCE ON A FREEZE-FREE HOST
+  (Sep 17 2026, 2Pre, ASUS ROG Zephyrus laptop / Intel, behind the HP TB3 dock).** The July 23 2026
+  cluster that blamed control traffic for playback skips — `70afc2c` "rate-limit meter polling — the
+  real source of the playback skip", `e580497` "suppress the notification relay while streaming (the
+  real skip fix)", `4077d63` "real-time priority … (fixes GUI-load skips)" — took ALL of its evidence
+  on the ASRock X570 Creator, **eight days before the firmware SMI was root-caused there** (July 31,
+  [[clarett-playback-skipping]]), and that session then disproved polling as the freeze trigger. The
+  two commits also contradict each other within ten minutes: `70afc2c` names the GUI's meter reads as
+  the cause, `e580497` opens with "the GUI does not even read meters, so the meter poll was not the
+  flood".
+  - **New lever `notify_while_streaming`** (`clarett_main.c`, bool, runtime-writable, default 0 =
+    today's behaviour) turns off the `stream_on` gate on the 0x400 notification relay, so it can be
+    A/B'd without a reload. The gate's comment and `DEVELOPMENT.md` now say the mailbox load is real
+    but the skips are unproven.
+  - **Measured, digital-loopback ramp (playback 3 → capture 13 in the router, silent on a 2Pre since
+    PCM 3/4 feed no output and no mixer input; it arrives on ALSA capture ch5, see the mapping item
+    below), fcp-server + alsa-scarlett-gui with the Levels window open, non-RT clients, 120 s/leg:**
+    | period/buffer | legs | ramp breaks | device period overruns | relays/s | mailbox cmds/s |
+    |---|---|---|---|---|---|
+    | 64/256 gate ON | 1 | 0 | 0 | ~0 | 50 |
+    | 64/256 gate OFF | 1 | 0 | 0 | 8.0 | 96 |
+    | 32/128 gate ON | 4 | 0, 0, 0, 0 | 8, 2, 34, 26 | ~0 | 50-51 |
+    | 32/128 gate OFF | 4 | **1 xrun**, 0, 0, 0 | 38, 40, 18, 76 | 5.5-24 | 88-144 |
+    **22.5 M consecutive ramp samples across the eight tight legs with one one-buffer repeat+skip
+    pair** (14.96 s into one gate-off leg, i.e. a non-RT client starving, not corruption), `late=0`
+    and `badreads=0` everywhere, no fcp-server timeouts either way, `periods` exact. So relaying
+    mid-stream costs 2-3x the mailbox traffic (the extra is fcp-server's GET_DATA re-reads) and buys
+    the audio nothing measurable. Unacked-period flags average higher with the gate off (43 vs 17.5)
+    but the ranges overlap — noise at this sample size.
+  - **Host check in passing: this laptop is freeze-free** — `gapmax` 1.6-2.4 ms against 1.33/0.67 ms
+    nominal, `readmax` ≤ 770 us, no window ≥ 5 ms in 59 windows/leg. The ASRock reaches `readmax`
+    42 ms. Third Thunderbolt platform after the ASRock and the EliteBook 640 G11.
+  - **Default NOT flipped, deliberately.** The July symptom was on the **8PreX** (28ch, ~3x the
+    notifiable controls and the per-period copy work), which has not been re-tested on a freeze-free
+    host; and the storm is partly self-inflicted — the `interrupt-driven-mailbox` branch fixes an
+    inverted notify mask, after which the relay would fire on real changes only and the gate becomes
+    moot. Fix the cause, then drop the gate. Verdicts on the rest of that cluster: `18cccf0`/`cd6db04`
+    (cause-register ownership) are real races and stay whatever the SMI did; `4ecfd6d` (debounce that
+    never fired) is a real bug fix; `70afc2c` (meter cache) and `7fb4840`/`03ec348` (notify coalescing,
+    trimmed notify-client mask) are cheap and correct as efficiency, with wrong skip attributions.
+- **★ OPEN, FOUND WHILE SETTING THAT UP — THE 2Pre's ROUTER PCM DESTINATIONS DO NOT MATCH THE ALSA
+  CAPTURE CHANNEL ORDER (Sep 17 2026, measured twice).** Routing the router's `PCM 13 Capture Enum`
+  from playback `PCM 3` delivered the ramp on **ALSA capture channel 5**; routing `PCM 05 Capture Enum`
+  (normally ADAT 1) from playback `PCM 4` delivered it on **channel 7**. Both legs confirmed by a
+  per-channel scan, with analogue 1/2 on channels 1/2 as expected. Consistent with the 2Pre's capture
+  stream being ordered analogue 1-2, S/PDIF 1-2, the two spare/loopback slots, then ADAT 1-8 — i.e. the
+  authored map's PCM destination names are shifted against the stream past channel 4. If so
+  alsa-scarlett-gui shows the wrong capture routing for this model beyond channel 4, and the fix is in
+  `gen_fcp_maps.py`'s destination pins, not the driver. **Not yet investigated**; the 8Pre's ADAT
+  capture test (ch12-19 at 48k) was consistent with its own map, so this may be 2Pre-specific.
 - **★★ THE ALSA BUFFER WAS PINNED TO THE 4096-FRAME RING — THE REAL LATENCY CEILING, AND THE PERIOD WAS
   NEVER THE POINT (Aug 27 2026, 8Pre; fixed and measured on hardware).** A DAW at a 16-frame
   period reported 1.75 ms round trip and sounded far worse; `/proc/asound/card4/pcm*/sub*/status` settled

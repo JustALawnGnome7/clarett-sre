@@ -151,6 +151,19 @@ MODULE_PARM_DESC(meter_poll_ms,
 		 "writes complete (done=1) but the front-panel preamp/monitor state never moves. Default 40. "
 		 "Set 0 to disable (for A/B testing the hypothesis).");
 
+/*
+ * Relay 0x400 notifications to userspace while a stream runs. Off by default, which suppresses
+ * the relay for the duration of any stream (see the stream_on gate in clarett_irq); runtime-
+ * writable so the gate can be A/B tested without a reload. The gate's case rests on audible skips
+ * that were observed only on a host with a periodic firmware freeze, so it is unproven there.
+ */
+static bool notify_while_streaming;
+module_param(notify_while_streaming, bool, 0644);
+MODULE_PARM_DESC(notify_while_streaming,
+		 "Relay device notifications to userspace while streaming (default 0: suppressed for the "
+		 "duration of a stream, with monitor_poll covering the monitor controls). 1 lets fcp-server "
+		 "re-read its notifiable controls mid-stream, at the cost of that mailbox traffic.");
+
 static int dma_bits = 32;
 module_param(dma_bits, int, 0444);
 MODULE_PARM_DESC(dma_bits,
@@ -1258,14 +1271,18 @@ static irqreturn_t clarett_irq(int irq, void *dev_id)
 		 * ctl_ready gates snd_ctl_notify: with the handlers now hooked BEFORE the controls
 		 * exist (early IRQ for MSI-paced completion), a pre-controls event must not notify.
 		 *
-		 * stream_on gate (control-during-streaming skip fix): while the engine streams, vec0 ALSO fires
-		 * on every audio period, and 0x400 reads its idle 0x3 each time — so this path would schedule a
-		 * relay ~per period. The relay is a wildcard (the FCP notify word is not exposed), so fcp-server
-		 * responds by re-reading EVERY control (GET_DATA each), flooding the mailbox and nicking the
-		 * stream (audible skips + command timeouts). The 0x400 signal is a periodic heartbeat, not a real
-		 * change, so suppress the relay entirely while streaming; genuine front-panel changes (the monitor
-		 * knob) during playback are rare and picked up once streaming stops. */
-		if (ev && READ_ONCE(c->ctl_ready) && !READ_ONCE(c->stream_on)) {
+		 * stream_on gate: while the engine streams, vec0 ALSO fires on every audio period, and 0x400
+		 * reads its idle 0x3 each time — so this path would schedule a relay ~per period (coalesced to
+		 * one wake per notify_ms). The relay is a wildcard (the FCP notify word is not exposed), so
+		 * fcp-server answers each wake by re-reading every notifiable control, a GET_DATA apiece. That
+		 * mailbox load is real. The claim that it causes audible skips and command timeouts is NOT
+		 * established: it was observed only on a host whose firmware freezes the whole machine
+		 * periodically while a Thunderbolt device streams, which produces the same symptoms on its own.
+		 * The gate therefore stays on by default and notify_while_streaming turns it off for an A/B.
+		 * While it is on, front-panel changes reach userspace mid-stream only through monitor_poll,
+		 * which covers the monitor region and nothing else. */
+		if (ev && READ_ONCE(c->ctl_ready) &&
+		    (!READ_ONCE(c->stream_on) || READ_ONCE(notify_while_streaming))) {
 			atomic_or(ev, &c->notify_bits);
 			schedule_work(&c->notify_work);
 		}
