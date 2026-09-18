@@ -381,7 +381,7 @@ The project is a self-contained clean-room record:
   `[TRACE]`/`[TEST]`/`[CONCLUSION]` provenance tags) and §8, the crossing.
 - **`spec/provenance/clarett-macos-dtrace-plan.md`**, **`spec/provenance/clarett-windbg-plan.md`** — the two cross-platform
   confirmation passes (methods, runbooks, results).
-- **`driver/`** — the out-of-tree `snd-clarett` module (control plane + experimental capture PCM).
+- **`snd-clarett/`** (submodule) — the out-of-tree `snd-clarett` module (control plane + experimental capture PCM).
   The landed-gated ack is the default mailbox cycle; the timing instruments from §8 are the
   `resp_trace` / `mmio_dilate_us` module parameters (`resp_trace` logs per-command DONE and
   response-landing latencies plus the FCP status word — the onset instrument that characterized

@@ -386,7 +386,9 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     path (landed but compile-only), (2) per-rate router pins for the
                                     8PreX's re-pinning second ADAT port, (3) decode the 0x006004 upper
                                     bit. START HERE when picking this thread back up.
-driver/                               Out-of-tree module `snd-clarett` (hwdep transport + experimental capture PCM).
+snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
+                                      history, the dated RE trail stays here). Out-of-tree module
+                                      `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
   clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
   clarett_hwdep.c (the FCP hwdep ABI — the only control surface), clarett_pcm.c (capture PCM,
   enable_pcm=1), Makefile, README.md
@@ -409,14 +411,14 @@ wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) 
                                       the driver's card->shortname (matches on it); lives here, not in
                                       fcp-support, because it depends on the driver, not on fcp-server.
 tools/gen_wireplumber_conf.py         Emits the drop-in above, one rule per clarett_model parsed out of
-                                      driver/clarett_main.c (order from clarett_detect_model's list).
+                                      snd-clarett/clarett_main.c (order from clarett_detect_model's list).
                                       `--check` fails on drift; `make wireplumber-conf` /
                                       `make check-wireplumber-conf`.
 tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step lists + the
                                       clarett_arm_emit() builder in clarett_arm.h). <model> carries the
                                       product line -- arm_clarett_8prex.h, arm_red_8line.h -- and the
                                       arrays inside match (arm_red_8line_mux_b0), so no variable wears a
-                                      bare vendor prefix. Lived in driver/ while the driver
+                                      bare vendor prefix. Lived in the driver tree while it
                                       replayed the bring-up; the driver no longer arms, so these are
                                       kept ONLY as input to gen_fcp_maps.py (it parses the SET_MUX
                                       bands for the router pins). Regenerate with
@@ -451,26 +453,34 @@ captures/*.log                        Trace captures (vfio_region_* logs, guest-
 ## Build & test
 
 ```sh
-cd driver && make                 # builds snd-clarett.ko
-sudo insmod snd-clarett.ko        # auto-binds 1cb5:0002
+make -C snd-clarett               # builds snd-clarett/snd-clarett.ko
+sudo insmod snd-clarett/snd-clarett.ko   # auto-binds 1cb5:0002
 sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server,
                                   # WirePlumber drop-in -> conf.d. `make help`.
 ```
-- **★ PACKAGING (Aug 24 2026) — DKMS + Fedora akmod, both built and verified locally.** `make -C driver`
+- **★ THE DRIVER IS A SUBMODULE (Sep 18 2026).** Clone with `--recurse-submodules` (or run
+  `git submodule update --init` after a plain clone) — `tools/gen_wireplumber_conf.py` reads
+  `snd-clarett/clarett_main.c` and fails without it. A driver change is committed IN the submodule,
+  then the pointer is bumped here in a second commit; **push `snd-clarett` first**, or the clarett-sre
+  commit points at an object GitHub does not have. The public repo started from one commit (no RE
+  history, deliberately), so nothing under `snd-clarett/` may lean on clarett-sre-only material —
+  `CLAUDE.md`, `spec/`, `captures/`, `tools/`, "see git history" — as if the reader had it; name the
+  clarett-sre project instead, as its README does for the device maps.
+- **★ PACKAGING (Aug 24 2026) — DKMS + Fedora akmod, both built and verified locally.** `make -C snd-clarett`
   and `modules_install` are dev-only: the module lands under one kernel and vanishes at the next
-  update. The two supported routes are `sudo make -C driver dkms-install` and, on Fedora,
-  `make -C driver rpm-akmod` (or `rpm-kmod KVER=<ver>` for a single kernel). **The RPM targets build
+  update. The two supported routes are `sudo make -C snd-clarett dkms-install` and, on Fedora,
+  `make -C snd-clarett rpm-akmod` (or `rpm-kmod KVER=<ver>` for a single kernel). **The RPM targets build
   and stop, printing the `dnf install` line rather than running it** — deliberately, because that
   transaction is the one the partial-kernel trap below lives in, and the read-before-yes cannot be
   delegated to a Makefile. They also enforce two traps that were previously only described: the spec
   is staged into `%{_specdir}` before building (kmodtool re-invokes `rpmbuild` against it there), and
   the spec's `Version:` is checked against `dkms.conf`, which otherwise surfaces as a missing
-  `Source0` rather than as version skew. **`driver/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
-  `driver/Makefile` parses it out, passes it to kbuild, and it is compiled in as `MODULE_VERSION`
+  `Source0` rather than as version skew. **`snd-clarett/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
+  `snd-clarett/Makefile` parses it out, passes it to kbuild, and it is compiled in as `MODULE_VERSION`
   (`-DCLARETT_VERSION`), so `modinfo snd-clarett` names exactly one tree; a build that bypasses the
   Makefile reports `0.0.0-unknown` on purpose. Verified end to end: the module inside the built kmod
-  RPM reports `0.1.0`. The specs live under `driver/` (not a repo-root `packaging/`) so the directory
-  stays self-packaging when it becomes the public submodule.
+  RPM reports `0.1.0`. The specs live under `snd-clarett/` (not a repo-root `packaging/`) so the directory
+  is self-packaging as the public submodule.
   - **Three kmodtool traps, each of which cost a failed build** — all fixed in the spec, don't
     re-discover them: (1) kmodtool emits `Requires: %{name}-common` on **every** kmod/akmod subpackage,
     so without a `-common` subpackage the RPMs build and then **fail to install**; (2) an akmod build
@@ -483,7 +493,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
     build-for-current-kernels path, which requires `--repo` **and** the
     `buildsys-build-<repo>-kerneldevpkgs` helper — RPM Fusion build-farm infrastructure. Use
     `--define 'buildforkernels akmod'` (the end-user package) or `--define "kernels $(uname -r)"`.
-  - **★ DKMS VERIFIED END TO END (dkms 3.4.1, Fedora 44):** `sudo make -C driver dkms-install` builds,
+  - **★ DKMS VERIFIED END TO END (dkms 3.4.1, Fedora 44):** `sudo make -C snd-clarett dkms-install` builds,
     **signs with an auto-generated MOK** (`/var/lib/dkms/mok.{key,pub}`; `modinfo` shows
     `signer: DKMS module signing key`), installs to **`/lib/modules/<kver>/extra/snd-clarett.ko.xz`**
     (Fedora overrides `DEST_MODULE_LOCATION`, as dkms.conf says), runs depmod, and
@@ -617,10 +627,10 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       `shim-x64`/`grub2-efi-x64` installed, ESP contents intact. Only after the Fedora side was proven
       clean did it make sense to suspect firmware. Note "restore factory keys" would NOT have fixed
       this: the third-party CA is behind the toggle, not in HP's default key set.
-  - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `driver/LICENSE` is the verbatim FSF GPL v2
+  - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `snd-clarett/LICENSE` is the verbatim FSF GPL v2
     (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
     copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
-    `driver/LICENSES/Linux-syscall-note.txt` holds the exception that `clarett_fcp_uapi.h`'s
+    `snd-clarett/LICENSES/Linux-syscall-note.txt` holds the exception that `clarett_fcp_uapi.h`'s
     `GPL-2.0 WITH Linux-syscall-note` tag refers to — taken verbatim from a real `linux-headers`
     tree, and byte-identical (modulo a trailing newline) to alsa-scarlett-gui's copy, whose flat
     REUSE-style `LICENSES/<id>.txt` layout this matches. Both RPMs register both files via `%license`.
@@ -632,12 +642,12 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
       Likewise the uapi header's `GPL-2.0` (rather than `GPL-2.0-only`) is deliberate kernel uapi
       idiom; the kernel's own `LICENSES/preferred/GPL-2.0` lists both spellings as valid.
   - **OPEN before a 0.1.0 tag:** the specs carry **no `%changelog`**, deliberately — entries are
-    dated, and `driver/` is under the no-dates rule. Decide at first release whether a *release*
+    dated, and `snd-clarett/` is under the no-dates rule. Decide at first release whether a *release*
     date is exempt (it is not an RE observation date) or whether the changelog lives outside
-    `driver/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
+    `snd-clarett/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
 - **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
   WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
-  copies). It does NOT build the module — that's `driver/`. fcp-server auto-launch (udev rule +
+  copies). It does NOT build the module — that's the `snd-clarett/` submodule. fcp-server auto-launch (udev rule +
   systemd template) still installs from fcp-support (`sudo make install` there).
 - **PREFIX is `/usr/local` everywhere — don't qualify it.** fcp-support and alsa-scarlett-gui both
   default there, and this repo's Makefile now matches, so a bare `sudo make install` in each of the
@@ -654,7 +664,7 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   (Don't read a set `XDG_DATA_DIRS` in the systemd user manager as the reason it works: on this box
   that is flatpak's `profile.d` rewriting it, which is incidental.) Packages should use `PREFIX=/usr`;
   `/etc/wireplumber/wireplumber.conf.d/` is read too but belongs to the user's own overrides.
-- **★ `driver/alsa/Clarett.conf` — WHY THE CARD WAS INVISIBLE TO JUCE APPS (Sep 10 2026, 8PreX in
+- **★ `snd-clarett/alsa/Clarett.conf` — WHY THE CARD WAS INVISIBLE TO JUCE APPS (Sep 10 2026, 8PreX in
   TONE3000).** JUCE lists ALSA devices from name hints and skips `default:`/`sysdefault:`/`plughw:`,
   while bare `hw:` is hidden by `defaults.namehint.showall off`. Other cards survive through
   `front:CARD=…`, which alsa-lib creates only for drivers with a `cards/<driver>.conf` — none existed
@@ -1595,15 +1605,17 @@ vendor XML out of any distributed driver source; carry facts into the authored
 spec instead. Cross-confirm XML-derived facts against the live trace where
 possible — independent observation is the strongest provenance.
 
-**NO CALENDAR DATES ANYWHERE UNDER `driver/`** — not in code comments, not in
-`driver/README.md` or `driver/DEVELOPMENT.md`. That directory is destined for a separate
-**public-facing git submodule**, and dated comments timestamp the RE work against the
-observation sessions, inviting a reader to correlate driver source with a discovery timeline.
+**NO CALENDAR DATES ANYWHERE UNDER `snd-clarett/`** — not in code comments, not in
+`snd-clarett/README.md` or `snd-clarett/DEVELOPMENT.md`. That directory IS the
+**public-facing git submodule** (formerly `driver/`), and dated comments timestamp the RE
+work against the observation sessions, inviting a reader to correlate driver source with a discovery timeline.
 State the finding, the model, the method and the numbers; drop the date tag — write
 "Established on hardware (2Pre) by a dyn_period cadence sweep", not "…(2Pre, Aug 19 2026)".
 Dates stay where they earn their keep: this file and `spec/provenance/*`, which exist to BE
 the dated evidence trail. Audit with:
 ```sh
 grep -rniE "\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* [0-9]{1,2},? 20[0-9]{2}|\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b" \
-  --include='*.c' --include='*.h' --include='*.md' driver/
+  --include='*.c' --include='*.h' --include='*.md' snd-clarett/
 ```
+The submodule's commit timestamps are public too, so keep RE narrative out of its commit
+messages.

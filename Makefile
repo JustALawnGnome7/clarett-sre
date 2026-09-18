@@ -5,13 +5,13 @@
 #   - the per-model FCP maps (devmap + alsa-map)  -> fcp-server's DATADIR
 #   - the WirePlumber card-naming drop-in         -> WirePlumber's conf.d
 #
-# The kernel module is separate: build it with `make -C driver` and load it with
-# insmod (see driver/README.md). This Makefile covers only the userspace data.
+# The kernel module is separate: it lives in the snd-clarett submodule; build it with
+# `make -C snd-clarett` (see snd-clarett/README.md). This Makefile covers only the userspace data.
 #
 # One piece of userspace data is deliberately NOT here: the ALSA card config
-# (driver/alsa/Clarett.conf). alsa-lib reads it only from its own data directory,
+# (snd-clarett/alsa/Clarett.conf). alsa-lib reads it only from its own data directory,
 # /usr/share/alsa/cards, never from a PREFIX, and keys it on the driver's name --
-# so it ships with the driver: `sudo make -C driver alsa-install`.
+# so it ships with the driver: `sudo make -C snd-clarett alsa-install`.
 #
 # PREFIX MUST match the PREFIX fcp-server was built/installed with, because
 # fcp-server looks for its maps in $(PREFIX)/share/fcp-server (its compiled-in
@@ -37,7 +37,8 @@ FCP_MAPS := $(wildcard fcp-server-data/fcp-devmap-*.json) \
             $(wildcard fcp-server-data/fcp-alsa-map-*.json)
 WP_DROPIN    := wireplumber/51-clarett-naming.conf
 # The drop-in is generated from the driver's clarett_model table, so its per-model rules
-# cannot drift from the card names the driver registers. Needs driver/ present.
+# cannot drift from the card names the driver registers. Needs the snd-clarett submodule
+# checked out.
 GEN_WP       := tools/gen_wireplumber_conf.py
 
 .PHONY: help install install-maps install-wireplumber uninstall \
@@ -55,8 +56,8 @@ help:
 	@echo "  make check-wireplumber-conf  fail if the drop-in is stale (CI)"
 	@echo
 	@echo "PREFIX must match the fcp-server install PREFIX (both default /usr/local)."
-	@echo "Kernel module builds separately: make -C driver (see driver/README.md)."
-	@echo "ALSA card config (lists the card in apps): sudo make -C driver alsa-install"
+	@echo "Kernel module builds separately: make -C snd-clarett (see snd-clarett/README.md)."
+	@echo "ALSA card config (lists the card in apps): sudo make -C snd-clarett alsa-install"
 
 install: install-maps install-wireplumber
 
@@ -73,7 +74,7 @@ uninstall:
 	rm -f $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
 
 # Deliberately not a prerequisite of install-wireplumber: a package or a data-only
-# install may not have driver/ checked out, and that should not block the install.
+# install may not have the snd-clarett submodule checked out, and that should not block the install.
 wireplumber-conf:
 	python3 $(GEN_WP)
 

@@ -11,7 +11,7 @@ the PCI id, selects the per-model map. Stock fcp-server keys map filenames on th
 USB product id, so this needs the `map_key` support on the `snd_clarett` branch.
 
 Clean-room: authored from our own interface facts (`spec/provenance/clarett-control-plane.md`,
-`driver/clarett.h`), never from any vendor device map.
+`snd-clarett/clarett.h`), never from any vendor device map.
 
 ## Where these live
 

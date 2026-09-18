@@ -446,7 +446,7 @@ METER_SOURCE = {
 # (config-device-settings.c) now renders both dropdowns. Enum values are scarlett2's exactly:
 # None=0 / Optical=1 / RCA=2 (contiguous, index == device byte). The 2Pre is optical-only (its
 # <spdif-mode> offers Optical alone), so it gets neither control, matching scarlett2, which omits it
-# there. [mixer_scarlett2.c, driver/clarett.h, spec/clarett-interface.md]
+# there. [mixer_scarlett2.c, snd-clarett/clarett.h, spec/clarett-interface.md]
 SPDIF_SOURCE_ENUM = [OD([("name", "None"),    ("value", 0)]),
                      OD([("name", "Optical"), ("value", 1)]),
                      OD([("name", "RCA"),     ("value", 2)])]

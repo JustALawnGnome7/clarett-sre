@@ -1,0 +1,3 @@
+[submodule "snd-clarett"]
+	path = snd-clarett
+	url = git@github.com:JustALawnGnome7/snd-clarett.git

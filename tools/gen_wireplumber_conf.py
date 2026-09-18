@@ -3,7 +3,7 @@
 
 The drop-in has to name every model the driver can register, matching each one by the exact
 string the driver puts in card->shortname. That string is clarett_model.name in
-driver/clarett_main.c, so this generator reads it from there rather than keeping a second
+snd-clarett/clarett_main.c, so this generator reads it from there rather than keeping a second
 copy: a hand-maintained list drifts the moment a model is added, and the failure is silent
 (the device simply displays under the generic pci.ids name).
 
@@ -16,7 +16,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "driver", "clarett_main.c")
+SRC = os.path.join(ROOT, "snd-clarett", "clarett_main.c")
 OUT = os.path.join(ROOT, "wireplumber", "51-clarett-naming.conf")
 
 # static const struct clarett_model clarett_2pre = { .name = "Clarett 2Pre", ...
