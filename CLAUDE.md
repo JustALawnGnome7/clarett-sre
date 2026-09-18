@@ -402,18 +402,16 @@ snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome
                                       a front:CARD=<id>,DEV=0 PCM and so a name-hint entry; keyed on
                                       card->driver "Clarett". Shipped by both specs (kmod -common, dkms)
                                       and `make dkms-install`; `make alsa-install` for the insmod route.
+  wireplumber/51-clarett-naming.conf  HAND-MAINTAINED WirePlumber drop-in: one rule per model promoting
+                                      the driver's card name (api.alsa.card.name == clarett_model.name)
+                                      into device.description, so GNOME shows "Clarett 2Pre" not the
+                                      generic "Clarett Multichannel". Covers Clarett 2Pre/4Pre/8Pre/8PreX
+                                      and Red 4Pre/8Pre/8Line/16Line — the Reds other than the 8Line in
+                                      advance of their driver entries, so a new model's name MUST be
+                                      spelled as its rule has it. Same install routes as Clarett.conf
+                                      (`make wireplumber-install`, PREFIX default /usr/local).
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
-wireplumber/51-clarett-naming.conf    GENERATED (tools/gen_wireplumber_conf.py) — do not hand-edit.
-                                      WirePlumber drop-in: promotes the driver's per-model card name
-                                      (api.alsa.card.name) into device.description so GNOME shows
-                                      "Clarett 2Pre" not the generic "Clarett Multichannel". Coupled to
-                                      the driver's card->shortname (matches on it); lives here, not in
-                                      fcp-support, because it depends on the driver, not on fcp-server.
-tools/gen_wireplumber_conf.py         Emits the drop-in above, one rule per clarett_model parsed out of
-                                      snd-clarett/clarett_main.c (order from clarett_detect_model's list).
-                                      `--check` fails on drift; `make wireplumber-conf` /
-                                      `make check-wireplumber-conf`.
 tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step lists + the
                                       clarett_arm_emit() builder in clarett_arm.h). <model> carries the
                                       product line -- arm_clarett_8prex.h, arm_red_8line.h -- and the
@@ -455,12 +453,12 @@ captures/*.log                        Trace captures (vfio_region_* logs, guest-
 ```sh
 make -C snd-clarett               # builds snd-clarett/snd-clarett.ko
 sudo insmod snd-clarett/snd-clarett.ko   # auto-binds 1cb5:0002
-sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server,
-                                  # WirePlumber drop-in -> conf.d. `make help`.
+sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server. `make help`.
+sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNOME
 ```
 - **★ THE DRIVER IS A SUBMODULE (Sep 18 2026).** Clone with `--recurse-submodules` (or run
-  `git submodule update --init` after a plain clone) — `tools/gen_wireplumber_conf.py` reads
-  `snd-clarett/clarett_main.c` and fails without it. A driver change is committed IN the submodule,
+  `git submodule update --init` after a plain clone, then `git -C snd-clarett switch main`, since the
+  update leaves a detached HEAD). A driver change is committed IN the submodule,
   then the pointer is bumped here in a second commit; **push `snd-clarett` first**, or the clarett-sre
   commit points at an object GitHub does not have. The public repo started from one commit (no RE
   history, deliberately), so nothing under `snd-clarett/` may lean on clarett-sre-only material —
@@ -691,7 +689,11 @@ sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server
   cannot be made per-model either — every model in the line reports the same subsystem ID**
   (user-confirmed), so there is nothing for a per-model entry to key on. `update-props` takes literal
   values only (no interpolation of `api.alsa.card.name`), so one generic rule keyed on
-  `alsa.driver_name` is impossible and the per-model list is mandatory — hence the generator.
+  `alsa.driver_name` is impossible and the per-model list is mandatory. **The list is now
+  hand-maintained in `snd-clarett/wireplumber/` (Sep 18 2026)** — the generator that parsed it out of
+  `clarett_main.c` was dropped rather than published with the driver, and the rules cover every
+  Clarett and Red model up front, so adding a model means spelling its `clarett_model.name` exactly as
+  the rule does (`clarett.h` says so at the field).
 - **Mixer-only**: `aplay -l` shows nothing (no PCM yet). Use `amixer -c N
   contents` / `alsamixer -c N`.
 - **Device must be free of `vfio-pci`** to test on the host (stop the VM, unbind).

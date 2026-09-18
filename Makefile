@@ -1,17 +1,15 @@
 # Clarett — userspace install
 #
-# Installs the device-specific userspace artifacts that fcp-server and
-# WirePlumber consume at runtime, so they no longer have to be copied by hand:
-#   - the per-model FCP maps (devmap + alsa-map)  -> fcp-server's DATADIR
-#   - the WirePlumber card-naming drop-in         -> WirePlumber's conf.d
+# Installs the per-model FCP maps (devmap + alsa-map) into fcp-server's DATADIR,
+# so they no longer have to be copied by hand.
 #
 # The kernel module is separate: it lives in the snd-clarett submodule; build it with
 # `make -C snd-clarett` (see snd-clarett/README.md). This Makefile covers only the userspace data.
 #
-# One piece of userspace data is deliberately NOT here: the ALSA card config
-# (snd-clarett/alsa/Clarett.conf). alsa-lib reads it only from its own data directory,
-# /usr/share/alsa/cards, never from a PREFIX, and keys it on the driver's name --
-# so it ships with the driver: `sudo make -C snd-clarett alsa-install`.
+# Two pieces of userspace data are deliberately NOT here, because they are keyed on
+# names the driver registers and so ship with it: the ALSA card config
+# (`sudo make -C snd-clarett alsa-install`) and the WirePlumber card-naming drop-in
+# (`sudo make -C snd-clarett wireplumber-install`).
 #
 # PREFIX MUST match the PREFIX fcp-server was built/installed with, because
 # fcp-server looks for its maps in $(PREFIX)/share/fcp-server (its compiled-in
@@ -27,7 +25,6 @@ PREFIX  ?= /usr/local
 DESTDIR ?=
 
 FCP_DATADIR := $(DESTDIR)$(PREFIX)/share/fcp-server
-WP_CONFDIR  := $(DESTDIR)$(PREFIX)/share/wireplumber/wireplumber.conf.d
 
 # Both halves of each model's map pair; fcp-server loads both from DATADIR.
 # Matches every model the generator emits, not just the Clarett line -- the Red 8Line
@@ -35,48 +32,25 @@ WP_CONFDIR  := $(DESTDIR)$(PREFIX)/share/wireplumber/wireplumber.conf.d
 # it had worked.
 FCP_MAPS := $(wildcard fcp-server-data/fcp-devmap-*.json) \
             $(wildcard fcp-server-data/fcp-alsa-map-*.json)
-WP_DROPIN    := wireplumber/51-clarett-naming.conf
-# The drop-in is generated from the driver's clarett_model table, so its per-model rules
-# cannot drift from the card names the driver registers. Needs the snd-clarett submodule
-# checked out.
-GEN_WP       := tools/gen_wireplumber_conf.py
 
-.PHONY: help install install-maps install-wireplumber uninstall \
-        wireplumber-conf check-wireplumber-conf
+.PHONY: help install install-maps uninstall
 
 # Default to help so a bare `make` never runs a root install by accident.
 help:
 	@echo "Clarett userspace install (PREFIX=$(PREFIX)):"
-	@echo "  make install              maps + WirePlumber drop-in (needs root)"
-	@echo "  make install-maps         maps    -> $(FCP_DATADIR)"
-	@echo "  make install-wireplumber  drop-in -> $(WP_CONFDIR)"
+	@echo "  make install              maps -> $(FCP_DATADIR) (needs root)"
 	@echo "  make uninstall            remove what install placed"
-	@echo
-	@echo "  make wireplumber-conf        regenerate the drop-in from the model table"
-	@echo "  make check-wireplumber-conf  fail if the drop-in is stale (CI)"
 	@echo
 	@echo "PREFIX must match the fcp-server install PREFIX (both default /usr/local)."
 	@echo "Kernel module builds separately: make -C snd-clarett (see snd-clarett/README.md)."
 	@echo "ALSA card config (lists the card in apps): sudo make -C snd-clarett alsa-install"
+	@echo "Per-model names in PipeWire/GNOME: sudo make -C snd-clarett wireplumber-install"
 
-install: install-maps install-wireplumber
+install: install-maps
 
 install-maps:
 	install -d $(FCP_DATADIR)
 	install -m 644 $(FCP_MAPS) $(FCP_DATADIR)/
 
-install-wireplumber:
-	install -D -m 644 $(WP_DROPIN) $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
-	@echo "Restart WirePlumber to apply: systemctl --user restart wireplumber"
-
 uninstall:
 	rm -f $(addprefix $(FCP_DATADIR)/,$(notdir $(FCP_MAPS)))
-	rm -f $(WP_CONFDIR)/$(notdir $(WP_DROPIN))
-
-# Deliberately not a prerequisite of install-wireplumber: a package or a data-only
-# install may not have the snd-clarett submodule checked out, and that should not block the install.
-wireplumber-conf:
-	python3 $(GEN_WP)
-
-check-wireplumber-conf:
-	python3 $(GEN_WP) --check
