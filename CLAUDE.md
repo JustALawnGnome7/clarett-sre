@@ -397,19 +397,15 @@ snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome
   packaging/*.spec                    Fedora RPM: snd-clarett-kmod.spec (kmodtool -> akmod + per-kernel
                                       kmod) and snd-clarett-dkms.spec. Driven by `make rpm-akmod` /
                                       `make rpm-kmod`; the by-hand recipe is in each header.
-  alsa/Clarett.conf                   alsa-lib card config -> /usr/share/alsa/cards/ (NOT a PREFIX: alsa-lib
-                                      reads cards/ only from its own datadir). Gives every snd_clarett card
-                                      a front:CARD=<id>,DEV=0 PCM and so a name-hint entry; keyed on
-                                      card->driver "Clarett". Shipped by both specs (kmod -common, dkms)
-                                      and `make dkms-install`; `make alsa-install` for the insmod route.
   wireplumber/51-clarett-naming.conf  HAND-MAINTAINED WirePlumber drop-in: one rule per model promoting
                                       the driver's card name (api.alsa.card.name == clarett_model.name)
                                       into device.description, so GNOME shows "Clarett 2Pre" not the
                                       generic "Clarett Multichannel". Covers Clarett 2Pre/4Pre/8Pre/8PreX
                                       and Red 4Pre/8Pre/8Line/16Line — the Reds other than the 8Line in
                                       advance of their driver entries, so a new model's name MUST be
-                                      spelled as its rule has it. Same install routes as Clarett.conf
-                                      (`make wireplumber-install`, PREFIX default /usr/local).
+                                      spelled as its rule has it. Shipped by both specs (kmod -common,
+                                      dkms) and `make dkms-install`; `make wireplumber-install` for the
+                                      insmod route (PREFIX default /usr/local).
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
 tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step lists + the
@@ -662,8 +658,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (Don't read a set `XDG_DATA_DIRS` in the systemd user manager as the reason it works: on this box
   that is flatpak's `profile.d` rewriting it, which is incidental.) Packages should use `PREFIX=/usr`;
   `/etc/wireplumber/wireplumber.conf.d/` is read too but belongs to the user's own overrides.
-- **★ `snd-clarett/alsa/Clarett.conf` — WHY THE CARD WAS INVISIBLE TO JUCE APPS (Sep 10 2026, 8PreX in
-  TONE3000).** JUCE lists ALSA devices from name hints and skips `default:`/`sysdefault:`/`plughw:`,
+- **★ `Clarett.conf` — WHY THE CARD WAS INVISIBLE TO JUCE APPS (Sep 10 2026, 8PreX in TONE3000).
+  SCRAPPED FROM snd-clarett FOR NOW (Sep 24 2026, operator's call)** — no route installs it any more
+  (Makefile `alsa-install`, both specs, `dkms-install` all dropped), so JUCE apps are back to not listing
+  the card unless the per-user asoundrc fallback below is used. The file is in snd-clarett's history if
+  it comes back; the findings below still stand. JUCE lists ALSA devices from name hints and skips `default:`/`sysdefault:`/`plughw:`,
   while bare `hw:` is hidden by `defaults.namehint.showall off`. Other cards survive through
   `front:CARD=…`, which alsa-lib creates only for drivers with a `cards/<driver>.conf` — none existed
   for `Clarett`, so the card's only hint was `sysdefault:` and it vanished from the list. Verified
