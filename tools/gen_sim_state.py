@@ -88,14 +88,26 @@ for s in sinks:
     ctl("MIXER", f"{s} {suffix}", "Off",
         ["access 'read write'", "type ENUMERATED", "count 1"] + items)
 
-# Mixer matrix
+def mix_label(index):
+    """fcp-server's mix_output_label(): A..Z, then AA, AB, ... (bijective base 26)."""
+    label = ""
+    while index >= 0:
+        label = chr(ord("A") + index % 26) + label
+        index = index // 26 - 1
+    return label
+
+
+# Mixer matrix. The range is fcp-server's (mix.c): linear, unity 8192, topped at the map's
+# "mixer-max-db" -- +6 dB (16345) on the Claretts -- or +12 dB (32613) when the map has no key.
 mix_inputs = [s for s in sinks if s.startswith("Mixer Input")]
 n_mix_out = len([s for s in sources if s.startswith("Mix ")])
+mix_max_db = amap.get("mixer-max-db", 12)
+mix_max = round(8192 * 10 ** (mix_max_db / 20))
 for o in range(n_mix_out):
     for i, mi in enumerate(mix_inputs):
-        ctl("MIXER", f"Mix {chr(ord('A') + o)} Input {i + 1:02d} Playback Volume", 0,
-            ["access 'read write'", "type INTEGER", "count 1", "range '0 - 32613'",
-             "dbmin -9999999", "dbmax 1200"])
+        ctl("MIXER", f"Mix {mix_label(o)} Input {i + 1:02d} Playback Volume", 0,
+            ["access 'read write'", "type INTEGER", "count 1", f"range '0 - {mix_max}'",
+             "dbmin -9999999", f"dbmax {mix_max_db * 100}"])
 
 # Input and output controls. Which channels get which control comes from the devmap, not from the
 # channel count: on the 8PreX inputs 1-2 and 3-8 carry *different* mode enums, and on the combo-jack

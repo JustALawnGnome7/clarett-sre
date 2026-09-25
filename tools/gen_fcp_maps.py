@@ -787,6 +787,11 @@ for slug, spec in MODELS.items():
                         ("type", "bool-bitmap")])),
     ])
     alsamap["output-link"] = []
+    # Mixer ceiling. Coefficients are linear with unity 0x2000, and FC's fader tops out at +6 dB =
+    # 0x3fd9 (trace-confirmed, control-plane §6), where the Scarlett 4th gen that fcp-server's default
+    # was written for goes to +12 dB. "mixer-max-db" is our fcp-server patch (mix.c); without it the
+    # GUI's faders ran 6 dB past anything the vendor sends, into coefficients never seen on the wire.
+    alsamap["mixer-max-db"] = 6
     alsamap["global-controls"] = OD([
         # Infrastructure, not cosmetics: fcp-server writes its socket path into this control's TLV
         # and locks it, and that lock+SCKT TLV is how clients discover a running server. Without it
