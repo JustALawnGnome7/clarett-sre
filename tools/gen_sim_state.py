@@ -12,10 +12,11 @@ alsa-scarlett-gui simulates a card from such a file (create_sim_from_file), whic
 rendering of our control set be checked with no hardware attached — how the routing/mixer/levels
 windows and the input Level enum were verified. The control set is DERIVED from the same
 fcp-server maps the real device is driven by (names, types, enum items, ranges), so it tracks the
-maps automatically; what it cannot reproduce is anything that only exists at runtime — TLVs
+maps automatically -- except "Clock Source" and "Sync Status", which the maps do not carry and are
+listed per model below. What it cannot reproduce is anything that only exists at runtime — TLVs
 (so mixer dB readings are wrong here), meter labels, and the hwdep/socket driver-type path.
 """
-import json, sys, os
+import json, os, re, sys
 
 slug = sys.argv[1] if len(sys.argv) > 1 else "clarett-2pre"
 root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fcp-server-data")
@@ -36,7 +37,7 @@ n = [0]
 
 def ctl(iface, name, value, comment):
     n[0] += 1
-    lines = [f"\tcontrol.{n[0]} {{", f"\t\tiface {iface}", f"\t\tname '{name}'"]
+    lines = [f"\tcontrol.{n[0]} {{", f"\t\tiface {iface}", f"\t\tname '{esc(name)}'"]
     if isinstance(value, list):
         lines += [f"\t\tvalue.{i} {v}" for i, v in enumerate(value)]
     else:
@@ -47,9 +48,36 @@ def ctl(iface, name, value, comment):
     out.extend(lines)
 
 
-def q(s):
-    return f"'{s}'" if " " in s or "/" in s else s
+def esc(s):
+    """Escape for an alsa-lib single-quoted string: the Red's mixes run past Z ("Mix \\", ...)."""
+    return s.replace("\\", "\\\\").replace("'", "\\'")
 
+
+def q(s):
+    """Quote an alsa-lib config value unless it is a plain word."""
+    return s if re.fullmatch(r"[A-Za-z0-9_.+-]+", s) else f"'{esc(s)}'"
+
+
+def enum_ctl(name, value, vals, access="read write"):
+    ctl("MIXER", name, q(value),
+        [f"access '{access}'", "type ENUMERATED", "count 1"] +
+        [f"item.{j} {q(v)}" for j, v in enumerate(vals)])
+
+
+# Clock + sync: on the real card neither comes from the maps. "Clock Source" is the one control
+# snd-clarett owns (numid 1 on a live card); its items are the model's clock_srcs list in
+# snd-clarett/clarett_main.c, copied here by hand -- keep the two in step. "Sync Status" (numid 2)
+# is fcp-server's, added at runtime from the device's SYNC capability (fcp-support server/sync.c).
+CLOCK_SOURCES = {
+    "clarett-2pre": ["Internal", "S/PDIF", "ADAT"],
+    "clarett-4pre": ["Internal", "S/PDIF", "ADAT"],
+    "clarett-8pre": ["Internal", "S/PDIF", "ADAT"],
+    "clarett-8prex": ["Internal", "S/PDIF", "ADAT 1", "ADAT 2", "Wordclock"],
+    "red-8line": ["Internal", "Wordclock", "ADAT 1", "ADAT 2", "S/PDIF", "Dante", "Loop Sync"],
+}
+clocks = CLOCK_SOURCES[slug]
+enum_ctl("Clock Source", clocks[0], clocks)
+enum_ctl("Sync Status", "Locked", ["Unlocked", "Locked"], access="read volatile")
 
 enum_items = ["Off"] + sources
 items = [f"item.{i} {q(v)}" for i, v in enumerate(enum_items)]
