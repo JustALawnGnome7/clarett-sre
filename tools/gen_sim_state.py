@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Generate an alsactl-style .state file for a Clarett TB model as fcp-server would present it.
 
-    ./tools/gen_sim_state.py clarett-2pre > "Clarett 2Pre TB.state"
-    alsa-scarlett-gui "Clarett 2Pre TB.state"
+    ./tools/gen_sim_state.py clarett-2pre > "Clarett 2Pre.state"
+    alsa-scarlett-gui "Clarett 2Pre.state"
+
+Name the file after the model exactly as the driver names the card ("Clarett 2Pre",
+"Clarett 8PreX"): the simulated card takes its name from the filename, and alsa-scarlett-gui keys
+the Thunderbolt Claretts' friendly port names (Line 3-4/Headphones, ...) on the card name.
 
 alsa-scarlett-gui simulates a card from such a file (create_sim_from_file), which lets its
 rendering of our control set be checked with no hardware attached — how the routing/mixer/levels
