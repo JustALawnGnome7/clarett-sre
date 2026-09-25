@@ -159,7 +159,8 @@ into `captures/`, never `/tmp`.
     documented on the Clarett path in `gen_fcp_maps.py` and simply had not been carried into
     `build_red_8line()`. (2) **The repo Makefile's `install-maps` globbed `fcp-devmap-clarett-*.json`,
     so `make install` SILENTLY SKIPPED the Red pair while reporting success** — which is why its copy
-    in `/usr/local/share/fcp-server` had to be made by hand. Now globs every model the generator emits.
+    in `/usr/local/share/fcp-server` had to be made by hand. (That Makefile is gone since Sep 25 2026;
+    fcp-support installs the maps.)
   - **Upstream limitation, cosmetic and not map-fixable:** `fcp-support/server/mix.c:287` names mixes
     `'A' + i`, so on a 32-mix device the last six render as `Mix [`, `Mix \`, `Mix ]`, `Mix ^`,
     `Mix _`, ``Mix ` ``. No Scarlett or Clarett has more than 26 mixes, so the Red is the first device
@@ -449,7 +450,7 @@ captures/*.log                        Trace captures (vfio_region_* logs, guest-
 ```sh
 make -C snd-clarett               # builds snd-clarett/snd-clarett.ko
 sudo insmod snd-clarett/snd-clarett.ko   # auto-binds 1cb5:0002
-sudo make install                 # (top-level) maps -> $PREFIX/share/fcp-server. `make help`.
+sudo make -C ../fcp-support install      # our fork, snd_clarett branch: fcp-server + udev/systemd + maps
 sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNOME
 ```
 - **★ THE DRIVER IS A SUBMODULE (Sep 18 2026).** Clone with `--recurse-submodules` (or run
@@ -639,15 +640,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     dated, and `snd-clarett/` is under the no-dates rule. Decide at first release whether a *release*
     date is exempt (it is not an RE observation date) or whether the changelog lives outside
     `snd-clarett/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
-- **Userspace install**: the top-level `Makefile` places the per-model FCP maps and the
-  WirePlumber naming drop-in where fcp-server/WirePlumber read them (replacing the old manual
-  copies). It does NOT build the module — that's the `snd-clarett/` submodule. fcp-server auto-launch (udev rule +
-  systemd template) still installs from fcp-support (`sudo make install` there).
+- **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
+  call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
+  (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
+  `sudo make install` deploys them with fcp-server, the udev rule and the systemd template. Upstream
+  fcp-support has neither the maps nor the fcp-server patches they need (`map_key`, `invert`,
+  `mixer-max-db`, …), so an upstream checkout installs a server that cannot drive the Clarett — check
+  the branch before blaming anything else. This repo GENERATES the maps (`tools/gen_fcp_maps.py` ->
+  `fcp-server-data/`, the source of record), then they are copied into the fork and committed there —
+  see `fcp-server-data/README.md`. The top-level Makefile, which only installed maps, was removed as
+  redundant (and a stale copy installed last would silently win). The WirePlumber drop-in ships with
+  the driver (`snd-clarett/`).
 - **PREFIX is `/usr/local` everywhere — don't qualify it.** fcp-support and alsa-scarlett-gui both
-  default there, and this repo's Makefile now matches, so a bare `sudo make install` in each of the
-  three is correct and consistent. The prefix must agree because fcp-server compiles its DATADIR in
-  (`-DDATADIR=$(PREFIX)/share/fcp-server`), so maps installed under the other prefix are invisible
-  to it. **Never leave both prefixes populated:** systemd (`/usr/local/lib/systemd/system` before
+  default there, so a bare `sudo make install` in each is correct and consistent. The prefix must
+  agree because fcp-server compiles its DATADIR in (`-DDATADIR=$(PREFIX)/share/fcp-server`), so maps
+  installed under the other prefix are invisible to it. **Never leave both prefixes populated:**
+  systemd (`/usr/local/lib/systemd/system` before
   `/usr/lib/systemd/system`) and udev (`/usr/local/lib/udev/rules.d` first) prefer `/usr/local`, so a
   stale `/usr/local` install silently shadows a freshly built `/usr` one — the unit keeps launching
   the old binary and nothing reports an error. `sudo make uninstall PREFIX=<old>` in fcp-support

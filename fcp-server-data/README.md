@@ -20,22 +20,22 @@ generated, not hand-edited — including the `_note` / `_provenance` / `_limitat
 strings inside them, which come from the generator's own text. Edit the generator,
 re-run it, then copy the result across.
 
-They are also committed to **`fcp-support/data/`** on the `snd_clarett` branch, so
-that a plain `make install` in that tree installs them to `$(DATADIR)` alongside the
-Scarlett maps and the Clarett works with no second repository involved. Keeping the
-two copies in step is a manual step of releasing:
+**`fcp-support/data/`** is the copy that ships -- **at the moment only on the `snd_clarett`
+branch of our fork** ([JustALawnGnome7/fcp-support](https://github.com/JustALawnGnome7/fcp-support/tree/snd_clarett)).
+A plain `make install` in that tree installs them to `$(DATADIR)` alongside the Scarlett maps,
+so the Clarett works with no second repository involved. Upstream fcp-support ships none of
+them, nor the fcp-server patches they depend on; getting both upstream is the eventual aim.
+Nothing installs from this directory. Keeping the two copies in step is a manual step of
+releasing:
 
 ```sh
 python3 tools/gen_fcp_maps.py
 cp fcp-server-data/fcp-*.json ../fcp-support/data/
 ```
 
-**Order matters when both trees are installed, and getting it wrong is silent.**
-`fcp-support`'s own `make install` ships `data/*.json` into the same `$(DATADIR)`, so a
-`make install` there AFTER one here overwrites these maps with whatever that tree happens to
-hold. Copy first (above), or re-run `sudo make install` in this tree last. The symptom is a
-map that regresses to an older revision with no error anywhere -- diff the installed copy
-against `fcp-server-data/` when something that was fixed stops being fixed.
+A regenerated map that has not been copied across is not installed, and nothing says so --
+diff `fcp-support/data/` against `fcp-server-data/` when something that was fixed stops
+being fixed.
 
 Note the notes inside the shipped files are written for a reader of *that* tree:
 they don't cite paths in this one, and they describe the maps rather than the
@@ -144,9 +144,9 @@ seven Red sources.
   without one, so fcp-server exited 1 with `Cannot find enums in device map` before creating a
   single control. The requirement was already documented on the Clarett path and simply had not
   been carried into `build_red_8line()`.
-- The repo Makefile's `install-maps` globbed `fcp-devmap-clarett-*.json`, so `make install`
-  **silently skipped the Red pair while reporting success**. The glob now matches every model the
-  generator emits.
+- This repo's former Makefile's `install-maps` globbed `fcp-devmap-clarett-*.json`, so
+  `make install` **silently skipped the Red pair while reporting success**. The Makefile has
+  since been removed; fcp-support's `install-data` globs every map in its `data/`.
 
 `No meters found` is still logged at error level on every start. It is expected (no `peak-index`)
 and non-fatal -- `add_meter_control()`'s return is ignored by its caller.
