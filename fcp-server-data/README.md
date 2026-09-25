@@ -108,7 +108,29 @@ Clarett pairs regenerating byte-identically, which is the regression test.
 
 **What it exposes:** 14 analogue outputs (level, mute, dim, hardware-control enable); two preamps —
 only Analogue 1-2 have them, Line 3-8 being line-level — with air, mode (Mic/Line/Inst), phantom,
-high-pass, phase invert and stereo link; and the routing patchbay, 154 sources and 156 destinations.
+high-pass, phase invert and stereo link; the routing patchbay, 154 sources and 156 destinations;
+and the same global controls as the Clarett maps, under the same names: monitor Mute and Dim,
+the read-only Master HW dial, Meter Source, and the S/PDIF input/output connector selects.
+
+Mute and dim are bits 0 and 1 of one byte (124), so each is a masked switch. **Dim needs the
+fork's masked-switch fix in fcp-server** (`control-utils.c`: a set switch writes its whole mask);
+without it, turning dim on writes 0.
+
+**Outputs 1-6 belong to the three front-panel knobs.** Monitor 1/2, Headphones 1 and Headphones 2
+take their level, mute and dim from their knob group (gain 112/116/120, mute/dim 124/126/128); the
+device pins their own gain bytes at 0 dB (a -40 dB write to Monitor 1, on SW, read back 0). So the
+map binds those outputs' faders and mute/dim to the group fields and gives them no SW/HW toggle.
+Writing a group gain from software is per the descriptor and not yet hardware-verified.
+
+Line Outputs 1-8 (outputs 7-14) have real per-output gains and a SW/HW byte each (90+i), written 0/1
+exactly as FC does -- a plain `bool`, not the Clarett's `bool-bitmap` (whose bytes pack two outputs).
+**On HW the Red mirrors the monitor knob into their stored gain itself** (observed), so unlike the
+Clarett it needs no driver-side follow.
+
+Two naming rules the GUI imposes: mix buses past Z are `Mix AA`…`Mix AF`, matching fcp-server's own
+mixer control names, and the two ADAT ports reach ALSA as one flat `ADAT 1`-`16` run (the devmap
+keeps the descriptor's `ADAT 1.1`…`2.8`), because alsa-scarlett-gui numbers ports by the first
+integer in the name.
 
 **How trustworthy the offsets are.** Every one is cross-checked against the vendor's own `SET_DATA`
 writes in `captures/red_8line.log`. Of the 72 config bytes the map claims, **61 were written by the
@@ -124,8 +146,13 @@ own minimum), so unlike the Clarett there is nothing to invert.
 - **All meter slots.** `peak-index` is absent everywhere: the `GET_METER` layout has never been
   observed on a Red, and slot order does not transfer between models, let alone product lines. Level
   meters will not display until `tools/fcp_meter_watch.c` is run on the hardware.
-- **The mixer matrix.** Mixer Input destinations carry `mixer-input-index`, so routing is complete,
-  but `MIX_INFO` dimensions have not been read from a Red.
+- **The mixer ceiling** (`mixer-max-db`). The matrix itself comes up unaided (32 x 32, read from
+  `MIX_INFO`), but every `SET_MIX` in the vendor capture wrote zero, so the top of the fader is
+  unknown and fcp-server's +12 dB default applies.
+- **Unconfirmed on hardware:** Master HW (offset 112, signed dB assumed) and Meter Source (268) come
+  from the descriptor alone. Mute/dim (124) and the S/PDIF connectors (236/244) are capture-confirmed.
+- **Dante in the GUI.** alsa-scarlett-gui knows only analogue, S/PDIF and ADAT hardware ports, so
+  the Dante inputs are drawn as analogue ones and the Dante outputs are not routing sinks at all.
 - **`line-input-ref`** (offset 272, one bit per input, activate 21) — audible effect not established.
 
 **HARDWARE-CONFIRMED (Sep 4 2026, ASRock X570 Creator).** fcp-server loads the pair and registers

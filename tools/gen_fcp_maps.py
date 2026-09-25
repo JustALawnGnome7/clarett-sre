@@ -1005,6 +1005,11 @@ RED_OUT_PINS = {
 # construction.
 RED_N_ANALOGUE_OUT = 14
 
+# Outputs 1-6 (Monitor 1/2, Headphones 1, Headphones 2) belong to the three front-panel knob groups,
+# which set their level, mute and dim; see build_red_8line().
+RED_GROUP_NAMES = ["Monitor", "Headphones 1", "Headphones 2"]
+RED_N_GROUPED = 2 * len(RED_GROUP_NAMES)
+
 # alsa-scarlett-gui parses a channel NUMBER out of every routing source and sink name
 # (get_num_from_string), and a sink it cannot number aborts the whole routing build
 # ("had no number", then an assert). The descriptor calls the Red's S/PDIF pair L/R, so the
@@ -1012,23 +1017,91 @@ RED_N_ANALOGUE_OUT = 14
 # same device_name/alsa_name split the analogue outputs already use.
 RED_SPDIF_ALSA = {0x186: 1, 0x187: 2, 0x408: 1, 0x409: 2}
 
+# S/PDIF connector select [XML <spdif-mode>]. Unlike the Clarett's there is no None option.
+RED_SPDIF_SOURCE_ENUM = [OD([("name", "Optical"), ("value", 1)]),
+                         OD([("name", "RCA"),     ("value", 2)])]
+
+# Front-panel meter-bridge banks [XML <meter-source>]. The device values are the descriptor's, gaps
+# included (there is no 1 or 3); never written in the capture.
+RED_METER_SOURCE = [OD([("name", nm), ("value", v)]) for nm, v in [
+    ("Analogue Inputs 1-8",  0), ("Analogue Outputs 1-8", 2),
+    ("S/PDIF Inputs 1-2",    4), ("S/PDIF Outputs 1-2",   5),
+    ("ADAT Inputs 1-8",      6), ("ADAT Inputs 9-16",     7),
+    ("ADAT Outputs 1-8",     8), ("ADAT Outputs 9-16",    9),
+    ("Dante Inputs 1-8",    10), ("Dante Inputs 9-16",   11),
+    ("Dante Inputs 17-24",  12), ("Dante Inputs 25-32",  13),
+    ("Dante Outputs 1-8",   14), ("Dante Outputs 9-16",  15),
+    ("Dante Outputs 17-24", 16), ("Dante Outputs 25-32", 17),
+]]
+
+# The same parse is why the two ADAT ports reach ALSA as one flat run, ADAT 1-16, as on the 8PreX:
+# "ADAT 1.1" and "ADAT 2.1" both number as 1 there. The devmap keeps the descriptor's port.channel.
+def red_is_adat(pin, devname):
+    return 0x200 <= pin < 0x210 and devname.startswith("ADAT")
+
 def red_sink_name(pin, devname):
     if 0x400 <= pin < 0x400 + RED_N_ANALOGUE_OUT:
         return f"Analogue Output {pin - 0x400 + 1}"
     if pin in RED_SPDIF_ALSA and devname.startswith("S/PDIF"):
         return f"S/PDIF Output {RED_SPDIF_ALSA[pin]}"
+    if red_is_adat(pin, devname):
+        return f"ADAT Output {pin - 0x200 + 1}"
+    # Dante outputs: "Dante Output N", alongside "ADAT Output N". alsa-scarlett-gui classes a
+    # "Dante ..." Playback Enum as a Dante hardware sink.
+    if 0x800 <= pin < 0x820 and devname.startswith("Dante"):
+        return f"Dante Output {pin - 0x800 + 1}"
     return devname
 
 def red_alsa_source_name(pin, devname):
     if pin in RED_SPDIF_ALSA and devname.startswith("S/PDIF"):
         return f"S/PDIF {RED_SPDIF_ALSA[pin]}"
+    if red_is_adat(pin, devname):
+        return f"ADAT {pin - 0x200 + 1}"
     return devname
+
+def mix_label(index):
+    """fcp-server's mix_output_label(): A..Z, then AA, AB, ... (bijective base 26). The router's
+    mix-bus sources must carry the same letters as the mixer's own "Mix X Input NN" controls, or a
+    client cannot tie a bus to its gain column."""
+    s = ""
+    index += 1
+    while index:
+        index, r = divmod(index - 1, 26)
+        s = chr(ord("A") + r) + s
+    return s
 
 def red_source_name(pin):
     if pin in RED_IN_PINS:                       return RED_IN_PINS[pin]
     if 0x600 <= pin < 0x600 + 64:                return f"PCM {pin - 0x600 + 1}"
-    if 0x300 <= pin < 0x300 + 32:                return f"Mix {chr(ord('A') + pin - 0x300)}"
+    if 0x300 <= pin < 0x300 + 32:                return f"Mix {mix_label(pin - 0x300)}"
     return None
+
+# Router ORDER. The enum/control order is what alsa-scarlett-gui numbers hardware ports by (its
+# port_num, which indexes the per-device friendly-name tables), so it must run in channel order. The
+# Clarett _source_rank/_dest_rank are Clarett-pin tables and wrong here: the Red's analogue input pins
+# run backwards within each group of four (0x403 = Analogue 1), and _dest_rank puts 0x408/0x409 first
+# because they are the 8PreX's monitor outputs -- on the Red they are Line Outputs 3/4.
+RED_IN_ORDER = {pin: i for i, pin in enumerate(
+    sorted((p for p in RED_IN_PINS if 0x400 <= p <= 0x407),
+           key=lambda p: int(RED_IN_PINS[p].split()[-1])))}
+
+def red_source_rank(pin):
+    if pin in RED_IN_ORDER:            return (0, RED_IN_ORDER[pin])   # Analogue 1-2, Line 3-8
+    if pin in (0x408, 0x409):          return (1, pin)                 # S/PDIF
+    if 0x200 <= pin <= 0x20f:          return (2, pin)                 # ADAT
+    if 0x800 <= pin <= 0x81f:          return (3, pin)                 # Dante
+    if 0x300 <= pin <= 0x31f:          return (4, pin)                 # Mix
+    if 0x600 <= pin <= 0x63f:          return (5, pin)                 # PCM
+    return (9, pin)
+
+def red_dest_rank(pin):
+    if 0x400 <= pin <= 0x40d:          return (0, pin)                 # Monitor, Headphones, Line
+    if pin in (0x186, 0x187):          return (1, pin)                 # S/PDIF
+    if 0x200 <= pin <= 0x20f:          return (2, pin)                 # ADAT
+    if 0x800 <= pin <= 0x81f:          return (3, pin)                 # Dante
+    if 0x300 <= pin <= 0x31f:          return (4, pin)                 # Mixer inputs
+    if 0x600 <= pin <= 0x63f:          return (5, pin)                 # PCM (capture)
+    return (9, pin)
 
 def red_dest_name(pin):
     """-> (device name, mixer-input index or None)."""
@@ -1058,7 +1131,7 @@ def build_red_8line():
                                     "commit activate 1")
     # Mute and dim share one byte per output (68+i, bits 0 and 1), so a control has to address a BIT
     # within a single member -- one member per output byte, as the Clarett does for hwGainEnable.
-    for n in range(nout):
+    for n in range(RED_N_GROUPED, nout):
         m[f"outMuteDim{n}"] = member(68 + n, "bool", nd=15, nc=1,
                                      note=f"output {n+1} mute (bit 0) and dim (bit 1) @ {68+n}; "
                                           f"commit activate 15")
@@ -1073,6 +1146,50 @@ def build_red_8line():
     m["phase"]      = member(186, "bool",  shape=npre, nd=12, nc=0, note="per-preamp phase invert @ 186+i; activate 12")
     m["stereoLink"] = member(194, "bool",  shape=npre, nd=13, nc=0, note="preamp stereo link @ 194+i; activate 13")
 
+    # The monitor section: the first of the descriptor's three front-panel encoder groups (gain @112,
+    # mute/dim @124 bits 0/1, commit activate 2; the other two groups, @116/126 and @120/128, are the
+    # headphone knobs). Mute and dim share one byte, so each control masks its own bit -- which needs
+    # the fcp-server fix that makes a set masked switch write its whole mask (a bare `value & mask`
+    # writes 0 for any bit but bit 0). Capture-confirmed: FC wrote 01/02/00 to 124, each committed
+    # with activate 2. nc=1 on both: the front panel can move them behind us. Two members on one byte
+    # because an alsa-map global control is keyed by its member, so one member can carry one control.
+    m["muteSwitch"] = member(124, "uint8", nd=2, nc=1,
+                             note="monitor mute = bit 0 of @ 124 (dim is bit 1); commit activate 2")
+    m["dimSwitch"]  = member(124, "uint8", nd=2, nc=1,
+                             note="monitor dim = bit 1 of @ 124 (mute is bit 0); commit activate 2")
+    # Read-only reflection of the monitor knob -- the same field as grpGain0 below, kept as a
+    # separate member because a global control is keyed by its member. Signed 16-bit dB, -112..0:
+    # confirmed on hardware (the dial tracks the knob correctly).
+    m["monitorVolume"] = member(112, "int16", nd=6, nc=1,
+                                note="monitor knob gain @ 112, signed 16-bit dB -112..0 "
+                                     "(hardware-confirmed); read-only view of grpGain0")
+    # S/PDIF connector select [XML <spdif-mode>]: Optical=1, RCA=2, commit activate 4. FC wrote
+    # Optical (01) to both, each committed with activate 4 -- capture-confirmed.
+    m["spdifSourceInput"]  = member(244, "uint8", nd=4, nc=0,
+                                    note="S/PDIF input connector @ 244; Optical=1/RCA=2; activate 4")
+    m["spdifSourceOutput"] = member(236, "uint8", nd=4, nc=0,
+                                    note="S/PDIF output connector @ 236; Optical=1/RCA=2; activate 4")
+    # Front-panel meter-bridge bank [XML <meter-source>], commit activate 14. XML only: never written
+    # in the capture, so the option values are the descriptor's word alone.
+    m["meterSource"] = member(268, "uint8", nd=14, nc=0,
+                              note="front-panel meter-bridge source @ 268; activate 14; enum [XML], "
+                                   "unexercised")
+
+    # The three knob groups own outputs 1-6 outright: Monitor 1/2 <- group 0, Headphones 1 <- group 1,
+    # Headphones 2 <- group 2 [XML monitor="true" / hardware-controls="1"/"2"]. Those outputs' own
+    # gain bytes are pinned at 0 dB by the device -- a write of -40 dB to output 1 (on SW) read straight
+    # back as 0, and 24..34 read 0 on the first live session although FC had written -112 there -- so
+    # the level a user can set is the group's (writable: command 6 [XML]; the knobs are endless
+    # encoders). Signed 16-bit dB, confirmed by the Master HW dial reading the monitor knob correctly.
+    # FC never wrote 68-73 (outputs 1-6 mute/dim) but did write the group byte 124, consistent with this.
+    for g, nm in enumerate(RED_GROUP_NAMES):
+        m[f"grpGain{g}"] = member(112 + 4 * g, "int16", nd=6, nc=1,
+                                  note=f"{nm} knob group gain @ {112 + 4*g}, signed dB -112..0; "
+                                       f"commit activate 6")
+        m[f"grpMuteDim{g}"] = member(124 + 2 * g, "bool", nd=2, nc=1,
+                                     note=f"{nm} knob group mute (bit 0) / dim (bit 1) @ "
+                                          f"{124 + 2*g}; commit activate 2")
+
     phys_in = []
     for i in range(npre):
         phys_in.append(OD(name=f"Analogue {i+1}", controls=OD([
@@ -1086,12 +1203,25 @@ def build_red_8line():
 
     phys_out = []
     for n in range(nout):
-        phys_out.append(OD(name=RED_OUT_PINS[0x400 + n], controls=OD([
-            ("level",   OD(index=n, member="outputVolume")),
-            ("mute",    OD(index=0, member=f"outMuteDim{n}")),   # index = BIT within the byte
-            ("dim",     OD(index=1, member=f"outMuteDim{n}")),
-            ("hw-gain", OD(index=n, member="hwGainEnable")),
-        ])))
+        if n < RED_N_GROUPED:
+            # Both outputs of a pair drive the one group field; fcp-server re-reads every nc=1
+            # control after a write, so the partner fader follows. No SW/HW toggle: the knob IS the
+            # level here, and FC writes 1 to these outputs' enable bytes -- exposing it would only
+            # invite writing 0.
+            g = n // 2
+            ctrls = OD([
+                ("level", OD(index=0, member=f"grpGain{g}")),
+                ("mute",  OD(index=0, member=f"grpMuteDim{g}")),  # index = BIT within the byte
+                ("dim",   OD(index=1, member=f"grpMuteDim{g}")),
+            ])
+        else:
+            ctrls = OD([
+                ("level",   OD(index=n, member="outputVolume")),
+                ("mute",    OD(index=0, member=f"outMuteDim{n}")),   # index = BIT within the byte
+                ("dim",     OD(index=1, member=f"outMuteDim{n}")),
+                ("hw-gain", OD(index=n, member="hwGainEnable")),
+            ])
+        phys_out.append(OD(name=RED_OUT_PINS[0x400 + n], controls=ctrls))
 
     # ---- router, from the de-blobbed vendor bring-up ----
     dev_sources, dev_dests, alsa_sources, alsa_sinks = [], [], [], []
@@ -1099,14 +1229,14 @@ def build_red_8line():
     src_pins = {s for s, _ in pairs if s}
     src_pins |= {0x600 + i for i in range(64)}     # every playback channel is a valid source
     src_pins |= {0x300 + i for i in range(32)}     # every mix bus likewise
-    for pin in sorted(src_pins, key=lambda p: (_source_rank(p), p)):
+    for pin in sorted(src_pins, key=red_source_rank):
         nm = red_source_name(pin)
         if nm is None:
             continue
         dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
         alsa_sources.append(OD([("device_name", nm),
                                 ("alsa_name", red_alsa_source_name(pin, nm))]))
-    for pin in sorted({d for _, d in pairs}, key=lambda p: (_dest_rank(p), p)):
+    for pin in sorted({d for _, d in pairs}, key=red_dest_rank):
         nm, mix_idx = red_dest_name(pin)
         if nm is None:
             continue
@@ -1167,8 +1297,20 @@ def build_red_8line():
         "binds each grid column to a router pin. Mixes past 26 are named AA, AB, ... (bijective "
         "base 26); fcp-server's original 'A' + i ran off the end of the alphabet into "
         "\"Mix [\", \"Mix \\\", \"Mix ]\", which GKeyFile rejects as key names -- so a client "
-        "storing state in one (alsa-scarlett-gui does) silently dropped two whole mixes. Fixed "
-        "in fcp-server and alsa-scarlett-gui together; a map cannot influence it either way.",
+        "storing state in one (alsa-scarlett-gui does) silently dropped two whole mixes. The "
+        "mix-bus router SOURCES are named here, by this map, and use the same letters: a bus "
+        "named differently from its gain controls cannot be tied to its column.",
+        "The mixer ceiling is unknown, so there is no mixer-max-db and fcp-server's +12 dB default "
+        "applies. Every SET_MIX in the one vendor capture wrote zero; a session with a fader at "
+        "its top would settle it (the Clarett's is +6 dB).",
+        "Meter Source (268) comes from the descriptor alone -- the capture never wrote it. Monitor "
+        "mute/dim (124) and the S/PDIF connectors (236/244) are capture-confirmed, offsets and "
+        "commit activates both; the monitor knob's signed-dB field (112) is hardware-confirmed.",
+        "Outputs 1-6 (Monitor 1/2, Headphones 1, Headphones 2) take level, mute and dim from their "
+        "front-panel knob group (gain 112/116/120, mute/dim 124/126/128), and have no SW/HW "
+        "toggle. The device pins their own gain bytes at 0 dB: a -40 dB write to output 1 on SW "
+        "read back 0. Setting a GROUP gain from software (commit activate 6 [XML]) is not yet "
+        "hardware-verified, nor are the two headphone groups at all.",
         "Sources and destinations are the factory-default patch recovered from the vendor bring-up, "
         "widened to the full PCM and Mix ranges. Pins outside it may well be routable; verify on the "
         "bench before adding any (pick a destination, try the pin, confirm with GET_MUX).",
@@ -1211,13 +1353,32 @@ def build_red_8line():
                         ("min", -112), ("max", 0), ("db-min", -112), ("db-max", 0)])),
         ("mute",    OD([("name", "Line %d Mute Playback Switch"), ("type", "bool-bitmap")])),
         ("dim",     OD([("name", "Line %d Dim Playback Switch"), ("type", "bool-bitmap")])),
+        # A plain bool, NOT bool-bitmap: each output has its OWN byte (90+i), so the index must
+        # address the byte. As bool-bitmap the index picked a BIT of byte 90 (output 1's field) for
+        # every output -- the toggles for outputs 2-14 never reached their own byte, and output 7's
+        # was writing bit 6 of output 1's. Whole-byte 0/1 is also exactly what FC writes.
         ("hw-gain", OD([("name", "Line Out %d Volume Control Playback Enum"),
-                        ("type", "bool-bitmap")])),
+                        ("type", "bool")])),
     ])
     a["output-link"] = []
+    # Same control names as the Clarett maps (scarlett2's), so alsa-scarlett-gui draws the same
+    # widgets: the Mute/Dim buttons, the HW dial beside the output faders, the Meter Source drop-down
+    # and the S/PDIF connector selectors in Device Settings.
     a["global-controls"] = OD([
         ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
                                     ("access", "readonly"), ("type", "int")])),
+        # 1 = muted / dimmed, straight through, as on the Clarett.
+        ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool"), ("mask", 1)])),
+        ("dimSwitch",  OD([("name", "Dim Playback Switch"),  ("type", "bool"), ("mask", 2)])),
+        ("monitorVolume",  OD([("name", "Master HW Playback Volume"), ("type", "int"),
+                               ("access", "readonly"),
+                               ("min", -112), ("max", 0), ("db-min", -112), ("db-max", 0)])),
+        ("meterSource",    OD([("name", "Meter Source Enum"), ("type", "enum"),
+                               ("values", RED_METER_SOURCE)])),
+        ("spdifSourceInput",  OD([("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
+                                  ("values", RED_SPDIF_SOURCE_ENUM)])),
+        ("spdifSourceOutput", OD([("name", "S/PDIF Source Playback Enum"), ("type", "enum"),
+                                  ("values", RED_SPDIF_SOURCE_ENUM)])),
     ])
     if alsa_sources:
         a["sources"] = alsa_sources

@@ -156,6 +156,14 @@ for key, cfg in amap["global-controls"].items():
         ctl(iface, cfg["name"], q(vals[0]),
             [f"access '{access}'", "type ENUMERATED", "count 1"] +
             [f"item.{j} {q(v)}" for j, v in enumerate(vals)])
+    elif "min" in cfg:
+        # A ranged int (the Master HW dial): its own range, and dB where the map gives it, so the
+        # GUI draws a dB dial rather than a raw 0-65535 one.
+        lo, hi = cfg["min"], cfg["max"]
+        extra = ([f"dbmin {cfg['db-min'] * 100}", f"dbmax {cfg['db-max'] * 100}"]
+                 if "db-min" in cfg else [])
+        ctl(iface, cfg["name"], hi,
+            [f"access '{access}'", "type INTEGER", "count 1", f"range '{lo} - {hi}'"] + extra)
     else:
         ctl(iface, cfg["name"], 1,
             [f"access '{access}'", "type INTEGER", "count 1", "range '0 - 65535'"])
