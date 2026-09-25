@@ -27,9 +27,12 @@ sources = [s["alsa_name"] for s in amap["sources"]]
 sinks = [s["alsa_name"] for s in amap["sinks"]]
 n_in = len([p for p in dmap["device-specification"]["physical-inputs"]])
 n_out = len([p for p in dmap["device-specification"]["physical-outputs"]])
-n_meter = 1 + max(
-    s.get("peak-index", -1) for s in dmap["device-specification"]["sources"]
-)
+# fcp-server's Level Meter has one value per METERED entry (the meter map), not one per raw slot:
+# the Red reads 156 slots but meters 124 destinations, and a control over 128 values breaks. This
+# line meters its router destinations, so count sources and destinations alike.
+spec = dmap["device-specification"]
+n_meter = sum("peak-index" in s for s in spec["sources"] + spec.get("destinations", []))
+assert n_meter <= 128, f"Level Meter would have {n_meter} values; an ALSA control holds 128"
 
 out = []
 n = [0]

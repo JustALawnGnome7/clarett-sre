@@ -86,8 +86,9 @@ measured, and the per-rate `peak-index-m`/`-h` compaction was measured on it.
 
 Meter slots carry a `_peak-index-provenance` marker: `measured` (that destination
 read directly on hardware), `stride` (filled between measured anchors in a
-contiguous block), or `reinterpreted` (re-attributed from an earlier measurement
-taken under different routing).
+contiguous block), `reinterpreted` (re-attributed from an earlier measurement
+taken under different routing), or `band0` (the destination's index in the vendor's band-0 routing
+table; see the Red section).
 
 The device byte is `0=Mic/1=Line/2=Inst` line-wide, but **only the 8PreX can select Mic
 in software** — it has separate XLR and ¼″ jacks per input, so something must choose the
@@ -143,16 +144,11 @@ own minimum), so unlike the Clarett there is nothing to invert.
 - **The mic/line/inst preamp gains.** Offsets confirmed (`130/131/132 + 3i`, activate 9), but the
   descriptor gives no range or dB mapping and none has been measured. A guessed range on a mic preamp
   is not a cosmetic error. This is the first thing to add once measured.
-- **All meter slots.** `peak-index` is absent everywhere: the `GET_METER` layout has never been
-  observed on a Red, and slot order does not transfer between models, let alone product lines. Level
-  meters will not display until `tools/fcp_meter_watch.c` is run on the hardware.
 - **The mixer ceiling** (`mixer-max-db`). The matrix itself comes up unaided (32 x 32, read from
   `MIX_INFO`), but every `SET_MIX` in the vendor capture wrote zero, so the top of the fader is
   unknown and fcp-server's +12 dB default applies.
-- **Unconfirmed on hardware:** Master HW (offset 112, signed dB assumed) and Meter Source (268) come
-  from the descriptor alone. Mute/dim (124) and the S/PDIF connectors (236/244) are capture-confirmed.
-- **Dante in the GUI.** alsa-scarlett-gui knows only analogue, S/PDIF and ADAT hardware ports, so
-  the Dante inputs are drawn as analogue ones and the Dante outputs are not routing sinks at all.
+- **Unconfirmed on hardware:** Meter Source (268) comes from the descriptor alone.
+- **Dante output meters.** Deliberately absent -- see Level meters below.
 - **`line-input-ref`** (offset 272, one bit per input, activate 21) — audible effect not established.
 
 **HARDWARE-CONFIRMED (Sep 4 2026, ASRock X570 Creator).** fcp-server loads the pair and registers
@@ -175,8 +171,17 @@ seven Red sources.
   `make install` **silently skipped the Red pair while reporting success**. The Makefile has
   since been removed; fcp-support's `install-data` globs every map in its `data/`.
 
-`No meters found` is still logged at error level on every start. It is expected (no `peak-index`)
-and non-fatal -- `add_meter_control()`'s return is ignored by its caller.
+**Level meters (hardware-confirmed).** On every Clarett a destination's `GET_METER` slot is exactly its
+index in the band-0 `SET_MUX` table the vendor programs at bring-up -- all four measured layouts, no
+exception (the 2Pre's "dark" slots 16-17 and the 4Pre's 26-27 are those models' loopback
+destinations). The Red's 156 slots are read off its own band 0 (provenance `band0`) and were confirmed
+on the unit by routing an input signal through every kind of destination. The Level Meter is a single
+ALSA INTEGER control, which holds at most **128 values**, so the 32 Dante outputs are left unmetered
+(124 channels); an input meter in the GUI borrows the level of a metered destination it is routed to,
+so input meters cost no channels. The unit reports only 58 meter slots, so this needs fcp-server's
+`METER_SLOT_LIMIT` at 255 (it was 128, which discarded the whole map), and the driver's meter-map
+ioctl now refuses more than 128 channels -- it used to accept 255 and write past the kernel's value
+array.
 
 ## What the maps deliberately don't cover
 

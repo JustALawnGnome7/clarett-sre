@@ -1010,6 +1010,10 @@ RED_N_ANALOGUE_OUT = 14
 RED_GROUP_NAMES = ["Monitor", "Headphones 1", "Headphones 2"]
 RED_N_GROUPED = 2 * len(RED_GROUP_NAMES)
 
+# The Level Meter control is capped at 128 channels (see build_red_8line()); the Red has 156 metered
+# destinations, so the Dante outputs go without.
+RED_DANTE_OUT_UNMETERED = True
+
 # alsa-scarlett-gui parses a channel NUMBER out of every routing source and sink name
 # (get_num_from_string), and a sink it cannot number aborts the whole routing build
 # ("had no number", then an assert). The descriptor calls the Red's S/PDIF pair L/R, so the
@@ -1236,6 +1240,14 @@ def build_red_8line():
         dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
         alsa_sources.append(OD([("device_name", nm),
                                 ("alsa_name", red_alsa_source_name(pin, nm))]))
+    # Meter slots. On every Clarett the GET_METER slot of a destination is EXACTLY its index in the
+    # band-0 SET_MUX table the vendor programs at bring-up -- checked against all four measured
+    # layouts with no exception (including the 2Pre/4Pre slots that never lit: they are the loopback
+    # destinations' positions). So the Red's are read off its own band 0 -- predicted that way, then
+    # CONFIRMED on hardware: every routing tried with an input signal lit the expected meter.
+    b0_slot = {}
+    for i, (_, d) in enumerate(pairs):
+        b0_slot.setdefault(d, i)
     for pin in sorted({d for _, d in pairs}, key=red_dest_rank):
         nm, mix_idx = red_dest_name(pin)
         if nm is None:
@@ -1243,6 +1255,13 @@ def build_red_8line():
         entry = OD([("name", nm), ("router-pin", str(pin))])
         if mix_idx is not None:
             entry["mixer-input-index"] = mix_idx
+        # An ALSA INTEGER control holds at most 128 values, and the Level Meter carries one per
+        # metered destination: all 156 overflow it (alsa-lib asserts; an unguarded driver wrote past
+        # the kernel's value array). Leave the 32 Dante outputs unmetered -> 124 channels. They
+        # still route; they just have no meter.
+        if not RED_DANTE_OUT_UNMETERED or not 0x800 <= pin < 0x820:
+            entry["peak-index"] = b0_slot[pin]
+            entry["_peak-index-provenance"] = "band0"
         dev_dests.append(entry)
         alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
     assert len({e["name"] for e in dev_sources}) == len(dev_sources), "red: duplicate source name"
@@ -1274,9 +1293,13 @@ def build_red_8line():
         "DELIBERATELY ABSENT. Their offsets are confirmed, but the descriptor gives no range or dB "
         "mapping for them and none has been measured, so any min/max here would be invention -- and "
         "a wrong range on a mic preamp is not a cosmetic error. Add them once measured on hardware.",
-        "No peak-index anywhere: the GET_METER slot layout has never been observed on a Red, and the "
-        "Clarett slot orders do not transfer between models, let alone between product lines. Level "
-        "meters will therefore not display until this is measured with tools/fcp_meter_watch.c.",
+        "peak-index is each destination's index in the band-0 SET_MUX table of the vendor bring-up "
+        "(provenance \"band0\"): the rule that reproduces all four measured Clarett layouts exactly, "
+        "and confirmed on this unit by routing an input signal through every kind of destination. "
+        "E.g. PCM 1 = slot 0, Monitor Output 1 = 58, Mixer Input 01 = 124, Mixer Input 32 = 155 (156 "
+        "slots). Single speed only; the driver advertises 44.1/48 kHz alone on this model. The 32 "
+        "Dante outputs (slots 90-121) are deliberately unmetered: the Level Meter is one ALSA control, "
+        "capped at 128 values, and metering all 156 destinations would overflow it.",
         "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "
         "set (the vendor wrote 1 to the monitor and headphone outputs alike); what the second bit "
         "selects is undecoded.",

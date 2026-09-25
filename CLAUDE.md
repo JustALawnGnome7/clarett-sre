@@ -161,14 +161,26 @@ into `captures/`, never `/tmp`.
     so `make install` SILENTLY SKIPPED the Red pair while reporting success** — which is why its copy
     in `/usr/local/share/fcp-server` had to be made by hand. (That Makefile is gone since Sep 25 2026;
     fcp-support installs the maps.)
-  - **Upstream limitation, cosmetic and not map-fixable:** `fcp-support/server/mix.c:287` names mixes
-    `'A' + i`, so on a 32-mix device the last six render as `Mix [`, `Mix \`, `Mix ]`, `Mix ^`,
-    `Mix _`, ``Mix ` ``. No Scarlett or Clarett has more than 26 mixes, so the Red is the first device
-    to run off the end of the alphabet.
-  - `No meters found` is still logged **at error level** on every start. Expected (no `peak-index`
-    anywhere) and **non-fatal** — `add_meter_control()`'s return is ignored by its caller. Measuring
-    the Red's meter slots with `tools/fcp_meter_watch.c` remains the next map job, alongside the
-    preamp gain ranges.
+  - ~~Mixes past Z render as `Mix [` …~~ **FIXED:** fcp-server names them `Mix AA`…`AF` (fork
+    `b446906`), and the map's router sources use the same letters (Sep 25 2026).
+  - **★★ METER SLOTS SOLVED WITHOUT A MEASUREMENT SWEEP (Sep 25 2026): a destination's `GET_METER`
+    slot == its index in the band-0 `SET_MUX` table of the vendor bring-up.** Checked against all four
+    measured Clarett layouts with zero exceptions — and it explains their two old mysteries: the 2Pre's
+    "dark S/PDIF" slots 16-17 and the 4Pre's "unidentified" 26-27 are the LOOPBACK destinations'
+    positions. The Red's 156 slots were read off its band 0 and **user-confirmed on hardware** (every
+    routing tried lit the expected meter). The per-rate bands 1/2 do NOT match our Clarett
+    `peak-index-m/-h` — (a) 8PreX ADAT outputs re-pin at 2x/4x (known), (b) **the 2Pre/4Pre mixer-input
+    per-rate indices are likely 2 low**, because `add_rate_meter_indices()` skips the unmetered
+    loopback slots that band 0 shows DO occupy array positions. Unverified; fix before trusting 2Pre/
+    4Pre meters above 48 kHz.
+  - **★ THE LEVEL METER CAN HOLD ONLY 128 CHANNELS, AND THE DRIVER USED TO OVERFLOW THE KERNEL PAST
+    THAT.** An ALSA INTEGER control's value array is 128 entries; `clarett_hwdep_meter_get()` wrote one
+    per mapped channel and the meter-map ioctl accepted 255, so the Red's first 156-channel map wrote
+    ~100 bytes past `snd_ctl_elem_value` on every read (alsa-lib then asserted in the GUI). Fixed: the
+    ioctl refuses > `CLARETT_METER_MAX_CHANNELS`. The Red map meters 124 destinations — the 32 Dante
+    outputs go unmetered; input meters cost nothing (the GUI borrows a routed destination's level).
+    The unit reports 58 slots, so fcp-server's `METER_SLOT_LIMIT` had to rise 128 -> 255.
+  - Still open for the map: the preamp gain ranges, the mixer ceiling, Meter Source on hardware.
 - **★★★ THE RED 8LINE STREAMS — FIRST AUDIO EVER OFF A NON-CLARETT DEVICE, AND IT NEEDED NO CODE CHANGE
   (Sep 4 2026, ASRock X570 Creator).** `arecord -D hw:5,0 -c 60 -f S32_LE -r 48000` runs and exits 0.
   - **Clock is correct: 47997.4 Hz measured against 48000 nominal, −0.01 %** (`hw_ptr` delta over a
