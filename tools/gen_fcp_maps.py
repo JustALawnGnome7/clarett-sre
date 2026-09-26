@@ -1026,7 +1026,8 @@ RED_SPDIF_SOURCE_ENUM = [OD([("name", "Optical"), ("value", 1)]),
                          OD([("name", "RCA"),     ("value", 2)])]
 
 # Front-panel meter-bridge banks [XML <meter-source>]. The device values are the descriptor's, gaps
-# included (there is no 1 or 3); never written in the capture.
+# included (there is no 1 or 3). Never written in the capture; 0/2/6/8 are hardware-confirmed from the
+# front panel's button, which steps through those four only.
 RED_METER_SOURCE = [OD([("name", nm), ("value", v)]) for nm, v in [
     ("Analogue Inputs 1-8",  0), ("Analogue Outputs 1-8", 2),
     ("S/PDIF Inputs 1-2",    4), ("S/PDIF Outputs 1-2",   5),
@@ -1173,11 +1174,13 @@ def build_red_8line():
                                     note="S/PDIF input connector @ 244; Optical=1/RCA=2; activate 4")
     m["spdifSourceOutput"] = member(236, "uint8", nd=4, nc=0,
                                     note="S/PDIF output connector @ 236; Optical=1/RCA=2; activate 4")
-    # Front-panel meter-bridge bank [XML <meter-source>], commit activate 14. XML only: never written
-    # in the capture, so the option values are the descriptor's word alone.
-    m["meterSource"] = member(268, "uint8", nd=14, nc=0,
-                              note="front-panel meter-bridge source @ 268; activate 14; enum [XML], "
-                                   "unexercised")
+    # Front-panel meter-bridge bank [XML <meter-source>], commit activate 14. Never written in the
+    # capture, but a write from the GUI moves the front panel's source (hardware-confirmed). Unlike the
+    # Clarett's, the Red's front panel can change it too, so it is re-read on a notification (nc=1);
+    # the driver's monitor poll covers @268 for the same reason.
+    m["meterSource"] = member(268, "uint8", nd=14, nc=1,
+                              note="front-panel meter-bridge source @ 268; activate 14; enum [XML]; "
+                                   "settable from the front panel, so re-read on notification")
 
     # The three knob groups own outputs 1-6 outright: Monitor 1/2 <- group 0, Headphones 1 <- group 1,
     # Headphones 2 <- group 2 [XML monitor="true" / hardware-controls="1"/"2"]. Those outputs' own
@@ -1310,8 +1313,8 @@ def build_red_8line():
         "been shown to be the appspace -- unverified, so not used.",
         "notify-client masks are approximate, as on the Clarett: the Thunderbolt device does not "
         "expose the FCP notification word, so the driver relays a wildcard and every notification "
-        "refreshes every control. Set here on the output gain, mute and dim -- the things a front "
-        "panel can move -- and cleared on the preamp switches.",
+        "refreshes every control. Set here on the output gain, mute, dim and Meter Source -- the "
+        "things a front panel can move -- and cleared on the preamp switches.",
         "line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
         "applies to all eight inputs but its audible effect has not been established.",
         "The mixer matrix needs nothing from this map and comes up on its own: fcp-server reads "
@@ -1326,7 +1329,12 @@ def build_red_8line():
         "The mixer ceiling is unknown, so there is no mixer-max-db and fcp-server's +12 dB default "
         "applies. Every SET_MIX in the one vendor capture wrote zero; a session with a fader at "
         "its top would settle it (the Clarett's is +6 dB).",
-        "Meter Source (268) comes from the descriptor alone -- the capture never wrote it. Monitor "
+        "Meter Source (268) comes from the descriptor -- the capture never wrote it -- but a write "
+        "from the GUI moves the front panel's selection, and the front panel's own button steps "
+        "through Analogue Inputs/Outputs and ADAT Inputs/Outputs 1-8 as 0/2/6/8 with matching "
+        "labels (hardware-confirmed). The other values (S/PDIF, ADAT 9-16, Dante) are the "
+        "descriptor's word alone; the button does not reach them. Being front-panel settable, "
+        "it is re-read on notification. Monitor "
         "mute/dim (124) and the S/PDIF connectors (236/244) are capture-confirmed, offsets and "
         "commit activates both; the monitor knob's signed-dB field (112) is hardware-confirmed.",
         "Outputs 1-6 (Monitor 1/2, Headphones 1, Headphones 2) take level, mute and dim from their "
