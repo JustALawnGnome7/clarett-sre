@@ -1141,9 +1141,11 @@ def build_red_8line():
                                      note=f"output {n+1} mute (bit 0) and dim (bit 1) @ {68+n}; "
                                           f"commit activate 15")
     m["hwGainEnable"] = member(90, "bool", shape=nout, nd=3, nc=0,
-                               note="per-output hardware-control enable @ 90+i; the field is 2 bits "
-                                    "wide [XML] but only bit 0 has been observed set (value 1); "
-                                    "commit activate 3")
+                               note="per-output hardware-control @ 90+i, 2 bits [XML], commit activate 3. "
+                                    "Measured on a line output: 0 = SW; a written 1 is stored as 2; "
+                                    "2 = HW (its gain tracks the Monitor group exactly); 3 is kept "
+                                    "but follows no group (the level holds). Exposed as a bool: "
+                                    "SW = 0, HW = 1, read back as any non-zero")
     m["phantom"]    = member(154, "bool",  shape=npre, nd=11, nc=0, note="per-preamp 48V @ 154+i; activate 11")
     m["mode"]       = member(162, "uint8", shape=npre, nd=7,  nc=0, note="per-preamp mode @ 162+i, 0=Mic/1=Line/2=Inst; activate 7")
     m["air"]        = member(170, "bool",  shape=npre, nd=8,  nc=0, note="per-preamp air @ 170+i; activate 8")
@@ -1162,12 +1164,8 @@ def build_red_8line():
                              note="monitor mute = bit 0 of @ 124 (dim is bit 1); commit activate 2")
     m["dimSwitch"]  = member(124, "uint8", nd=2, nc=1,
                              note="monitor dim = bit 1 of @ 124 (mute is bit 0); commit activate 2")
-    # Read-only reflection of the monitor knob -- the same field as grpGain0 below, kept as a
-    # separate member because a global control is keyed by its member. Signed 16-bit dB, -112..0:
-    # confirmed on hardware (the dial tracks the knob correctly).
-    m["monitorVolume"] = member(112, "int16", nd=6, nc=1,
-                                note="monitor knob gain @ 112, signed 16-bit dB -112..0 "
-                                     "(hardware-confirmed); read-only view of grpGain0")
+    # No read-only "Master HW" view of the monitor group gain (@112): the Monitor fader below IS
+    # that field, writable, so a separate dial would only show the same number again.
     # S/PDIF connector select [XML <spdif-mode>]: Optical=1, RCA=2, commit activate 4. FC wrote
     # Optical (01) to both, each committed with activate 4 -- capture-confirmed.
     m["spdifSourceInput"]  = member(244, "uint8", nd=4, nc=0,
@@ -1187,7 +1185,7 @@ def build_red_8line():
     # gain bytes are pinned at 0 dB by the device -- a write of -40 dB to output 1 (on SW) read straight
     # back as 0, and 24..34 read 0 on the first live session although FC had written -112 there -- so
     # the level a user can set is the group's (writable: command 6 [XML]; the knobs are endless
-    # encoders). Signed 16-bit dB, confirmed by the Master HW dial reading the monitor knob correctly.
+    # encoders). Signed 16-bit dB, hardware-confirmed: the group gain tracks the encoder exactly.
     # FC never wrote 68-73 (outputs 1-6 mute/dim) but did write the group byte 124, consistent with this.
     for g, nm in enumerate(RED_GROUP_NAMES):
         m[f"grpGain{g}"] = member(112 + 4 * g, "int16", nd=6, nc=1,
@@ -1211,16 +1209,20 @@ def build_red_8line():
     phys_out = []
     for n in range(nout):
         if n < RED_N_GROUPED:
-            # Both outputs of a pair drive the one group field; fcp-server re-reads every nc=1
-            # control after a write, so the partner fader follows. No SW/HW toggle: the knob IS the
-            # level here, and FC writes 1 to these outputs' enable bytes -- exposing it would only
-            # invite writing 0.
+            # Every output of a knob group gets a fader bound to the group gain, so each keeps its
+            # own level meter; the two move together (fcp-server re-reads every nc=1 control after
+            # a write). Mute and dim exist once per group, so they sit on the group's first output
+            # only (the GUI spans them across both columns), and the Monitor group has none here at
+            # all: the global Mute/Dim buttons are the same bits of @124, and the GUI draws them
+            # under the Monitor faders.
+            # No SW/HW toggle: the outputs' own gains (24..34) are pinned at 0 dB by the device --
+            # a -40 dB write to output 1 reads straight back as 0, with its hardware-control byte
+            # at 0 (hardware-measured) -- so the group gain is the only level these outputs have.
             g = n // 2
-            ctrls = OD([
-                ("level", OD(index=0, member=f"grpGain{g}")),
-                ("mute",  OD(index=0, member=f"grpMuteDim{g}")),  # index = BIT within the byte
-                ("dim",   OD(index=1, member=f"grpMuteDim{g}")),
-            ])
+            ctrls = OD([("level", OD(index=0, member=f"grpGain{g}"))])
+            if n % 2 == 0 and g > 0:
+                ctrls["mute"] = OD(index=0, member=f"grpMuteDim{g}")  # index = BIT in the byte
+                ctrls["dim"]  = OD(index=1, member=f"grpMuteDim{g}")
         else:
             ctrls = OD([
                 ("level",   OD(index=n, member="outputVolume")),
@@ -1338,10 +1340,14 @@ def build_red_8line():
         "mute/dim (124) and the S/PDIF connectors (236/244) are capture-confirmed, offsets and "
         "commit activates both; the monitor knob's signed-dB field (112) is hardware-confirmed.",
         "Outputs 1-6 (Monitor 1/2, Headphones 1, Headphones 2) take level, mute and dim from their "
-        "front-panel knob group (gain 112/116/120, mute/dim 124/126/128), and have no SW/HW "
-        "toggle. The device pins their own gain bytes at 0 dB: a -40 dB write to output 1 on SW "
-        "read back 0. Setting a GROUP gain from software (commit activate 6 [XML]) is not yet "
-        "hardware-verified, nor are the two headphone groups at all.",
+        "knob group (gain 112/116/120, mute/dim 124/126/128; one encoder, whose group the front "
+        "panel's buttons select), and have no SW/HW toggle. The device pins their own gain bytes "
+        "at 0 dB: a -40 dB write to output 1 reads straight back as 0 with its hardware-control "
+        "byte at 0 (hardware-measured). So every grouped output's fader drives its group gain "
+        "(the pair move together), mute/dim exist once per headphone group, on its L output, and "
+        "the Monitor group's mute/dim are the global Mute/Dim. A HW-mode line output "
+        "follows the Monitor group, so it cannot be split from the Monitor fader. Group gains "
+        "and mute/dim written from software are hardware-confirmed.",
         "Sources and destinations are the factory-default patch recovered from the vendor bring-up, "
         "widened to the full PCM and Mix ranges. Pins outside it may well be routable; verify on the "
         "bench before adding any (pick a destination, try the pin, confirm with GET_MUX).",
@@ -1393,7 +1399,7 @@ def build_red_8line():
     ])
     a["output-link"] = []
     # Same control names as the Clarett maps (scarlett2's), so alsa-scarlett-gui draws the same
-    # widgets: the Mute/Dim buttons, the HW dial beside the output faders, the Meter Source drop-down
+    # widgets: the Mute/Dim buttons, the Meter Source drop-down
     # and the S/PDIF connector selectors in Device Settings.
     a["global-controls"] = OD([
         ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
@@ -1401,9 +1407,6 @@ def build_red_8line():
         # 1 = muted / dimmed, straight through, as on the Clarett.
         ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool"), ("mask", 1)])),
         ("dimSwitch",  OD([("name", "Dim Playback Switch"),  ("type", "bool"), ("mask", 2)])),
-        ("monitorVolume",  OD([("name", "Master HW Playback Volume"), ("type", "int"),
-                               ("access", "readonly"),
-                               ("min", -112), ("max", 0), ("db-min", -112), ("db-max", 0)])),
         ("meterSource",    OD([("name", "Meter Source Enum"), ("type", "enum"),
                                ("values", RED_METER_SOURCE)])),
         ("spdifSourceInput",  OD([("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
