@@ -29,6 +29,14 @@ def load_mux_bands(key):
     return bands
 
 
+def band_mux(key, band):
+    """Band `band`'s routing table as [(src_pin, dst_pin)], padding dropped (see band0_mux)."""
+    for words in load_mux_bands(key).values():
+        if words and words[0] >> 16 == band:
+            return [((e >> 12) & 0xfff, e & 0xfff) for e in words[1:] if e]
+    return []
+
+
 def band0_mux(key):
     """The model's band-0 routing table as [(src_pin, dst_pin)], padding entries dropped.
 
@@ -337,46 +345,53 @@ METER_SLOTS_DST = {
 # was invisible until a probe was put above it. fcp-server's single-layout map is therefore correct at
 # single speed and wrong above the first removal at double/quad.
 #
-# Below: destination ROUTER PINS that cease to exist at double ("m") and quad ("h") speed, from the
-# [XML] pin-m/pin-h overrides, where "0x0" means the entry is gone at that speed AND ABOVE (the cascade
-# is corroborated by the <routing num/num-m/num-h> deltas). "h" is a superset of "m". Record pins come
-# from <record-outputs>, ADAT output pins from <outputs>; the 2Pre and 4Pre have NO ADAT outputs at all,
-# so only their record slots drop. Ranking is computed over the metered destinations in slot order, so
-# it stays correct whether or not a model meters its loopback pins (the 8Pre/8PreX do, the 2Pre/4Pre
-# do not).
-_SMUX_M = {
-    "clarett-2pre":  {0x60a, 0x60b, 0x60c, 0x60d},
-    "clarett-4pre":  {0x610, 0x611, 0x612, 0x613},
-    "clarett-8pre":  {0x610, 0x611, 0x612, 0x613} | {0x204, 0x205, 0x206, 0x207},
-    "clarett-8prex": set(range(0x614, 0x61c)) | {0x204, 0x205, 0x206, 0x207,
-                                                 0x20c, 0x20d, 0x20e, 0x20f},
+# So the slots at double ("m") and quad ("h") speed are read straight off the vendor's own band-1 and
+# band-2 SET_MUX tables in the de-blobbed bring-up, by the same rule that gives band 0's: a destination's
+# slot is its index in that band's table. That reproduces the 8Pre measurement above exactly, and
+# confirmed on hardware on a Red 8Line, at 96 and 192 kHz. (An earlier version ranked survivors from a
+# list of removed pins instead, which left out the unmetered loopback destinations that still occupy
+# table positions: every 2Pre/4Pre mixer-input meter came out 2 slots low above 48 kHz.)
+#
+# A destination is looked up under the pin it carries at that speed. On models with TWO ADAT output
+# ports, S/MUX halves each port and port 2's survivors take over the pins port 1 vacated [XML <outputs>
+# pin-m/pin-h; band 1 = double, band 2 = quad, 0 = gone]. Destinations not listed keep their pin, or are
+# simply absent from that band's table.
+TWO_ADAT_OUT_PIN_RATE = {
+    0x202: {2: 0},               0x203: {2: 0},                         # ADAT Output 1.3-1.4
+    **{0x204 + i: {1: 0, 2: 0} for i in range(4)},                      # ADAT Output 1.5-1.8
+    0x208: {1: 0x204, 2: 0x202}, 0x209: {1: 0x205, 2: 0x203},           # ADAT Output 2.1-2.2
+    0x20a: {1: 0x206, 2: 0},     0x20b: {1: 0x207, 2: 0},               # ADAT Output 2.3-2.4
+    **{0x20c + i: {1: 0, 2: 0} for i in range(4)},                      # ADAT Output 2.5-2.8
 }
-_SMUX_H_EXTRA = {
-    "clarett-2pre":  {0x608, 0x609},
-    "clarett-4pre":  {0x60e, 0x60f},
-    "clarett-8pre":  {0x60e, 0x60f} | {0x202, 0x203},
-    "clarett-8prex": {0x610, 0x611, 0x612, 0x613} | {0x202, 0x203, 0x20a, 0x20b},
-}
-SMUX_GONE = {slug: {"m": _SMUX_M[slug], "h": _SMUX_M[slug] | _SMUX_H_EXTRA[slug]}
-             for slug in _SMUX_M}
+DEST_PIN_RATE = {"clarett-8prex": TWO_ADAT_OUT_PIN_RATE, "red-8line": TWO_ADAT_OUT_PIN_RATE}
+
+
+def band_dest_slots(key, band):
+    """{dst_pin: GET_METER slot} at that speed: the destination's index in band `band`'s table."""
+    slots = {}
+    for i, (_, d) in enumerate(band_mux(key, band)):
+        slots.setdefault(d, i)
+    return slots
 
 
 def add_rate_meter_indices(slug, dev_dests):
-    """Attach peak-index-m / peak-index-h to each metered destination that survives that speed.
+    """Attach peak-index-m / peak-index-h to each metered destination that exists at that speed.
 
-    A destination removed at a speed simply gets no key for it — it has no meter there at all.
+    A destination removed at a speed simply gets no key for it -- it has no meter there at all.
     """
-    gone = SMUX_GONE.get(slug)
-    if not gone:
-        return
-    metered = sorted((e for e in dev_dests if "peak-index" in e), key=lambda e: e["peak-index"])
-    for band, key in (("m", "peak-index-m"), ("h", "peak-index-h")):
-        rank = 0
-        for e in metered:
-            if int(e["router-pin"]) in gone[band]:
+    key = slug.replace("-", "_")
+    pin_rate = DEST_PIN_RATE.get(slug, {})
+    for name, band in (("peak-index-m", 1), ("peak-index-h", 2)):
+        slots = band_dest_slots(key, band)
+        if not slots:
+            continue
+        for e in dev_dests:
+            if "peak-index" not in e:
                 continue
-            e[key] = rank
-            rank += 1
+            pin = int(e["router-pin"])
+            rpin = pin_rate.get(pin, {}).get(band, pin)
+            if rpin and rpin in slots:
+                e[name] = slots[rpin]
 
 # per-model: mode_label, n_analogue (air on all), and per-input mode enum kind (see ENUM_LABELS)
 MODELS = {
@@ -1265,6 +1280,7 @@ def build_red_8line():
             entry["_peak-index-provenance"] = "band0"
         dev_dests.append(entry)
         alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
+    add_rate_meter_indices(slug, dev_dests)
     assert len({e["name"] for e in dev_sources}) == len(dev_sources), "red: duplicate source name"
     assert len({e["name"] for e in dev_dests}) == len(dev_dests), "red: duplicate sink name"
     assert len({s["alsa_name"] for s in alsa_sinks}) == len(alsa_sinks), "red: duplicate ALSA sink name"
@@ -1298,7 +1314,10 @@ def build_red_8line():
         "(provenance \"band0\"): the rule that reproduces all four measured Clarett layouts exactly, "
         "and confirmed on this unit by routing an input signal through every kind of destination. "
         "E.g. PCM 1 = slot 0, Monitor Output 1 = 58, Mixer Input 01 = 124, Mixer Input 32 = 155 (156 "
-        "slots). Single speed only; the driver advertises 44.1/48 kHz alone on this model. The 32 "
+        "slots). peak-index-m / peak-index-h are the same channel's slot at double and quad speed, "
+        "by the same rule applied to the vendor's band-1 and band-2 tables, each destination looked "
+        "up under the pin it carries at that speed (ADAT Output 2.1-2.4 take over port 1's pins); "
+        "a destination with no key has no meter at that speed. The 32 "
         "Dante outputs (slots 90-121) are deliberately unmetered: the Level Meter is one ALSA control, "
         "capped at 128 values, and metering all 156 destinations would overflow it.",
         "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "

@@ -12,7 +12,27 @@ four models and persists while idle and across reloads. Do not add a mailbox que
 
 ---
 
-## 1. Hardware-test the fcp-server per-rate meter path (highest value, cheapest)
+## 1. ~~Hardware-test the fcp-server per-rate meter path~~ — DONE (Oct 2 2026)
+
+**Result:** fcp-server's band switch works on hardware, and the per-rate slots are now generated from
+the vendor's own band-1/band-2 `SET_MUX` tables (a destination's slot = its index in that rate's table,
+looked up under the pin it carries at that rate; ADAT Output 2.1-2.4 take over port 1's pins on the
+8PreX and the Red). Method: a signal on a mixer input whose slot shifts with the rate, reading which
+`Level Meter` entry lights at 48/96/192/48 kHz.
+- **Red 8Line** (new `peak-index-m/-h`): Mixer Input 20, entry 51, slots 143/127/87 — lit at every rate.
+- **8PreX** (indices unchanged by the new rule): Mixer Input 20, entry 47, slots 75/59/51 — lit at every
+  rate; ADAT Output 16 (port 2.8) went dark at 96/192k, as a removed destination should.
+- **4Pre**, A/B: the OLD map put Mixer Input 20 on entry 29 (Mixer Input 22) at 96/192k — the "2 low"
+  error, confirmed — and the regenerated map fixed it (entry 27 at every rate). The old ranking skipped
+  the unmetered loopback destinations, which still occupy table positions. 2Pre: same fix, not run.
+- **8Pre**: the table rule reproduces its measured indices exactly (map unchanged).
+- **Known, accepted:** for up to ~1 s after a rate change fcp-server still applies the previous band
+  (it checks `rate:` once per second), so a meter can flash on the wrong entry — seen on the 4Pre at
+  96->192k exactly where the maps predict. A shorter poll would shrink it; not done.
+
+The original plan follows for reference.
+
+### Original plan
 
 The map data is validated — `tools/gen_fcp_maps.py` reproduces the 8Pre measurement exactly (Mixer
 Input 01 at 40/32/28 for 48/96/192 kHz). The **code that consumes it has only ever been compiled**:

@@ -168,11 +168,11 @@ into `captures/`, never `/tmp`.
     measured Clarett layouts with zero exceptions — and it explains their two old mysteries: the 2Pre's
     "dark S/PDIF" slots 16-17 and the 4Pre's "unidentified" 26-27 are the LOOPBACK destinations'
     positions. The Red's 156 slots were read off its band 0 and **user-confirmed on hardware** (every
-    routing tried lit the expected meter). The per-rate bands 1/2 do NOT match our Clarett
-    `peak-index-m/-h` — (a) 8PreX ADAT outputs re-pin at 2x/4x (known), (b) **the 2Pre/4Pre mixer-input
-    per-rate indices are likely 2 low**, because `add_rate_meter_indices()` skips the unmetered
-    loopback slots that band 0 shows DO occupy array positions. Unverified; fix before trusting 2Pre/
-    4Pre meters above 48 kHz.
+    routing tried lit the expected meter). **The per-rate bands 1/2 follow the same rule (Oct 2 2026):** `gen_fcp_maps.py`
+    now derives `peak-index-m/-h` for every model from them, and it is hardware-confirmed on the Red,
+    8PreX and 4Pre (see `spec/provenance/clarett-rate-aware-plan.md` item 1). It also CONFIRMED and fixed
+    the suspected 2Pre/4Pre error: the old ranking skipped the loopback slots, so every mixer-input meter
+    read 2 low above 48 kHz.
   - **★ THE LEVEL METER CAN HOLD ONLY 128 CHANNELS, AND THE DRIVER USED TO OVERFLOW THE KERNEL PAST
     THAT.** An ALSA INTEGER control's value array is 128 entries; `clarett_hwdep_meter_get()` wrote one
     per mapped channel and the meter-map ioctl accepted 255, so the Red's first 156-channel map wrote
@@ -1351,7 +1351,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     latches the live/dead byte split at `prepare`, and **`clarett_rx_drain()` blanks the dead tail per period**
     on the frames handed to ALSA. Costs one small memset per frame (16 B/frame on the 8Pre at 96k).
     Stream-start glitches are the ADAT receiver locking (first ~0.3 s), not a defect.
-  - **OPEN BUG — the GET_METER slot array COMPACTS at high speed, so fcp-server's meter map is wrong above
+  - **FIXED Oct 2 2026 (per-rate maps + fcp-server's band switch, hardware-confirmed; rate-aware plan item 1).**
+    **WAS AN OPEN BUG — the GET_METER slot array COMPACTS at high speed, so fcp-server's meter map is wrong above
     the first S/MUX-removed destination (Aug 14 2026, 8Pre, hardware-measured).** The meters sit at ROUTER
     DESTINATIONS, and a meter's slot is **its position in THAT RATE's destination table** — so every
     destination S/MUX removes shifts everything after it down. Measured with `tools/fcp_meter_watch.c` while
