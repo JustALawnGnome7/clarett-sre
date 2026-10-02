@@ -364,6 +364,9 @@ TWO_ADAT_OUT_PIN_RATE = {
     **{0x20c + i: {1: 0, 2: 0} for i in range(4)},                      # ADAT Output 2.5-2.8
 }
 DEST_PIN_RATE = {"clarett-8prex": TWO_ADAT_OUT_PIN_RATE, "red-8line": TWO_ADAT_OUT_PIN_RATE}
+# The ADAT INPUTS (router sources 0x200-0x20f) renumber exactly as the outputs do [XML <inputs> pin-m/
+# pin-h, identical on both models], so the same table serves for sources.
+SOURCE_PIN_RATE = DEST_PIN_RATE
 
 
 def band_dest_slots(key, band):
@@ -372,6 +375,21 @@ def band_dest_slots(key, band):
     for i, (_, d) in enumerate(band_mux(key, band)):
         slots.setdefault(d, i)
     return slots
+
+
+def add_rate_router_pins(slug, dev_sources, dev_dests):
+    """Attach router-pin-m / router-pin-h wherever a source's or destination's pin differs at double/
+    quad speed ("0" = gone there). fcp-server writes each routing change into all three rate tables,
+    so without these it would address a renumbered ADAT port by its single-speed pin -- unreachable
+    at that rate, and colliding with the port-1 channel whose pin it has taken over."""
+    for entries, table in ((dev_sources, SOURCE_PIN_RATE.get(slug, {})),
+                           (dev_dests, DEST_PIN_RATE.get(slug, {}))):
+        for e in entries:
+            pin = int(e["router-pin"])
+            for key, band in (("router-pin-m", 1), ("router-pin-h", 2)):
+                rpin = table.get(pin, {}).get(band, pin)
+                if rpin != pin:
+                    e[key] = str(rpin)
 
 
 def add_rate_meter_indices(slug, dev_dests):
@@ -675,6 +693,7 @@ for slug, spec in MODELS.items():
             alsa_sinks.append(OD([("device_name", nm), ("alsa_name", alsa_sink_name(nm))]))
 
         add_rate_meter_indices(slug, dev_dests)
+        add_rate_router_pins(slug, dev_sources, dev_dests)
 
     devmap = OD()
     devmap["_note"] = (f"Device map for the Clarett {spec['name']} (Thunderbolt). This model does not answer "
@@ -716,8 +735,11 @@ for slug, spec in MODELS.items():
         "peak-index-m and peak-index-h are the same channel's slot at double and quad speed. The array "
         "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in THAT rate's "
         "destination table and everything after a removed entry shifts down; a destination absent at a "
-        "speed carries no key for it. Measured on an 8Pre (Mixer Input 01 = slot 40/32/28 at 48/96/192 "
-        "kHz) and derived from the vendor descriptors' pin-m/pin-h overrides elsewhere.",
+        "speed carries no key for it. Read off the vendor bring-up's band-1/band-2 SET_MUX tables (slot = "
+        "index in that rate's table); matches the 8Pre's measured Mixer Input 01 = slot 40/32/28 at "
+        "48/96/192 kHz, and confirmed on hardware on the 8PreX and 4Pre. router-pin-m / router-pin-h give "
+        "a source's or destination's router pin at double/quad speed where it differs (\"0\" = gone "
+        "there): on models with two ADAT ports, port 2's surviving channels take over port 1's pins.",
         "sources and destinations carry the router pins the device reports through GET_MUX. Pin meaning is "
         "DIRECTION-SCOPED and per-model: 0x408 is S/PDIF in as a source but Monitor Out 1 as a "
         "destination, the 2Pre reaches S/PDIF input at 0x186/0x187 where the 8PreX has S/PDIF output, and "
@@ -1281,6 +1303,7 @@ def build_red_8line():
         dev_dests.append(entry)
         alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
     add_rate_meter_indices(slug, dev_dests)
+    add_rate_router_pins(slug, dev_sources, dev_dests)
     assert len({e["name"] for e in dev_sources}) == len(dev_sources), "red: duplicate source name"
     assert len({e["name"] for e in dev_dests}) == len(dev_dests), "red: duplicate sink name"
     assert len({s["alsa_name"] for s in alsa_sinks}) == len(alsa_sinks), "red: duplicate ALSA sink name"
@@ -1317,7 +1340,9 @@ def build_red_8line():
         "slots). peak-index-m / peak-index-h are the same channel's slot at double and quad speed, "
         "by the same rule applied to the vendor's band-1 and band-2 tables, each destination looked "
         "up under the pin it carries at that speed (ADAT Output 2.1-2.4 take over port 1's pins); "
-        "a destination with no key has no meter at that speed. The 32 "
+        "a destination with no key has no meter at that speed. router-pin-m / router-pin-h give a "
+        "source's or destination's router pin at double/quad speed where it differs (\"0\" = gone "
+        "there), so a routing change addresses ADAT port 2 by the pins it carries at that rate. The 32 "
         "Dante outputs (slots 90-121) are deliberately unmetered: the Level Meter is one ALSA control, "
         "capped at 128 values, and metering all 156 destinations would overflow it.",
         "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "

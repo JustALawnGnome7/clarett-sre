@@ -401,11 +401,10 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
   clarett-windbg-plan.md            RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
                                     driver-level DMA is attribute-equivalent to ours; wall confirmed below-driver.
-  clarett-rate-aware-plan.md        OPEN — the remaining rate-aware control-plane work, with steps and
-                                    acceptance criteria: (1) hardware-test the fcp-server per-rate meter
-                                    path (landed but compile-only), (2) per-rate router pins for the
-                                    8PreX's re-pinning second ADAT port, (3) decode the 0x006004 upper
-                                    bit. START HERE when picking this thread back up.
+  clarett-rate-aware-plan.md        The rate-aware control-plane work: (1) per-rate meters, (2) per-rate
+                                    router pins for the re-pinning second ADAT port (8PreX, Red), (3) the
+                                    0x006004 sync word -- ALL DONE Oct 2 2026, with results. Its "Also
+                                    open" list and the reopened 8PreX ADAT 2/Wordclock check remain.
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
@@ -1407,7 +1406,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     So the 2Pre's `option="4"` is something looser (any external / optical), not a per-model S/PDIF
     encoding: **there is no per-model split here** and an earlier `CLARETT_CLOCK_SPDIF_2PRE` was reverted.
     Verified: Internal (every stream arms with it), ADAT=0 (8Pre at 48/96/192 kHz), S/PDIF=3 (8Pre over RCA
-    coax, 2Pre over TOSLINK). **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
+    coax, 2Pre over TOSLINK). **REOPENED Oct 2 2026: the 0x006004 sync word is a bitfield (bit 0 lock, bit 1
+    a read-to-clear "changed" latch) and fcp-server showed `!!word`, so an unlocked device with the latch
+    set read Locked — very likely the cause below. fcp-server now reports bit 0 on these cards; retry ADAT 2
+    and Wordclock on the 8PreX (rate-aware plan item 3).** Original finding: **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
     `Sync Status` does NOT reliably track the selected source — feeding one ADAT port from an 8Pre, the
     invalid control value 7 read `Locked` in 2 of 3 trials, while value 1 locked with EITHER port fed and
     value 0 locked ONLY with port 2 fed. Those are mutually inconsistent, so no port mapping can be claimed

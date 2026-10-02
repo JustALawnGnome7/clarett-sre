@@ -69,7 +69,25 @@ assuming it followed.
 
 ---
 
-## 2. Per-rate router pins for the 8PreX
+## 2. ~~Per-rate router pins for the 8PreX~~ — DONE (Oct 2 2026)
+
+**Result:** it was the Red 8Line too, and the INPUTS (router sources) as well as the outputs: on both
+models ADAT port 2 takes over port 1's pins at double/quad speed in both directions [XML <inputs>/
+<outputs> pin-m/pin-h, identical]. fcp-server writes every routing change into all three rate tables,
+so three bugs: port-2 destinations were unroutable above 48k (base pin absent from those tables);
+routing a port-1 channel S/MUX removes (1.5-1.8, or 1.3-1.4 at quad) overwrote the port-2 channel now
+holding its pin; and a port-2 SOURCE was written under its base pin. Fix: the maps carry
+`router-pin-m`/`router-pin-h` on every renumbered source and destination ("0" = gone), and fcp-server's
+mux.c uses the rate's pin for the slot lookup and for the source written (fcp-support, this commit).
+**Verified on the Red without an optical cable** by reading the device's own band 0/1/2 tables back
+(`tools/fcp_mux_dump.c`) after three routing writes at 48k: ADAT Output 2.1 <- PCM 5 lands on 0x204 at
+96k and 0x202 at 192k, ADAT Output 1.5 <- PCM 6 no longer touches either, and capture <- ADAT 2.1 reads
+source 0x204 / 0x202. The OLD build's 192k table showed the collision directly: 0x202 carried ADAT
+Output 1.3's PCM 19. One old-build reading stays unexplained (96k 0x204 read Off where the old code
+should have written PCM 6); it does not affect the new build. **Not done:** the audio-level acceptance
+(an optical loop at 96k); the table readback is the direct evidence.
+
+### Original plan
 
 **The bug:** the 8PreX's second ADAT port re-pins under S/MUX — `ADAT Output 2.1` is `0x208` at
 single speed, `0x204` at double, `0x202` at quad. fcp-server locates a destination's router slot by
@@ -92,7 +110,32 @@ optical cable in port 2 and checking capture channels 20–27. At 48 kHz it must
 
 ---
 
-## 3. Decode the FCP_SYNC_READ (0x006004) upper bit
+## 3. ~~Decode the FCP_SYNC_READ (0x006004) upper bit~~ — DONE (Oct 2 2026)
+
+**Result: bit 0 = locked, bit 1 = sync state changed since the last read** — a latch set by a clock event
+(the SET_CLOCK at every stream arm) and CLEARED BY READING IT. Measured with `tools/fcp_sync_read.c` on
+the Red 8Line and the 4Pre:
+- Red, internal clock: idle 1; every stream (48/96/192k) reads 3 on the FIRST read after start and 1
+  thereafter, whenever that first read happens (2 s, 0.3 s, or after 4 s unread: `3 1 1`, then `1 1 1`).
+- Red, ADAT 1 or S/PDIF with no signal: 2 then 0. So bit 0 is lock; the latch is independent of it.
+- Red treats the "invalid" source 7 as Internal (reads locked, 48k): on this model the real negative
+  control is an external source with nothing connected.
+- 4Pre: the latch showed once (192k, 0.3 s) and not in the read-to-clear run: the driver's own
+  stream-handshake read of 0x006004 follows SET_CLOCK, so if the event lands before it the latch is
+  consumed there. That is the whole "varies by model" table below — sampling relative to the latch.
+- **Consequence fixed:** fcp-server returned `!!word`, so 2 (unlocked + latch) showed as **Locked** —
+  very likely the 8PreX "invalid source 7 read Locked in 2 of 3 trials" result. It now uses bit 0 on the
+  Thunderbolt Clarett/Red cards (USB devices unchanged). Checked: Red on S/PDIF with no signal, 75 Sync
+  Status reads across 5 stream starts, all Unlocked.
+- **Also found:** 0x006002 = CONFIGURED rate; 0x006005 = the rate the clock actually runs at (equal when
+  locked, 192000 on an external source with no signal). The driver's probe seeded its published `rate:`
+  from 0x006005, so a unit probed while unlocked advertised 192000 to fcp-server; it now seeds from
+  0x006002 (checked: Red reloaded while unlocked on S/PDIF reads 48000).
+- **Reopens:** the 8PreX ADAT 2 (=1) and Wordclock (=2) clock enums, unverifiable while Sync Status
+  could read the latch as lock. Retry on the 8PreX with the new fcp-server, still anchored on a
+  negative control (an external source with no signal).
+
+### Original plan
 
 Not a 0/1 lock flag. Observed values so far, all with `tools/` `fcp_clock_read`:
 
