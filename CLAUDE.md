@@ -219,9 +219,16 @@ into `captures/`, never `/tmp`.
     high for the documented cadence, and "narrower streams are clean" from 2-second runs — far too short
     to sample a fault this intermittent. The driver already publishes `readmax`/`gapmax` telemetry that
     answers this directly. **Read the servicer telemetry before theorising about a stream fault.**
-  - **Still untested on the Red:** playback, any rate above 48 kHz (`max_rate` stays 0 until those are
-    pitch-checked), and the digital-loopback ramp (needs a `SET_MUX` from a bench tool, there being no
-    map pair to give the router a GUI).
+  - ~~**Still untested on the Red:** playback, any rate above 48 kHz, and the digital-loopback ramp.~~
+    **ALL DONE.** Playback and the ramp landed Sep 25 2026 (see [[red-8line-open-items]]).
+    **96 and 192 kHz VERIFIED Oct 2 2026** and `max_rate = 192000` set (snd-clarett `90d8244`): capture
+    clock 95980 / 192104 Hz, and the ramp arrived sample-exact through channels live at each speed
+    (playback 61 -> capture 51 at 96k, 31 -> 31 at 192k). Per the descriptor and vendor bands 1/2,
+    the Red drops playback 63-64 + capture slots 53-60 at double speed and playback 37-64 + capture
+    33-60 at quad; ADAT re-pins, Dante keeps 32 at 96k and 16 at 192k. **OPEN from the same runs:** a
+    playback START LOSS when aplay joins a running engine (112 frames at 96k, 800 at 192k) and a stale
+    64-frame (= `tx_guard`) burst about one period after playback stops (192k only so far) — take a
+    48k baseline before touching the code.
 - **★★ THE VENDOR STREAMED, so the capture carries the Red's DATA PLANE too — unplanned and the most
   valuable part.** From `tools/bar_profile.py`:
   - **`0x0204 = 0x40` (64) and `0x0304 = 0x3c` (60) are the per-direction CHANNEL COUNTS** — an
@@ -1311,8 +1318,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     measured `0x300` counter delta — so `CLARETT_CTR_FRAMES=16` and the descriptor layout are unchanged at
     any rate; only the ALSA advertisement had pinned 48k. Per-model `clarett_model.max_rate` (all four =
     192000) gates the advertised `.rates` mask (`clarett_rate_caps` in `clarett_pcm.c`: 44.1/48 always,
-    +88.2/96 double, +176.4/192 quad); the `max_rate` module param overrides it for testing an unconfirmed
-    model. **ADAT S/MUX at double/quad speed is DOCUMENTED in the vendor XML** — `<adat>`
+    +88.2/96 double, +176.4/192 quad). The `max_rate` module param that overrode it for testing is
+    REMOVED (Oct 2 2026, every model now at 192000): test a new model's rates by raising its field and
+    rebuilding. **ADAT S/MUX at double/quad speed is DOCUMENTED in the vendor XML** — `<adat>`
     `pin`/`pin-m`/`pin-h` = the value at single/double(mid)/quad(high) speed, `0x0` = channel gone, giving
     textbook **8→4→2 channels per ADAT port** at 1x/2x/4x (analogue/S-PDIF have no override, present at all
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
