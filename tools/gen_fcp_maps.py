@@ -432,21 +432,23 @@ METER_SOURCE = {
                       OD([("name", "ADAT 2"),   ("value", 8)])],
 }
 
-# <spdif-mode> [XML]: which physical connector S/PDIF uses. The XML models it as one control backed by
+# <spdif-mode> [XML]: which physical connector S/PDIF uses. The XML models it as ONE control backed by
 # two 2-bit fields, both activate 4: <input> @132 (connector captured) and <output> @124 (connector
-# driven). The in-kernel scarlett2 driver (ALSA, no fcp-server) handles the sibling USB Clarett/Clarett+
-# line and exposes only ONE control ("S/PDIF Source Capture Enum") writing only the input offset
-# (SCARLETT2_CONFIG_SPDIF_MODE, 0x9e on the USB map); it never touches the output offset and cannot set
-# the two connectors independently. We deliberately go further and expose BOTH as independent enums —
-# input as scarlett2's "S/PDIF Source Capture Enum" (so alsa-scarlett-gui still recognises it) and
-# output as "S/PDIF Source Playback Enum". That second name required two companion changes, both in
-# alsa-scarlett-gui (fcp-server creates either enum generically, no change): its routing-sink parser
-# (alsa.c is_elem_routing_snk) had to stop treating an "S/PDIF ... Playback Enum" whose name carries no
-# channel number as a router sink (it aborted the GUI), and its Device Settings tab
-# (config-device-settings.c) now renders both dropdowns. Enum values are scarlett2's exactly:
-# None=0 / Optical=1 / RCA=2 (contiguous, index == device byte). The 2Pre is optical-only (its
-# <spdif-mode> offers Optical alone), so it gets neither control, matching scarlett2, which omits it
-# there. [mixer_scarlett2.c, snd-clarett/clarett.h, spec/clarett-interface.md]
+# driven), and every Clarett descriptor -- USB, Clarett+ and Thunderbolt alike -- and the Red's describe
+# it the same way. So the map exposes one control, scarlett2's "S/PDIF Source Capture Enum" (the name the
+# USB Clarett/Clarett+ use, so alsa-scarlett-gui and saved states agree across the line), bound to the
+# input field and MIRRORED into the output field (fcp-server's "mirror" option: the same value is
+# written to both, under the one commit). scarlett2 writes only the input field.
+#
+# Two independent controls ("... Capture Enum" + "... Playback Enum") were tried first and dropped:
+# alsa-lib's simple mixer merges two controls that differ only by direction into one element and then
+# asserts reading it (alsamixer and `amixer scontrols` abort on the card), and the split bought nothing
+# audible -- measured on a Red 8Line over a coax loop to a Clarett 8Pre USB, the output field does not
+# gate the RCA output at all (a ramp arrived sample-exact with it set to Optical), while the input field
+# does select the receiving jack. What the output field does on the optical port is unmeasured.
+# Enum values are scarlett2's: None=0 / Optical=1 / RCA=2 (contiguous, index == device byte). The 2Pre
+# is optical-only (its <spdif-mode> offers Optical alone), so it gets no control, matching scarlett2.
+# [mixer_scarlett2.c, snd-clarett/clarett.h, spec/clarett-interface.md]
 SPDIF_SOURCE_ENUM = [OD([("name", "None"),    ("value", 0)]),
                      OD([("name", "Optical"), ("value", 1)]),
                      OD([("name", "RCA"),     ("value", 2)])]
@@ -826,18 +828,12 @@ for slug, spec in MODELS.items():
             ("name", "Meter Source Enum"), ("type", "enum"),
             ("values", METER_SOURCE[slug]),
         ])
-    # S/PDIF connector select (4Pre/8Pre/8PreX): two independent enums bound to the spdifSourceInput/
-    # Output devmap members (offsets 132/124, both commit activate 4). "S/PDIF Source Capture Enum" is
-    # scarlett2's name; "S/PDIF Source Playback Enum" is the output partner. alsa-scarlett-gui renders
-    # both in its Device Settings tab (config-device-settings.c).
+    # S/PDIF connector select (4Pre/8Pre/8PreX): one enum on the spdifSourceInput devmap member, mirrored
+    # into spdifSourceOutput (offsets 132/124, both commit activate 4). See SPDIF_SOURCE_ENUM above.
     if slug in SPDIF_SOURCE:
         alsamap["global-controls"]["spdifSourceInput"] = OD([
             ("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
-            ("values", SPDIF_SOURCE_ENUM),
-        ])
-        alsamap["global-controls"]["spdifSourceOutput"] = OD([
-            ("name", "S/PDIF Source Playback Enum"), ("type", "enum"),
-            ("values", SPDIF_SOURCE_ENUM),
+            ("values", SPDIF_SOURCE_ENUM), ("mirror", ["spdifSourceOutput"]),
         ])
 
     if alsa_sources:
@@ -1409,10 +1405,10 @@ def build_red_8line():
         ("dimSwitch",  OD([("name", "Dim Playback Switch"),  ("type", "bool"), ("mask", 2)])),
         ("meterSource",    OD([("name", "Meter Source Enum"), ("type", "enum"),
                                ("values", RED_METER_SOURCE)])),
+        # One connector setting written to both fields, as on the Clarett (SPDIF_SOURCE_ENUM above).
         ("spdifSourceInput",  OD([("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
-                                  ("values", RED_SPDIF_SOURCE_ENUM)])),
-        ("spdifSourceOutput", OD([("name", "S/PDIF Source Playback Enum"), ("type", "enum"),
-                                  ("values", RED_SPDIF_SOURCE_ENUM)])),
+                                  ("values", RED_SPDIF_SOURCE_ENUM),
+                                  ("mirror", ["spdifSourceOutput"])])),
     ])
     if alsa_sources:
         a["sources"] = alsa_sources
