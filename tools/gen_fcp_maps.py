@@ -1186,7 +1186,24 @@ def build_red_8line():
     m["air"]        = member(170, "bool",  shape=npre, nd=8,  nc=0, note="per-preamp air @ 170+i; activate 8")
     m["hpf"]        = member(178, "bool",  shape=npre, nd=10, nc=0, note="per-preamp high-pass @ 178+i; activate 10")
     m["phase"]      = member(186, "bool",  shape=npre, nd=12, nc=0, note="per-preamp phase invert @ 186+i; activate 12")
-    m["stereoLink"] = member(194, "bool",  shape=npre, nd=13, nc=0, note="preamp stereo link @ 194+i; activate 13")
+    # Preamp gain: one byte per mode per input -- mic/line/inst at 130/131/132 + 3i [XML], commit
+    # activate 9 -- and the mode byte (162+i, Mic=0/Line=1/Inst=2) picks which one is live, so a
+    # single fader per input follows the mode through fcp-server's "select": element 3i + mode.
+    # Measured with a 1 kHz tone into input 1 (headphone out -> XLR for Mic, -> instrument jack for
+    # Inst): 0.99 dB per code, flat above code 63 (64-255 are stored but act as 63), and codes 1-7
+    # act as code 0, which sits 8 dB under code 8. So 0..63 at 1 dB/step; the absolute offset is
+    # not measured (code = dB is assumed). Line mode's input is the DB25 and is UNMEASURED; its
+    # byte gets the same range. nc=1: while linked, a write to one input moves the other by the
+    # same amount, and the front panel can change gain too.
+    m["preampGain"] = member(130, "uint8", shape=3 * npre, nd=9, nc=1,
+                             note="preamp gain @ 130 + 3i + mode (mic/line/inst), 0..63 = dB; "
+                                  "activate 9")
+    # Stereo link is ONE switch held in two bytes: a write of 1 or 0 to either of 194/195 sets or
+    # clears both (hardware-measured). So it is exposed once, on input 1 -- a second control on 195
+    # would go stale whenever the first changed. Linking copies no setting across; while linked, a
+    # gain change on one input moves the other by the same amount (offsets kept), air does not follow.
+    m["stereoLink"] = member(194, "bool", nd=13, nc=0,
+                             note="preamp stereo link @ 194 (195 mirrors it in the device); activate 13")
 
     # The monitor section: the first of the descriptor's three front-panel encoder groups (gain @112,
     # mute/dim @124 bits 0/1, commit activate 2; the other two groups, @116/126 and @120/128, are the
@@ -1238,8 +1255,10 @@ def build_red_8line():
             ("phantom",     OD(index=i, member="phantom")),
             ("hpf",         OD(index=i, member="hpf")),
             ("phase",       OD(index=i, member="phase")),
-            ("stereo-link", OD(index=i, member="stereoLink")),
+            ("gain",        OD(index=3 * i, member="preampGain",
+                               select=OD(member="mode", index=i, stride=1, count=3))),
         ])))
+    phys_in[0]["controls"]["stereo-link"] = OD(index=0, member="stereoLink")
 
     phys_out = []
     for n in range(nout):
@@ -1324,17 +1343,18 @@ def build_red_8line():
     devmap["_provenance"] = (
         "Authored from Focusrite's own device descriptor and CONFIRMED against the vendor's SET_DATA "
         "writes in a black-box MMIO capture of a Red control session: air 170+i, mode 162+i, phantom "
-        "154+i, hpf 178+i, phase 186+i, stereo-link 194+i and hardware-control-enable 90+i were each "
-        "matched at every index, and output gain, mute and dim wherever that session exercised them. "
+        "154+i, hpf 178+i, phase 186+i and hardware-control-enable 90+i were each matched at every "
+        "index, stereo-link at 194 (the vendor writes 194 only; the device sets 195 with it), and output gain, mute and dim wherever that session exercised them. "
         "The 16-bit gain encoding is confirmed by the value written (0xff90 = -112, the descriptor's "
         "own -112.0 dB minimum). Router pins come from the de-blobbed band-0 SET_MUX of that same "
         "capture. Clean-room: black-box observation plus published descriptors, never a vendor device "
         "map or driver.")
     devmap["_limitations"] = [
-        "The mic/line/inst preamp gains (130/131/132 + 3i, one byte each, commit activate 9) are "
-        "DELIBERATELY ABSENT. Their offsets are confirmed, but the descriptor gives no range or dB "
-        "mapping for them and none has been measured, so any min/max here would be invention -- and "
-        "a wrong range on a mic preamp is not a cosmetic error. Add them once measured on hardware.",
+        "Preamp gain is one control per input that follows the input's mode (select on the mode "
+        "byte): mic/line/inst at 130/131/132 + 3i. The range 0..63 at 1 dB per code is measured "
+        "for Mic and Inst (flat above 63; codes 1-7 act as 0, 8 dB under code 8); the absolute dB "
+        "offset is assumed, not measured. Line mode's input is the DB25, which has not been "
+        "measured: its byte is given the same range unverified.",
         "peak-index is each destination's index in the band-0 SET_MUX table of the vendor bring-up "
         "(provenance \"band0\"): the rule that reproduces all four measured Clarett layouts exactly, "
         "and confirmed on this unit by routing an input signal through every kind of destination. "
@@ -1425,6 +1445,8 @@ def build_red_8line():
         ("hpf",         OD(name="Line In %d High Pass Filter Capture Switch", type="bool")),
         ("phase",       OD(name="Line In %d Phase Invert Capture Switch", type="bool")),
         ("stereo-link", OD(name="Line In %d Stereo Link Capture Switch", type="bool")),
+        ("gain",        OD([("name", "Line In %d Gain Capture Volume"), ("type", "int"),
+                            ("min", 0), ("max", 63), ("db-min", 0), ("db-max", 63)])),
     ])
     # Signed dB in the device, so unlike the Clarett there is nothing to invert.
     a["output-controls"] = OD([
@@ -1462,7 +1484,7 @@ def build_red_8line():
     with open(f"{OUTDIR}/fcp-alsa-map-{slug}.json", "w") as f:
         json.dump(a, f, indent=2); f.write("\n")
 
-    print(f"{slug}: {npre} preamps (air/mode/phantom/hpf/phase/link), {nout} outputs "
+    print(f"{slug}: {npre} preamps (air/mode/phantom/hpf/phase/link/gain), {nout} outputs "
           f"(level/mute/dim/hw-gain), {len(dev_sources)} sources, {len(dev_dests)} destinations")
 
 
