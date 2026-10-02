@@ -478,7 +478,9 @@ METER_SOURCE = {
 # asserts reading it (alsamixer and `amixer scontrols` abort on the card), and the split bought nothing
 # audible -- measured on a Red 8Line over a coax loop to a Clarett 8Pre USB, the output field does not
 # gate the RCA output at all (a ramp arrived sample-exact with it set to Optical), while the input field
-# does select the receiving jack. What the output field does on the optical port is unmeasured.
+# does select the receiving jack. On the optical side it does matter: on the Red, the output field set
+# to Optical turns its first optical output from ADAT into S/PDIF (a Clarett 8PreX on that port could
+# lock to ADAT only with it on RCA), so choosing Optical costs the Red its ADAT Out 1-8.
 # Enum values are scarlett2's: None=0 / Optical=1 / RCA=2 (contiguous, index == device byte). The 2Pre
 # is optical-only (its <spdif-mode> offers Optical alone), so it gets no control, matching scarlett2.
 # [mixer_scarlett2.c, snd-clarett/clarett.h, spec/clarett-interface.md]

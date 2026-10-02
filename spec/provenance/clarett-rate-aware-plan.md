@@ -131,9 +131,11 @@ the Red 8Line and the 4Pre:
   locked, 192000 on an external source with no signal). The driver's probe seeded its published `rate:`
   from 0x006005, so a unit probed while unlocked advertised 192000 to fcp-server; it now seeds from
   0x006002 (checked: Red reloaded while unlocked on S/PDIF reads 48000).
-- **Reopens:** the 8PreX ADAT 2 (=1) and Wordclock (=2) clock enums, unverifiable while Sync Status
-  could read the latch as lock. Retry on the 8PreX with the new fcp-server, still anchored on a
-  negative control (an external source with no signal).
+- **8PreX ADAT 2 (=1) VERIFIED (Oct 2 2026)** with the new Sync Status, Red 8Line ADAT Out 1-8 feeding
+  one 8PreX port at a time: port 2 (ADAT 9-16 In) fed -> 1 Locked, 0 Unlocked; port 1 fed -> the
+  reverse; S/PDIF (nothing connected) Unlocked throughout, each source read twice from an unlocked
+  state. Wordclock (=2) still needs a BNC source. On the way: the Red's S/PDIF Source = Optical turned
+  its optical output into S/PDIF, so nothing locked until it was set to RCA.
 
 ### Original plan
 

@@ -1408,8 +1408,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     Verified: Internal (every stream arms with it), ADAT=0 (8Pre at 48/96/192 kHz), S/PDIF=3 (8Pre over RCA
     coax, 2Pre over TOSLINK). **REOPENED Oct 2 2026: the 0x006004 sync word is a bitfield (bit 0 lock, bit 1
     a read-to-clear "changed" latch) and fcp-server showed `!!word`, so an unlocked device with the latch
-    set read Locked — very likely the cause below. fcp-server now reports bit 0 on these cards; retry ADAT 2
-    and Wordclock on the 8PreX (rate-aware plan item 3).** Original finding: **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
+    set read Locked — very likely the cause below. fcp-server now reports bit 0 on these cards, and with it
+    **ADAT 2 = 1 IS VERIFIED** (Red ADAT Out into one 8PreX port at a time: port 2 fed locks on 1 not 0, port
+    1 fed the reverse, S/PDIF control unlocked throughout). Wordclock = 2 still untested (needs BNC).** Original finding: **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
     `Sync Status` does NOT reliably track the selected source — feeding one ADAT port from an 8Pre, the
     invalid control value 7 read `Locked` in 2 of 3 trials, while value 1 locked with EITHER port fed and
     value 0 locked ONLY with port 2 fed. Those are mutually inconsistent, so no port mapping can be claimed
