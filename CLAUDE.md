@@ -180,7 +180,50 @@ into `captures/`, never `/tmp`.
     ioctl refuses > `CLARETT_METER_MAX_CHANNELS`. The Red map meters 124 destinations — the 32 Dante
     outputs go unmetered; input meters cost nothing (the GUI borrows a routed destination's level).
     The unit reports 58 slots, so fcp-server's `METER_SLOT_LIMIT` had to rise 128 -> 255.
-  - Still open for the map: the preamp gain ranges, the mixer ceiling, Meter Source on hardware.
+  - ~~Still open for the map: the preamp gain ranges, the mixer ceiling, Meter Source on hardware.~~
+    Meter Source done Sep 25 2026; **preamp gains + stereo link done Oct 2 2026** (clarett-sre
+    `cd04b43`, fcp-support `6144a74`): 0.99 dB/code, 0..63 (64+ acts as 63, 1-7 act as 0) measured for
+    Mic and Inst; Line mode's input is the DB25 and stays unmeasured. One fader per input follows the
+    mode byte through fcp-server's new input-control `select`. Bytes 194/195 are ONE link switch; a
+    linked pair keeps its gain OFFSET (a write moves the partner by the same delta), Air does not
+    follow. Detail in [[red-8line-open-items]] 7d. Still open: the mixer ceiling.
+  - **The front-panel red input (clip) indicator is NOT on the mailbox (Oct 2 2026).** It latches on
+    a real overload and is cleared by that input's front-panel select button (user-found). Full
+    read-only snapshots (all 16 KB of config space via GET_DATA, all 156 `GET_METER` words, the
+    0x6002/4/5 status replies) taken clear -> red -> cleared differed in NO config byte and no status
+    reply; meter words only tracked unrelated playback, and their upper 16 bits read zero throughout.
+    The descriptor has no clip field either. So host software can neither see nor clear it; a GUI
+    clip-hold would have to be synthesised from the meters. Untested: a meter read DURING clipping,
+    and whether Focusrite Control has a clear command (needs a VM trace).
+  - **★★ DANTE WORKS END TO END (Oct 2 2026, laptop host, no Dante Controller).** Rig: a gigabit PoE
+    switch with the Red, an Audinate AVIO-DAI2 (2-ch analogue-in adapter) and the host's wired port.
+    - **Network:** nothing on that switch serves DHCP, so every device sits on IPv4 link-local
+      (169.254/16) and the host must too. A NetworkManager profile with `ipv4.method link-local`
+      (+ `ipv6.method link-local`) works; `ipv4.link-local fallback` on a DHCP profile does NOT — it
+      gets an address but still fails activation at the 45 s DHCP timeout and re-cycles.
+    - **Control:** `netaudio` (chris-ritsen/network-audio-controller, 0.3.14) needs
+      `--interface <wired-if>` (env `NETAUDIO_INTERFACE`), else it browses mDNS on Wi-Fi and finds
+      nothing. The Red advertises as `Red8Line-<mac3>`: 32 TX / 32 RX, 48 kHz PCM24, 1 ms, and it is
+      the PTP **clock leader** (the AVIO follows).
+    - **netaudio reports every subscription to the Red as FAILED, but it is applied.** The Red's ARC
+      version is **2.8.12**; netaudio accepts only 2.7.41/2.8.1/2.8.9/2.8.15, so its read-back after
+      the write throws (`fresh readback was unavailable: unsupported ARC protocol version '2.8.12'`)
+      and `subscription list` shows nothing for the Red. `netaudio -n 'Red*' flow receiver-list`
+      reads the Red fine and shows the flow (`Subscribed (unicast)`). An upstream fix is a version-table
+      entry; not filed.
+    - **Factory routing already carries Dante RX 1-32 on capture PCM 27-58.** Discriminator with no
+      signal: an unsubscribed Dante channel reads EXACTLY zero, a subscribed AVIO input carries its
+      converter noise (-112.7 dBFS, 98 % non-zero).
+    - **Analogue loop, sample-exact over a minute:** PCM 1 or 2 -> Monitor L/R -> cable -> AVIO in 1
+      -> Dante -> Red RX 1 -> capture 27. A 60 s 1 kHz tone (period exactly 48 samples, so each sample
+      must equal the one 48 earlier) came back with ZERO dropouts or repeats on both monitor sides;
+      residual at the noise floor. Analogue offset Red monitor out -> AVIO in = **6 dB** (same at -30 dB
+      and unity; AVIO input level setting unread — netaudio's `channel gain` failed with "no
+      established gain adapter").
+    - **Two traps that faked failures.** (1) The Red's monitor MUTE (front panel) silences the jack
+      while the router meter still shows signal — the meter is pre-level; no map control exposes that
+      mute. (2) PipeWire's default sink was the Red, so a desktop sound landed on PCM 1 mid-test (a
+      150 ms 2-7 kHz chirp on top of an unbroken tone). Move the default sink off the Red for tests.
 - **★★★ THE RED 8LINE STREAMS — FIRST AUDIO EVER OFF A NON-CLARETT DEVICE, AND IT NEEDED NO CODE CHANGE
   (Sep 4 2026, ASRock X570 Creator).** `arecord -D hw:5,0 -c 60 -f S32_LE -r 48000` runs and exits 0.
   - **Clock is correct: 47997.4 Hz measured against 48000 nominal, −0.01 %** (`hw_ptr` delta over a
@@ -225,10 +268,10 @@ into `captures/`, never `/tmp`.
     clock 95980 / 192104 Hz, and the ramp arrived sample-exact through channels live at each speed
     (playback 61 -> capture 51 at 96k, 31 -> 31 at 192k). Per the descriptor and vendor bands 1/2,
     the Red drops playback 63-64 + capture slots 53-60 at double speed and playback 37-64 + capture
-    33-60 at quad; ADAT re-pins, Dante keeps 32 at 96k and 16 at 192k. **OPEN from the same runs:** a
+    33-60 at quad; ADAT re-pins, Dante keeps 32 at 96k and 16 at 192k. ~~**OPEN from the same runs:** a
     playback START LOSS when aplay joins a running engine (112 frames at 96k, 800 at 192k) and a stale
-    64-frame (= `tx_guard`) burst about one period after playback stops (192k only so far) — take a
-    48k baseline before touching the code.
+    64-frame (= `tx_guard`) burst about one period after playback stops (192k only so far).~~
+    **FIXED Oct 2 2026 (snd-clarett `f9e9b26`, all models)** — see [[red-8line-open-items]] item 7.
 - **★★ THE VENDOR STREAMED, so the capture carries the Red's DATA PLANE too — unplanned and the most
   valuable part.** From `tools/bar_profile.py`:
   - **`0x0204 = 0x40` (64) and `0x0304 = 0x3c` (60) are the per-direction CHANNEL COUNTS** — an
