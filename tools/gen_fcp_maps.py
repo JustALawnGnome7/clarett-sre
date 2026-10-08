@@ -1054,10 +1054,6 @@ RED_N_ANALOGUE_OUT = 14
 RED_GROUP_NAMES = ["Monitor", "Headphones 1", "Headphones 2"]
 RED_N_GROUPED = 2 * len(RED_GROUP_NAMES)
 
-# The Level Meter control is capped at 128 channels (see build_red_8line()); the Red has 156 metered
-# destinations, so the Dante outputs go without.
-RED_DANTE_OUT_UNMETERED = True
-
 # alsa-scarlett-gui parses a channel NUMBER out of every routing source and sink name
 # (get_num_from_string), and a sink it cannot number aborts the whole routing build
 # ("had no number", then an assert). The descriptor calls the Red's S/PDIF pair L/R, so the
@@ -1323,13 +1319,11 @@ def build_red_8line():
         entry = OD([("name", nm), ("router-pin", str(pin))])
         if mix_idx is not None:
             entry["mixer-input-index"] = mix_idx
-        # An ALSA INTEGER control holds at most 128 values, and the Level Meter carries one per
-        # metered destination: all 156 overflow it (alsa-lib asserts; an unguarded driver wrote past
-        # the kernel's value array). Leave the 32 Dante outputs unmetered -> 124 channels. They
-        # still route; they just have no meter.
-        if not RED_DANTE_OUT_UNMETERED or not 0x800 <= pin < 0x820:
-            entry["peak-index"] = b0_slot[pin]
-            entry["_peak-index-provenance"] = "band0"
+        # Every destination is metered: 156 channels. One ALSA INTEGER control holds at most 128
+        # values, so snd-clarett splits the meter across two "Level Meter" controls (index 0 and 1)
+        # and alsa-scarlett-gui joins them again.
+        entry["peak-index"] = b0_slot[pin]
+        entry["_peak-index-provenance"] = "band0"
         dev_dests.append(entry)
         alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
     add_rate_meter_indices(slug, dev_dests)
@@ -1373,9 +1367,9 @@ def build_red_8line():
         "up under the pin it carries at that speed (ADAT Output 2.1-2.4 take over port 1's pins); "
         "a destination with no key has no meter at that speed. router-pin-m / router-pin-h give a "
         "source's or destination's router pin at double/quad speed where it differs (\"0\" = gone "
-        "there), so a routing change addresses ADAT port 2 by the pins it carries at that rate. The 32 "
-        "Dante outputs (slots 90-121) are deliberately unmetered: the Level Meter is one ALSA control, "
-        "capped at 128 values, and metering all 156 destinations would overflow it.",
+        "there), so a routing change addresses ADAT port 2 by the pins it carries at that rate. All 156 "
+        "destinations are metered; past 128 channels the driver splits the Level Meter across two "
+        "controls of that name (index 0 and 1), which alsa-scarlett-gui joins.",
         "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "
         "set (the vendor wrote 1 to the monitor and headphone outputs alike); what the second bit "
         "selects is undecoded.",

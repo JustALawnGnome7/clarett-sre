@@ -181,8 +181,12 @@ into `captures/`, never `/tmp`.
     THAT.** An ALSA INTEGER control's value array is 128 entries; `clarett_hwdep_meter_get()` wrote one
     per mapped channel and the meter-map ioctl accepted 255, so the Red's first 156-channel map wrote
     ~100 bytes past `snd_ctl_elem_value` on every read (alsa-lib then asserted in the GUI). Fixed: the
-    ioctl refuses > `CLARETT_METER_MAX_CHANNELS`. The Red map meters 124 destinations — the 32 Dante
-    outputs go unmetered; input meters cost nothing (the GUI borrows a routed destination's level).
+    ioctl refuses > `CLARETT_METER_MAX_CHANNELS`. ~~The Red map meters 124 destinations — the 32 Dante
+    outputs go unmetered.~~ **Since Oct 7 2026 the driver splits a longer map across several `Level Meter`
+    controls (same name, index 0, 1, ...; at most 128 each) and alsa-scarlett-gui joins them, so the Red
+    meters all 156, Dante included** (hardware-confirmed Oct 8 2026: PCM 1-2 routed to every reachable stereo
+    pair, every meter moved as expected). Input meters cost nothing
+    (the GUI borrows a routed destination's level).
     The unit reports 58 slots, so fcp-server's `METER_SLOT_LIMIT` had to rise 128 -> 255.
   - ~~Still open for the map: the preamp gain ranges, the mixer ceiling, Meter Source on hardware.~~
     Meter Source done Sep 25 2026; **preamp gains + stereo link done Oct 2 2026** (clarett-sre
