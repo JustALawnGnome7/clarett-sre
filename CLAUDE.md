@@ -492,6 +492,9 @@ tools/gen_fcp_maps.py                 Generates all four map pairs (names, routi
                                       measured meter peak-index).
 tools/gen_sim_state.py                Map -> alsactl .state file, so alsa-scarlett-gui can render our
                                       control set with no hardware attached.
+tools/gen_ucm.py                      Generates the 8Pre/8PreX ALSA UCM profiles in
+                                      snd-clarett/ucm2/Clarett/ (2Pre/4Pre and Clarett.conf are
+                                      hand-written). Names = alsa-scarlett-gui Routing page, hyphens.
 tools/fcp_decode.py                   vfio_region_* trace -> FCP transaction decoder.
                                       (--brief, --mix-diff, --async, --show-appspace, --classify).
 tools/bar_profile.py                  vfio_region_* -> per-register activity profile; flags offsets
