@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the snd-clarett ALSA UCM profiles (ucm2/Clarett/Clarett-<model>-HiFi.conf) for the
-Clarett 8Pre and 8PreX.
+"""Generate the snd-clarett ALSA UCM profiles (ucm2/Clarett/<card>-HiFi.conf) for the Clarett 8Pre,
+Clarett 8PreX and Red 8Line.
 
 Each profile splits the model's playback and capture PCM into named devices for desktop sound
 settings. Structure follows the Focusrite Scarlett configs in alsa-ucm-conf (4th Gen where they
 differ); names follow alsa-scarlett-gui's Routing page for the model, with plain hyphens for its en
 dashes; capture devices are named after the hardware input that feeds them, except the loopback pair,
 which keeps "Loopback 1-2". Channel layouts come from the vendor descriptors (record-outputs order,
-outputs) and the driver's GET_7.1 channel counts.
+outputs) and the driver's GET_7.1 channel counts; playback channels map one-to-one onto the outputs.
 
 The 2Pre and 4Pre profiles are hand-written (different output layouts) and are not produced here.
 ucm2/Clarett/Clarett.conf, which picks a profile by card name, is hand-written too.
@@ -17,80 +17,85 @@ Usage: tools/gen_ucm.py [MODEL ...]     (default: every model below; writes into
 import os
 import sys
 
-def macro(name, direction, ch, hw, pos):
+# SplitPCM macro suffix and channel positions by device width. A profile defines one macro per
+# (direction, width) it uses; multichannel devices (ADAT ports, Dante banks) carry no positions.
+# alsa-ucm-conf's SplitPCMDevice handles at most 8 channels (indices 0-7), so nothing is wider:
+# Dante is split into four 8-channel banks.
+WIDTH = {1: ('mono', 'MONO'), 2: ('stereo', None), 8: ('multi', 'UNKNOWN')}
+STEREO = ['FL', 'FR']
+
+
+def chpos(width, i):
+    pos = WIDTH[width][1]
+    return STEREO[i % 2] if pos is None else pos
+
+
+def pcm_name(key, direction, width):
+    return f'{key}_{WIDTH[width][0]}_{"out" if direction == "Playback" else "in"}'
+
+
+def macro(name, direction, ch, hw):
     lines = [f'\t{{\n\t\tSplitPCM {{\n\t\t\tName "{name}"\n\t\t\tDirection {direction}\n\t\t\tFormat S32_LE\n'
              f'\t\t\tChannels {ch}\n\t\t\tHWChannels {hw}']
-    lines += [f'\t\t\tHWChannelPos{i} {pos(i)}' for i in range(hw)]
+    lines += [f'\t\t\tHWChannelPos{i} {chpos(ch, i)}' for i in range(hw)]
     return '\n'.join(lines) + '\n\t\t}\n\t}'
 
-def device(dev_id, comment, prio_key, prio, pcm, direction, hw, chans, pos, note=None):
+
+def device(dev_id, comment, prio, pcm, direction, hw, chans, note=None):
     out = [f'SectionDevice."{dev_id}" {{']
     if note:
         out.append(f'\t# {note}')
-    out += [f'\tComment "{comment}"', '', '\tValue {', f'\t\t{prio_key} {prio}', '\t}', '',
+    out += [f'\tComment "{comment}"', '', '\tValue {', f'\t\t{direction}Priority {prio}', '\t}', '',
             '\tMacro.pcm_split.SplitPCMDevice {', f'\t\tName "{pcm}"', f'\t\tDirection {direction}',
             f'\t\tHWChannels {hw}', f'\t\tChannels {len(chans)}']
     out += [f'\t\tChannel{i} {c}' for i, c in enumerate(chans)]
-    out += [f'\t\tChannelPos{i} {pos[i]}' for i in range(len(chans))]
+    out += [f'\t\tChannelPos{i} {chpos(len(chans), i)}' for i in range(len(chans))]
     out += ['\t}', '}', '']
     return '\n'.join(out)
 
-STEREO = ['FL', 'FR']
-ADATPOS = ['UNKNOWN'] * 8
 
 def build(m):
-    p, c, key = m['play'], m['cap'], m['key']
-    so, mi, si, ai = f'{key}_stereo_out', f'{key}_mono_in', f'{key}_stereo_in', f'{key}_adat_in'
-    ao = f'{key}_adat_out'
+    """m: key, play, cap, header, sections = [(title, direction, [(id, name, first_ch, width, prio,
+    note)])]."""
+    hw = {'Playback': m['play'], 'Capture': m['cap']}
+    used = []
+    for _, direction, devs in m['sections']:
+        for d in devs:
+            if (direction, d[3]) not in used:
+                used.append((direction, d[3]))
+    order = [('Playback', w) for w in (1, 2, 8)] + [('Capture', w) for w in (1, 2, 8)]
     s = [m['header'], 'Include.pcm_split.File "/common/pcm/split.conf"', '', 'Macro [']
-    s.append('\n'.join([
-        macro(so, 'Playback', 2, p, lambda i: STEREO[i % 2]),
-        macro(ao, 'Playback', 8, p, lambda i: 'UNKNOWN'),
-        macro(mi, 'Capture', 1, c, lambda i: 'MONO'),
-        macro(si, 'Capture', 2, c, lambda i: STEREO[i % 2]),
-        macro(ai, 'Capture', 8, c, lambda i: 'UNKNOWN')]))
+    s.append('\n'.join(macro(pcm_name(m['key'], d, w), d, w, hw[d]) for d, w in order if (d, w) in used))
     s += [']', '']
-    s.append('# Analogue Outputs\n')
-    prio = 200
-    for i, (dev, name, first) in enumerate(m['outs']):
-        s.append(device(dev, name, 'PlaybackPriority', prio, so, 'Playback', p, [first, first + 1], STEREO,
-                        note=m.get('notes', {}).get(dev)))
-        prio -= 10
-    s.append('# Digital (Consumer) Outputs\n')
-    s.append(device('SPDIF1', 'S/PDIF 1-2', 'PlaybackPriority', 112, so, 'Playback', p,
-                    [m['spdif_out'], m['spdif_out'] + 1], STEREO))
-    s.append('# Digital (Professional) Outputs\n')
-    for i, (name, first) in enumerate(m['adat_out']):
-        s.append(device(f'Direct{i + 1}', name, 'PlaybackPriority', 48 - i, ao, 'Playback', p,
-                        list(range(first, first + 8)), ADATPOS))
-    s.append('# Analogue Inputs\n')
-    cprio = [500, 400] + [390 - 10 * i for i in range(6)]
-    for i, (dev, name) in enumerate(m['ins']):
-        s.append(device(dev, name, 'CapturePriority', cprio[i], mi, 'Capture', c, [i], ['MONO']))
-    s.append('# Loopback Inputs\n')
-    s.append(device(m['loop_dev'], 'Loopback 1-2', 'CapturePriority', 300, si, 'Capture', c,
-                    [m['loop'], m['loop'] + 1], STEREO))
-    s.append('# Digital (Consumer) Inputs\n')
-    for i in range(2):
-        s.append(device(f'SPDIF{i + 2}', f'S/PDIF {i + 1}', 'CapturePriority', 112 - i, mi, 'Capture', c,
-                        [m['spdif_in'] + i], ['MONO']))
-    s.append('# Digital (Professional) Inputs\n')
-    n = len(m['adat_out'])
-    for i, (name, first) in enumerate(m['adat_in']):
-        s.append(device(f'Direct{n + i + 1}', name, 'CapturePriority', 48 - i, ai, 'Capture', c,
-                        list(range(first, first + 8)), ADATPOS))
+    for title, direction, devs in m['sections']:
+        s.append(f'# {title}\n')
+        for dev_id, name, first, width, prio, note in devs:
+            s.append(device(dev_id, name, prio, pcm_name(m['key'], direction, width), direction,
+                            hw[direction], list(range(first, first + width)), note))
     return '\n'.join(s).rstrip('\n') + '\n'
 
-INS = [('Mic1', 'Mic/Line/Inst 1'), ('Mic2', 'Mic/Line/Inst 2')] + \
-      [(f'Mic{i}', f'Mic/Line {i}') for i in range(3, 9)]
-OUTS = [('Line1', 'Line 1-2', 0), ('Line2', 'Line 3-4', 2), ('Line3', 'Line 5-6', 4),
-        ('Line4', 'Line 7-8/Headphones 1', 6), ('Line5', 'Line 9-10/Headphones 2', 8)]
 
-def header(model, play, cap, extra_out, extra_cap, loop_pcm, cap_end):
-    return f"""# Generated by tools/gen_ucm.py in the clarett-sre project: change the
+def dev(dev_id, name, first, width, prio, note=None):
+    return (dev_id, name, first, width, prio, note)
+
+
+IN_PRIO = [500, 400] + [390 - 10 * i for i in range(6)]
+
+# --- Clarett 8Pre / 8PreX ---------------------------------------------------------------------------
+
+def clarett_8pre(model, key, play, adat_ports, loop_pcm, cap_end):
+    adat = [('ADAT 1-8', 12), ('ADAT 9-16', 20)][:adat_ports]
+    ins = ['Mic/Line/Inst 1', 'Mic/Line/Inst 2'] + [f'Mic/Line {i}' for i in range(3, 9)]
+    if adat_ports == 1:
+        adat_out_doc = '#   ch 12-19  ADAT Output 1-8'
+        adat_in_doc = '#   ch 12-19  ADAT 1-8'
+    else:
+        adat_out_doc = '#   ch 12-19  ADAT Output 1-8 (port 1)\n#   ch 20-27  ADAT Output 9-16 (port 2)'
+        adat_in_doc = '#   ch 12-19  ADAT 1-8 (port 1)\n#   ch 20-27  ADAT 9-16 (port 2)'
+    header = f"""# Generated by tools/gen_ucm.py in the clarett-sre project: change the
 # generator, not this file.
 #
-# Clarett {model}: split the {play}-channel playback and {cap}-channel capture PCM into
+# Clarett {model}: split the {play}-channel playback and {play}-channel capture PCM into
 # named devices. The device structure follows the upstream Focusrite Scarlett
 # configs (4th Gen where they differ); the names follow alsa-scarlett-gui's
 # Routing page for this model, so the desktop and the router agree, with plain
@@ -105,7 +110,7 @@ def header(model, play, cap, extra_out, extra_cap, loop_pcm, cap_end):
 #   ch 6-7    Line Output 7-8, mirrored on headphone output 1
 #   ch 8-9    Line Output 9-10, mirrored on headphone output 2
 #   ch 10-11  S/PDIF Output 1-2
-{extra_out}
+{adat_out_doc}
 #
 # Capture channel order is the hardware's record block (pins 0x600-{cap_end}):
 #
@@ -113,27 +118,107 @@ def header(model, play, cap, extra_out, extra_cap, loop_pcm, cap_end):
 #   ch 8-9    S/PDIF 1-2
 #   ch 10-11  Loopback 1-2 (the Routing page calls these {loop_pcm}; named
 #             "Loopback" here because no physical input feeds them)
-{extra_cap}
+{adat_in_doc}
 #
 # Like upstream, the names describe that one-to-one correspondence; the router
 # can send any of these channels elsewhere. ADAT devices keep their full width
 # at every rate (UCM cannot follow the sample rate; S/MUX carries 4 or 2
 # channels per port at double or quad speed).
 """
+    outs = [('Line 1-2', 0), ('Line 3-4', 2), ('Line 5-6', 4), ('Line 7-8/Headphones 1', 6),
+            ('Line 9-10/Headphones 2', 8)]
+    return dict(key=key, play=play, cap=play, header=header, sections=[
+        ('Analogue Outputs', 'Playback',
+         [dev(f'Line{i + 1}', n, c, 2, 200 - 10 * i) for i, (n, c) in enumerate(outs)]),
+        ('Digital (Consumer) Outputs', 'Playback', [dev('SPDIF1', 'S/PDIF 1-2', 10, 2, 112)]),
+        ('Digital (Professional) Outputs', 'Playback',
+         [dev(f'Direct{i + 1}', n, c, 8, 48 - i) for i, (n, c) in enumerate(adat)]),
+        ('Analogue Inputs', 'Capture',
+         [dev(f'Mic{i + 1}', n, i, 1, IN_PRIO[i]) for i, n in enumerate(ins)]),
+        ('Loopback Inputs', 'Capture', [dev('Line6', 'Loopback 1-2', 10, 2, 300)]),
+        ('Digital (Consumer) Inputs', 'Capture',
+         [dev(f'SPDIF{i + 2}', f'S/PDIF {i + 1}', 8 + i, 1, 112 - i) for i in range(2)]),
+        ('Digital (Professional) Inputs', 'Capture',
+         [dev(f'Direct{adat_ports + i + 1}', n, c, 8, 48 - i) for i, (n, c) in enumerate(adat)]),
+    ])
+
+# --- Red 8Line ------------------------------------------------------------------------------------
+
+RED_8LINE_HEADER = """# Generated by tools/gen_ucm.py in the clarett-sre project: change the
+# generator, not this file.
+#
+# Red 8Line: split the 64-channel playback and 60-channel capture PCM into
+# named devices. The device structure follows the upstream Focusrite Scarlett
+# configs (4th Gen where they differ); the names follow alsa-scarlett-gui's
+# Routing page for this model, so the desktop and the router agree, with plain
+# hyphens for its en dashes (no UCM config uses an en dash). Capture devices
+# take the name of the hardware input that feeds them.
+#
+# Playback channels (router PCM sources) and the output each one maps to
+# one-to-one, in the order of the device's outputs:
+#
+#   ch 0-1    Monitor Output 1-2
+#   ch 2-3    Headphone 1 (independent)
+#   ch 4-5    Headphone 2 (independent)
+#   ch 6-13   Line Output 1-8
+#   ch 14-15  S/PDIF Output L/R
+#   ch 16-31  ADAT Output 1-16 (two ports)
+#   ch 32-63  Dante 1-32 (four 8-channel devices: SplitPCM handles at most 8)
+#
+# Capture channel order is the hardware's record block (pins 0x600-0x63b):
+#
+#   ch 0-7    Analogue 1-8 (1-2 Mic/Line/Inst, 3-8 Line)
+#   ch 8-9    Loopback 1-2 (the Routing page calls these PCM 59-60; named
+#             "Loopback" here because no physical input feeds them)
+#   ch 10-11  S/PDIF L/R
+#   ch 12-27  ADAT 1-16 (two ports)
+#   ch 28-59  Dante 1-32 (four 8-channel devices)
+#
+# Like upstream, the names describe that one-to-one correspondence; the router
+# can send any of these channels elsewhere. Note that the Red's factory routing
+# does NOT follow it for the analogue inputs: it records them reversed in
+# groups of four (input 4 on capture channel 1, and so on) until re-routed.
+# ADAT and Dante devices keep their full width at every rate (UCM cannot follow
+# the sample rate; above 48 kHz ADAT carries fewer channels, and Dante 16 at
+# 192 kHz).
+#
+# Selected by card name, so any unit the driver registers as "Red 8Line" gets
+# this profile.
+"""
+
+RED_8LINE = dict(key='red8line', play=64, cap=60, header=RED_8LINE_HEADER, sections=[
+    ('Analogue Outputs', 'Playback', [
+        dev('Line1', 'Monitor 1-2', 0, 2, 200),
+        dev('Line2', 'Headphones 1', 2, 2, 190,
+            'not using .Headphones because this device has two headphone outputs'),
+        dev('Line3', 'Headphones 2', 4, 2, 180),
+        *[dev(f'Line{4 + i}', f'Line {2 * i + 1}-{2 * i + 2}', 6 + 2 * i, 2, 170 - 10 * i) for i in range(4)],
+    ]),
+    ('Digital (Consumer) Outputs', 'Playback', [dev('SPDIF1', 'S/PDIF 1-2', 14, 2, 112)]),
+    ('Digital (Professional) Outputs', 'Playback', [
+        dev('Direct1', 'ADAT 1-8', 16, 8, 48),
+        dev('Direct2', 'ADAT 9-16', 24, 8, 47),
+    ]),
+    ('Network Outputs', 'Playback',
+     [dev(f'Direct{3 + i}', f'Dante {8 * i + 1}-{8 * i + 8}', 32 + 8 * i, 8, 32 - i) for i in range(4)]),
+    ('Analogue Inputs', 'Capture',
+     [dev(f'Mic{i + 1}', f'Mic/Line/Inst {i + 1}', i, 1, IN_PRIO[i]) for i in range(2)] +
+     [dev(f'Line{8 + i}', f'Line {i + 3}', i + 2, 1, IN_PRIO[i + 2]) for i in range(6)]),
+    ('Loopback Inputs', 'Capture', [dev('Line14', 'Loopback 1-2', 8, 2, 300)]),
+    ('Digital (Consumer) Inputs', 'Capture',
+     [dev(f'SPDIF{i + 2}', f'S/PDIF {i + 1}', 10 + i, 1, 112 - i) for i in range(2)]),
+    ('Digital (Professional) Inputs', 'Capture', [
+        dev('Direct7', 'ADAT 1-8', 12, 8, 48),
+        dev('Direct8', 'ADAT 9-16', 20, 8, 47),
+    ]),
+    ('Network Inputs', 'Capture',
+     [dev(f'Direct{9 + i}', f'Dante {8 * i + 1}-{8 * i + 8}', 28 + 8 * i, 8, 32 - i) for i in range(4)]),
+])
 
 MODELS = {
-    '8Pre': dict(key='clarett8pre', play=20, cap=20, outs=OUTS, spdif_out=10,
-                 adat_out=[('ADAT 1-8', 12)], ins=INS, loop=10, loop_dev='Line6', spdif_in=8,
-                 adat_in=[('ADAT 1-8', 12)],
-                 header=header('8Pre', 20, 20, '#   ch 12-19  ADAT Output 1-8',
-                               '#   ch 12-19  ADAT 1-8', 'PCM 19-20', '0x613')),
-    '8PreX': dict(key='clarett8prex', play=28, cap=28, outs=OUTS, spdif_out=10,
-                  adat_out=[('ADAT 1-8', 12), ('ADAT 9-16', 20)], ins=INS, loop=10, loop_dev='Line6',
-                  spdif_in=8, adat_in=[('ADAT 1-8', 12), ('ADAT 9-16', 20)],
-                  header=header('8PreX', 28, 28,
-                                '#   ch 12-19  ADAT Output 1-8 (port 1)\n#   ch 20-27  ADAT Output 9-16 (port 2)',
-                                '#   ch 12-19  ADAT 1-8 (port 1)\n#   ch 20-27  ADAT 9-16 (port 2)',
-                                'PCM 27-28', '0x61b')),
+    'Clarett-8Pre': clarett_8pre('8Pre', 'clarett8pre', 20, 1, 'PCM 19-20', '0x613'),
+    'Clarett-8PreX': clarett_8pre('8PreX', 'clarett8prex', 28, 2, 'PCM 27-28', '0x61b'),
+    'Red-8Line': RED_8LINE,
 }
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'snd-clarett', 'ucm2', 'Clarett')
@@ -143,7 +228,7 @@ if __name__ == '__main__':
     for model in models:
         if model not in MODELS:
             sys.exit(f'unknown model {model!r}; known: {", ".join(MODELS)}')
-        path = os.path.normpath(os.path.join(OUT_DIR, f'Clarett-{model}-HiFi.conf'))
+        path = os.path.normpath(os.path.join(OUT_DIR, f'{model}-HiFi.conf'))
         with open(path, 'w') as f:
             f.write(build(MODELS[model]))
         print(path)
