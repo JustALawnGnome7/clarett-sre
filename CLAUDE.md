@@ -452,6 +452,10 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     router pins for the re-pinning second ADAT port (8PreX, Red), (3) the
                                     0x006004 sync word -- ALL DONE Oct 2 2026, with results. Its "Also
                                     open" list and the reopened 8PreX ADAT 2/Wordclock check remain.
+  clarett-packaging.md              DKMS + akmod packaging, Secure Boot and licensing: the full record
+                                    (summarised under Build & test).
+  clarett-buffer-latency.md         The ALSA buffer-ceiling work, tx_guard, PipeWire's adaptation, the
+                                    digital-loopback ramp method (summarised under Driver limitations).
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
@@ -526,185 +530,35 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   history, deliberately), so nothing under `snd-clarett/` may lean on clarett-sre-only material —
   `CLAUDE.md`, `spec/`, `captures/`, `tools/`, "see git history" — as if the reader had it; name the
   clarett-sre project instead, as its README does for the device maps.
-- **★ PACKAGING (Aug 24 2026) — DKMS + Fedora akmod, both built and verified locally.** `make -C snd-clarett`
-  and `modules_install` are dev-only: the module lands under one kernel and vanishes at the next
-  update. The two supported routes are `sudo make -C snd-clarett dkms-install` and, on Fedora,
-  `make -C snd-clarett rpm-akmod` (or `rpm-kmod KVER=<ver>` for a single kernel). **The RPM targets build
-  and stop, printing the `dnf install` line rather than running it** — deliberately, because that
-  transaction is the one the partial-kernel trap below lives in, and the read-before-yes cannot be
-  delegated to a Makefile. They also enforce two traps that were previously only described: the spec
-  is staged into `%{_specdir}` before building (kmodtool re-invokes `rpmbuild` against it there), and
-  the spec's `Version:` is checked against `dkms.conf`, which otherwise surfaces as a missing
-  `Source0` rather than as version skew. **`snd-clarett/dkms.conf`'s `PACKAGE_VERSION` is the single source of truth** —
-  `snd-clarett/Makefile` parses it out, passes it to kbuild, and it is compiled in as `MODULE_VERSION`
-  (`-DCLARETT_VERSION`), so `modinfo snd-clarett` names exactly one tree; a build that bypasses the
-  Makefile reports `0.0.0-unknown` on purpose. Verified end to end: the module inside the built kmod
-  RPM reports `0.1.0`. The specs live under `snd-clarett/` (not a repo-root `packaging/`) so the directory
-  is self-packaging as the public submodule.
-  - **Three kmodtool traps, each of which cost a failed build** — all fixed in the spec, don't
-    re-discover them: (1) kmodtool emits `Requires: %{name}-common` on **every** kmod/akmod subpackage,
-    so without a `-common` subpackage the RPMs build and then **fail to install**; (2) an akmod build
-    compiles nothing, so the debugsource package is empty and rpmbuild **errors** — hence
-    `%global debug_package %{nil}`; (3) `%akmod_install` re-invokes `rpmbuild -bs` against
-    `%{_specdir}/%{name}.spec`, so **the spec must be copied to `~/rpmbuild/SPECS/` first**, not built
-    in place.
-  - **A bare `rpmbuild -bb` on the kmod spec CANNOT work on an ordinary Fedora box** and this is not a
-    spec bug: with neither `buildforkernels` nor `kernels` defined, kmodtool takes its
-    build-for-current-kernels path, which requires `--repo` **and** the
-    `buildsys-build-<repo>-kerneldevpkgs` helper — RPM Fusion build-farm infrastructure. Use
-    `--define 'buildforkernels akmod'` (the end-user package) or `--define "kernels $(uname -r)"`.
-  - **★ DKMS VERIFIED END TO END (dkms 3.4.1, Fedora 44):** `sudo make -C snd-clarett dkms-install` builds,
-    **signs with an auto-generated MOK** (`/var/lib/dkms/mok.{key,pub}`; `modinfo` shows
-    `signer: DKMS module signing key`), installs to **`/lib/modules/<kver>/extra/snd-clarett.ko.xz`**
-    (Fedora overrides `DEST_MODULE_LOCATION`, as dkms.conf says), runs depmod, and
-    `modprobe --show-depends` then resolves the whole chain **including `snd-rawmidi`** — the
-    dependency that made a bare `insmod` fail. `dkms status` = installed; installed module = `0.1.0`.
-    `dkms-uninstall` backs it all out cleanly.
-  - **★★ THE TRAP THAT BROKE THE FIRST DKMS RUN — `KERNELRELEASE` CANNOT TELL YOU KBUILD IS CALLING.**
-    `ifneq ($(KERNELRELEASE),)` is *the* conventional out-of-tree idiom and it is **wrong under DKMS**:
-    dkms rewrites the leading `make` of `MAKE[0]` into `make -jN KERNELRELEASE=<kver>` and invokes the
-    Makefile **directly** (`/usr/sbin/dkms` line ~1603, unconditional), so the test passes, make enters
-    the kbuild half, and dies with `make[1]: *** No targets.  Stop.` Measured discriminator:
-    | invocation | KERNELRELEASE | obj | src | M |
-    |---|---|---|---|---|
-    | kbuild include | set | `.` | `./.` | `/…/driver` |
-    | DKMS direct | set | *empty* | *empty* | *empty* |
-    **Only kbuild sets `obj`** — that is the test the Makefile now uses. Reproduce the dkms invocation
-    without dkms: `make -j16 KERNELRELEASE=$(uname -r) KDIR=/lib/modules/$(uname -r)/build`.
-  - **`CLEAN` is deprecated in dkms 3.x** (accepts only `true` silently) — dkms builds in a fresh copy
-    of the source, so it is simply omitted from dkms.conf.
-  - **★ DKMS SURVIVES A REAL KERNEL UPGRADE — VERIFIED (Aug 25 2026, the desktop, 7.1.8 -> 7.1.9).**
-    Registered on 7.1.8, rebooted into 7.1.9, and `dkms status` came back with **two lines, both
-    `installed`**; the new module sits at `/lib/modules/7.1.9-200.fc44.x86_64/extra/snd-clarett.ko.xz`,
-    reports `0.1.0`, and is signed with the host's own DKMS MOK. Note **which** autoinstall path this
-    exercised: 7.1.9 was already on disk before the driver was registered, so the in-transaction
-    `kernel-install` hook could not fire for it and the rebuild came from **`dkms.service` at boot**.
-    The in-dnf-transaction variant is still untested — do that one on the next kernel with the driver
-    already registered.
-  - **★ THE PACKAGED INSTALL AUTOLOADS AND PROBES ON REAL HARDWARE (Aug 25 2026, the desktop on 7.1.9,
-    8Pre).** First end-to-end confirmation of the *packaged* path, as opposed to `insmod`: plugging the
-    interface in loaded the driver with **no `modprobe`, no udev rule and no `modules-load.d` entry**,
-    then probed and registered the card — `card 4 [C8Pre]`, bound at `0000:1a:00.0`, `initstate: live`,
-    module `0.1.0` (the DKMS copy), `refcnt: 2` (PipeWire holding a PCM). The chain, each link verified:
-    `MODULE_DEVICE_TABLE(pci,…)` → alias `pci:v00001CB5d00000002sv*sd*bc*sc*i*` in the `.ko` →
-    `modules.alias` (written by depmod **during the dkms install**) → the device's own modalias
-    `pci:v00001CB5d00000002sv00001CB5sd00000002bc04sc01i00` → udev's kmod builtin. `insmod` never got
-    this because the module was not in the module path and depmod had never indexed it.
-    Probe timing on that attach: `enabling device` → model line was **3 s**, i.e. `settle_ms` working as
-    designed, first attempt.
-    **Two taint lines are normal here and neither indicates a fault.** `loading out-of-tree module
-    taints kernel` is flag `O`, unavoidable for any out-of-tree module. `module verification failed:
-    signature and/or required key missing` does **NOT** mean unsigned — `modinfo` shows
-    `signer: DKMS module signing key`; it means the kernel has no *trusted* key to check that signature
-    against because the MOK is not enrolled. Secure Boot is off, so it loads and taints with `E`.
-    Enrolling the MOK removes the line (and is what would let it load at all under Secure Boot).
-  - **★★ `dnf install dkms` INSTALLS A PARTIAL KERNEL THAT BOOTS BROKEN — CHECK THE TRANSACTION
-    (Aug 25 2026; cost a broken boot on the desktop).** Fedora's `dkms` carries a rich dep
-    `(kernel-devel-matched if kernel-core)`, which resolves to `kernel-devel` + **`kernel-core`** — and
-    **nothing in that chain requires `kernel`, `kernel-modules` or `kernel-modules-extra`**. If the
-    three-kernel `installonly_limit` also evicts the oldest kernel in the same transaction, the lists
-    come out asymmetric: six packages removed at the old version, four installed at the new one.
-    `kernel-install` still writes a BLS entry for the half-installed kernel **and makes it the
-    default**, so the next reboot lands on it.
-    **Symptom:** boots, but 800x600 with no network — every DRM driver (`amdgpu`/`nouveau`/`i915`) and
-    `atlantic`/`iwlwifi`/`mac80211` live in `kernel-modules`; only `igb`/`e1000e`/`r8169`/`igc` are in
-    `kernel-modules-core`, so a plain gigabit port may still work while 10GbE and Wi-Fi do not.
-    **The check, before saying yes to any transaction that touches a kernel:** every package removed at
-    the old version must have a counterpart installed at the new one. `rpm -q kernel kernel-core
-    kernel-modules kernel-modules-core | sort` confirms it afterwards.
-    **Recovery:** do NOT try to fix it from the broken system (no network). Pick the previous kernel from
-    the GRUB menu (Esc / hold Shift), then install the missing packages **version-pinned** —
-    `sudo dnf install kernel-<ver> kernel-modules-<ver> kernel-modules-extra-<ver>`, because a bare
-    `dnf install kernel` resolves to whatever is newest and leaves the broken entry as the default —
-    then `sudo dracut -f --kver <ver>` to rebuild its initramfs with the drivers now present.
-    **Unrelated, so don't chase them:** disabling kdump, deleting `/boot/*kdump.img`, and
-    `grubby --remove-args=crashkernel` had nothing to do with it, nor did the DKMS install, which only
-    ever writes to `/usr/src` and `/lib/modules/<kver>/extra`.
-  - **A tight `/boot` is a live constraint on this work (the desktop: 974 MB, was 96% full).** The
-    transaction above first failed outright with *"needs 33MB more space on the /boot filesystem"* —
-    rpm installs before it erases, so it cannot rely on the eviction it is about to perform. Biggest
-    win there was **orphaned kdump initramfs images for kernels no longer installed** (~57 MB each;
-    three of them), a known Fedora wart where `kdumpctl`'s images outlive their kernel. Disabling
-    kdump entirely (`systemctl disable --now kdump.service`) stops new ones: `60-kdump.install` does
-    **nothing** on `add` ("kdump initramfs is strictly host only and managed by kdump service"), so the
-    service is the only creator, and `92-crashkernel.install` is gated on
-    `_should_reset_crashkernel()` = `auto_reset_crashkernel != no` **AND** `systemctl is-enabled kdump`,
-    so disabling the service also stops `crashkernel=` being re-added to new kernels. Tradeoff worth
-    stating: that gives up vmcore capture on the box where this driver has panicked hosts before.
-  - **★ THE AKMOD ROUTE IS VERIFIED ACROSS A REAL KERNEL UPGRADE TOO (Aug 25 2026, the desktop,
-    7.1.9 -> 7.1.10, 8Pre attached).** DKMS was uninstalled first (see the path clash below), the akmod
-    built from `packaging/snd-clarett-kmod.spec` with `--define 'buildforkernels akmod'`, and the
-    timeline out of `rpm -q --qf %{INSTALLTIME:date}` + `journalctl -u akmods` is unambiguous:
-    | 22:02:29 | `akmod-snd-clarett` installed (running 7.1.9) |
-    | 22:02:32 | `kmod-snd-clarett-7.1.9` built, 3 s later, at install time |
-    | 22:06:08 | `kernel-core-7.1.10` installed — **no kmod produced** |
-    | 22:08:38 | reboot |
-    | 22:08:47-22:09:00 | `akmods.service`: "Building and installing snd-clarett-kmod [OK]" |
-    Result: per-kernel `kmod-snd-clarett-7.1.9` **and** `-7.1.10` both installed, and the module
-    autoloaded and bound on the PCI modalias exactly as the DKMS install had.
-    - **THE REBUILD IS BOOT-TIME BY DESIGN, NOT IN-TRANSACTION** — `akmods.service` is literally
-      "Builds and install new kmods from akmod packages" at boot. So the old "in-dnf-transaction
-      rebuild" TODO was **mis-framed for akmods**: there is nothing missing to test. (DKMS's own
-      in-transaction behaviour stays unobserved rather than disproven — our DKMS run had the new kernel
-      on disk *before* the module was registered, so no transaction hook could have fired for it.)
-    - **AKMOD MODULES ARE SIGNED as well**, with akmods' own locally generated key
-      (`signer: <hostname>_<epoch>_<uuid8>`) — a different mechanism from DKMS's
-      `/var/lib/dkms/mok.*` but the same outcome, and the same un-enrolled-MOK taint line.
-    - **THE TWO ROUTES MUST NOT BE INSTALLED TOGETHER — different paths, both in depmod's search
-      path:** akmod installs to `extra/snd-clarett/snd-clarett.ko.xz` (kmodtool's per-module
-      `%{kmodinstdir_postfix}` subdirectory), DKMS to a flat `extra/snd-clarett.ko.xz`. Uninstall one
-      before installing the other; `modinfo -n snd-clarett` names which one actually wins.
-    - **The partial-kernel check (below) WORKED when applied:** the upgrade was driven as
-      `dnf upgrade kernel kernel-devel`, and naming `kernel` is what makes it safe — the metapackage
-      requires `kernel-core-uname-r`, `kernel-modules-uname-r`, `kernel-modules-core-uname-r` and
-      (matched) `kernel-modules-extra`. All five landed at 7.1.10, 7.1.7 evicted cleanly. **Note
-      `akmods` carries the same `(kernel-devel-matched if kernel-core)` rich dep that `dkms` does**, so
-      its install transaction needs the same read-before-yes.
-  - **★★ SECURE BOOT WORKS VIA THE AKMOD ROUTE — VERIFIED (Aug 27 2026, EliteBook 640 G11).** MOK
-    enrolment done and the module loads with Secure Boot enforcing, which is itself the proof the
-    signature is trusted: `module.sig_enforce` is set under Secure Boot, so an untrusted module is
-    *rejected*, not merely taint-flagged.
-    - **akmods signing needs NO configuration and never did.** `kmodgenca` runs at the first
-      `akmods.service` run and writes the pair to `/etc/pki/akmods/{private/private_key.priv,
-      certs/public_key.der}`; the signer string is literally its
-      `KEYNAME="${cert_hostname:0:44}_$(date +%s)_$(uuidgen | awk -F- '{print $1}')"`. Enrol with
-      `sudo mokutil --import /etc/pki/akmods/certs/public_key.der`, reboot, MOK Management →
-      Enroll MOK (**physical console only, one boot only, QWERTY keyboard regardless of layout**).
-    - **`public_key.der` is a SYMLINK to `<KEYNAME>.der`, not the key** (`kmodgenca` `update_key_symlinks`),
-      so a broken symlink is a distinct failure from a missing key — `readlink -e` is the discriminator.
-      And the certs/private dirs are `0750 root:akmods`, so a non-root `ls` says *Permission denied*,
-      which reads like absence. Check both before concluding no key exists.
-    - **★ THE BLOCKER WAS NOT MODULE SIGNING AT ALL — HP SHIPS SECURE BOOT WINDOWS-ONLY.** Enabling
-      Secure Boot gave `Selected boot image did not authenticate` from the firmware, i.e. **shim
-      failing before Linux exists**, which no amount of MOK work can touch. Cause: `db` held only
-      Microsoft's *Windows* CAs (`Windows UEFI CA 2023`, `Microsoft Windows Production PCA 2011`) and
-      **not the third-party UEFI CA that signs every Linux distro's shim**. HP gates that behind a
-      separate BIOS toggle, **"Enable MS UEFI CA key"** (Security → Secure Boot Configuration) —
-      turning it on fixed it outright. **The one-line diagnostic:** `sudo mokutil --db | grep -i Microsoft`,
-      then read the *Subject* lines — Windows-only CAs mean Windows-only Secure Boot.
-    - **Ruled out first, cheaply, and worth doing in this order:** `efibootmgr -v` named
-      `\EFI\fedora\shimx64.efi` (not `grubx64.efi` — the classic `grub2-install`-broke-the-chain cause),
-      `shim-x64`/`grub2-efi-x64` installed, ESP contents intact. Only after the Fedora side was proven
-      clean did it make sense to suspect firmware. Note "restore factory keys" would NOT have fixed
-      this: the third-party CA is behind the toggle, not in HP's default key set.
-  - **★ LICENSING SETTLED (Aug 24 2026): GPL-2.0-only.** `snd-clarett/LICENSE` is the verbatim FSF GPL v2
-    (md5 `b234ee4d69f5fce4486a80fdaf4a4263` — the canonical checksum; **check it**, since several
-    copies on a Fedora box carry the obsolete *59 Temple Place* address and are NOT the current text).
-    `snd-clarett/LICENSES/Linux-syscall-note.txt` holds the exception that `clarett_fcp_uapi.h`'s
-    `GPL-2.0 WITH Linux-syscall-note` tag refers to — taken verbatim from a real `linux-headers`
-    tree, and byte-identical (modulo a trailing newline) to alsa-scarlett-gui's copy, whose flat
-    REUSE-style `LICENSES/<id>.txt` layout this matches. Both RPMs register both files via `%license`.
-    - **`MODULE_LICENSE("GPL")` is CORRECT alongside SPDX `GPL-2.0-only` — do not "fix" it.**
-      `include/linux/module.h` documents `"GPL"` as *[GNU Public License v2]* and states outright
-      that for module loading the only/or-later distinction "is completely irrelevant and does
-      neither replace the proper license identifiers in the corresponding source file nor amends
-      them in any way". Its sole job is Proprietary flagging and `EXPORT_SYMBOL_GPL` binding.
-      Likewise the uapi header's `GPL-2.0` (rather than `GPL-2.0-only`) is deliberate kernel uapi
-      idiom; the kernel's own `LICENSES/preferred/GPL-2.0` lists both spellings as valid.
-  - **OPEN before a 0.1.0 tag:** the specs carry **no `%changelog`**, deliberately — entries are
-    dated, and `snd-clarett/` is under the no-dates rule. Decide at first release whether a *release*
-    date is exempt (it is not an RE observation date) or whether the changelog lives outside
-    `snd-clarett/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
+- **★ PACKAGING — DKMS + Fedora akmod, both verified on hardware, including across real kernel upgrades
+  and with Secure Boot (akmod route). Full record: `spec/provenance/clarett-packaging.md`.**
+  `make -C snd-clarett` / `modules_install` are dev-only. Supported routes:
+  `sudo make -C snd-clarett dkms-install`, or on Fedora `make -C snd-clarett rpm-akmod`
+  (`rpm-kmod KVER=<ver>` for one kernel); the RPM targets build and STOP, printing the `dnf install`
+  line, because that transaction needs reading before yes (the partial-kernel trap below). Things to carry:
+  - **`snd-clarett/dkms.conf` `PACKAGE_VERSION` is THE version** — the Makefile compiles it in as
+    `MODULE_VERSION`; a build that bypasses the Makefile reports `0.0.0-unknown` on purpose.
+  - **★★ `dnf install dkms` (and `akmods`) can install a PARTIAL KERNEL that boots broken** (800x600,
+    no Wi-Fi/10GbE): their `(kernel-devel-matched if kernel-core)` dep pulls `kernel-core` without
+    `kernel-modules`, and `kernel-install` makes it the default. Check every package removed at the old
+    version has a counterpart installed at the new one; upgrade as `dnf upgrade kernel kernel-devel`.
+    Recovery: boot the previous kernel, install `kernel-<ver> kernel-modules-<ver>
+    kernel-modules-extra-<ver>` version-pinned, `dracut -f --kver <ver>`.
+  - **Never install both routes**: akmod uses `extra/snd-clarett/snd-clarett.ko.xz`, DKMS a flat
+    `extra/snd-clarett.ko.xz`. `modinfo -n snd-clarett` names the winner.
+  - The akmod rebuild for a new kernel happens at BOOT (`akmods.service`), by design. Both routes sign
+    the module with a locally generated key; the "module verification failed" taint just means the MOK
+    is not enrolled. Secure Boot needs `mokutil --import /etc/pki/akmods/certs/public_key.der`
+    (a symlink — check with `readlink -e`), and on HP laptops the BIOS toggle "Enable MS UEFI CA key"
+    (`mokutil --db | grep -i Microsoft` showing only Windows CAs is the tell).
+  - The Makefile detects kbuild by `obj`, NOT `KERNELRELEASE` (DKMS sets that and calls the Makefile
+    directly). kmodtool traps (the `-common` subpackage, empty debug package, spec staged into
+    `%{_specdir}`) are fixed in the spec; a bare `rpmbuild -bb` on the kmod spec cannot work outside
+    RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
+  - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
+    `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
+  - **OPEN before a 0.1.0 tag:** the specs have no `%changelog`, because entries are dated and
+    `snd-clarett/` is under the no-dates rule. Decide whether a release date is exempt.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -1023,210 +877,34 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   alsa-scarlett-gui shows the wrong capture routing for this model beyond channel 4, and the fix is in
   `gen_fcp_maps.py`'s destination pins, not the driver. **Not yet investigated**; the 8Pre's ADAT
   capture test (ch12-19 at 48k) was consistent with its own map, so this may be 2Pre-specific.
-- **★★ THE ALSA BUFFER WAS PINNED TO THE 4096-FRAME RING — THE REAL LATENCY CEILING, AND THE PERIOD WAS
-  NEVER THE POINT (Aug 27 2026, 8Pre; fixed and measured on hardware).** A DAW at a 16-frame
-  period reported 1.75 ms round trip and sounded far worse; `/proc/asound/card4/pcm*/sub*/status` settled
-  it in one look: `period_size: 16` (so the period request WAS honoured — PipeWire coercion and the
-  cadence-1 overruns are both exonerated), `buffer_size: 4096`, and **playback `delay: 4000` frames = 83 ms**
-  against capture's 112. `clarett_pcm_open()` was calling
-  `snd_pcm_hw_constraint_minmax(..., BUFFER_BYTES, buf, buf)` — the same value twice, pinning the ALSA
-  buffer to the hardware ring — and the DAW, which had asked for 3 periods of 16 = 48 frames, filled the
-  4096 it was handed instead. **Diagnostic lesson: `delay` in `status` is the measured latency; every
-  number the DAW displays is what it REQUESTED.**
-  - **Fix, part 1:** buffer is now any power-of-two frame count from `CLARETT_MIN_BUFFER_FRAMES` (128) up
-    to the ring. Pow2 is load-bearing — it makes the buffer divide the 4096-frame ring, so ALSA frame k and
-    ring frame k wrap coherently and `clarett_rx_drain`/`clarett_tx_fill` (which already clipped at both
-    boundaries) just need the buffer passed in alongside the ring.
-  - **★★ PART 1 ALONE WAS INERT ON HARDWARE, AND THE REASON IS AN ALSA-LIB ASYMMETRY WORTH REMEMBERING:
-    `snd_pcm_hw_params_choose()` resolves every parameter with `set_first` (the MINIMUM) except
-    `BUFFER_SIZE`, which it resolves with `set_last` (the MAXIMUM).** So an app that pins only the period
-    — most of them, including a DAW that displays a period count it never actually requests — is handed
-    whatever ceiling the driver advertises, and making a small buffer *legal* changes nothing for it. The
-    retest proved it: with the new module confirmed loaded (`/sys/module/snd_clarett/parameters/tx_guard`
-    readable), `buffer_size` came back 4096 and `delay` 4048, unchanged.
-    **Fix, part 2:** the `max_buffer` param (frames, rounded down to pow2) lowers
-    `runtime->hw.buffer_bytes_max`. **`max_buffer=256` fixed it: on the same DAW session playback `delay`
-    went 4048 -> 256 frames, 83.3 ms -> 5.33 ms.** **Default is now `CLARETT_MIN_BUFFER_FRAMES` = 128
-    (Sep 2 2026, operator's call over a recommendation of 256).** **[SUPERSEDED Sep 10 2026: the default
-    is 0 again and latency is bounded per stream by `CLARETT_MAX_PERIODS` — see the ★★★ bullet above.]**
-    The old default of 0 (the ring) was gone;
-    its stated rationale — that PipeWire needs 2048 at a 1024-frame quantum and would regress — was
-    **disproven twice**, on the 2Pre and again on the 8Pre.
-    **KNOW WHAT 128 IMPLIES: it is the FLOOR as well, so ceiling == floor and the buffer is PINNED.**
-    Measured on the 8Pre: with `max_buffer=128`, requests for 128/256/1024 are all granted **128**,
-    silently and with no error — the same shape as the original bug (an app handed a buffer it never
-    asked for), relocated from 4096 to 128. Deliberate here, but it means a host whose scheduling stalls
-    exceed 2.7 ms has no way up except changing the parameter. Any value above the floor restores a real
-    range: at `max_buffer=256` a request for 128 gets 128 and 256 gets 256.
-  - **Why the whole-runway TX fill SURVIVES a small buffer** (the part that looked like a redesign and
-    wasn't): filling `ring - guard` frames from a buffer that divides the ring simply TILES it, and ring
-    frame f still receives the buffer frame due to play when the engine reaches f, because both advance
-    by the same delta. Underrun now repeats one small buffer instead of a whole 85 ms ring pass.
-  - **★★ THE OLD `tx_guard` TEXT WAS WRONG, BUT SO WAS MY FIRST REPLACEMENT — READ THIS BEFORE TOUCHING
-    THE GUARD (Sep 2 2026, 8Pre, digital loopback).** The parameter's default and clamp floor are
-    UNCHANGED; only the documentation moved. What is established:
-    - **It is not a latency term.** Reported `delay` was identical at guard 64/128/256 (512 frames,
-      10.66 ms, buffer 512). It sets a write DEADLINE, not a queue.
-    - **The old advice — "if skipping appears, turn `tx_guard` down first" — has no support** and is
-      removed. So is the hazard it was premised on: a client pinning its lead at 48 frames against a
-      64-frame guard was indistinguishable from one leading by 128, break counts tracking the client's
-      OWN underruns (ur 0/1/1/2/2/6 -> breaks 0/1/2/8/10/27) and not the lead.
-    - **With a NORMAL full-buffer client every guard from 16 to 96 is equally clean** — single-digit
-      breaks at a 32- AND a 64-frame period alike. There is no cliff and no measured basis for changing
-      the value in either direction.
-    **THE UNRESOLVED PART, AND THE METHOD LESSON.** A synthetic client pinning a SHORT lead showed guard
-    16 and 32 tearing catastrophically (38k-71k whole-buffer skip/repeat pairs per 25 s) against single
-    digits at 64, reproducibly 3/3 — and I raised the clamp floor to 64 on the strength of it. That was
-    **confounded**: those runs changed the client AND the period together, and the effect vanishes with
-    an ordinary client at either period. The floor change was reverted. The synthetic client is also
-    only viable at period 32 (at period 64 a 48-frame lead underruns 24999 times in 22 s), so its one
-    working configuration is precisely the one that misbehaved — most likely an artifact of that client.
-    **Lesson, the second time today: when a result comes from a rig you built for the occasion, vary ONE
-    thing against a stock client before believing it.** (The first time was reading a single 10-vs-2 run
-    as the lead hazard; repetitions killed it.)
-  - **Also fixed in passing:** the capture drain clamped a servicer lag to the RING and copied the OLDEST
-    frames of the burst; with a small buffer that is reachable in normal operation (the ~42 ms platform
-    freeze advances the engine ~2000 frames), so it now skips forward and hands over the NEWEST.
-  - **Known cost, not addressed:** `clarett_tx_fill` copies `ring - guard` ≈ 4032 frames EVERY tick
-    regardless of period — ~322 KB per 333 µs at cadence 1 on a 20-channel 8Pre, near 1 GB/s of memcpy to
-    deliver 16 frames. Pre-existing, now conspicuous. The runway only has to cover worst-case servicer
-    lag, not the whole ring.
-  - **★ PIPEWIRE ADAPTS TO THE LOWERED CEILING BY SHRINKING ITS PERIOD, NOT ITS QUANTUM — MEASURED
-    PROPERLY AT LAST (Aug 31 2026, 2Pre, tone audible in BOTH legs).** The A/B that matters is run with
-    **no DAW open**, restarting PipeWire between legs (the ceiling is read at `open()`, so a sink that is
-    already open keeps what it negotiated and the param looks inert):
-    | `max_buffer` | period | buffer | `delay` | audible |
-    |---|---|---|---|---|
-    | 0 | 1024 | 4096 | 3072 = 64 ms | yes |
-    | 256 | 64 | 256 | 128 = **2.7 ms** | yes |
-    `clock.quantum` stayed **1024 in both** — so PipeWire decouples the ALSA node's period from the graph
-    quantum and simply runs the node faster. Ordinary desktop playback therefore does NOT break at a
-    lowered ceiling; it gets 24x less latency, at the cost of 16x the node wakeups (unmeasured CPU).
-    **Two of this project's own claims died here, both from measuring under a DAW that had already pulled
-    the graph to a small quantum:** "PipeWire pins BUFFER_SIZE and is indifferent to the ceiling" (it
-    pins nothing at the default quantum — it took the full 4096) and "PipeWire at a 1024-frame quantum
-    needs 2048 for its two periods, so lowering the default would regress the desktop" (it needs no such
-    thing). A third, predicted this session and also wrong: that `buffer < period` would make `hw_params`
-    unsatisfiable and fail the open outright — PipeWire never asks for that intersection, it re-picks the
-    period first. **The stated rationale for `max_buffer` defaulting to 0 is thus disproven**; the default
-    stays 0 for now on sample size (one host, one PipeWire version, one model), not on evidence of harm.
-    **Method note:** `pactl suspend-sink <sink> 0` does NOT force the ALSA open — PipeWire opens on
-    demand. Playing a WAV with `pw-play` and reading `hw_params` mid-stream does. And read `hw_params`
-    with a *listening* check beside it: `state: RUNNING` with `hw_ptr` advancing was equally true during
-    the 8Pre silence, so the telemetry alone cannot tell playing from silent.
-  - **★ THE DIGITAL-LOOPBACK RAMP — the method that made all of the above measurable, REUSE IT (Sep 2 2026,
-    8Pre).** Playback glitches had only ever been assessed by listening. The router turns that into a
-    frame-exact count with no cables and no ears: **`PCM 01 Capture Enum` accepts a PLAYBACK channel as its
-    source**, so a playback channel loops straight back into capture inside the device, bit-exactly.
-    - Put the signal on **PCM 7** (on the 8Pre, PCM 7-10 feed no physical output and no mixer input, so a
-      full-scale test tone is completely SILENT — check this per model before trusting it).
-    - Signal is a **sample counter scaled by 256** (low 8 bits zero, so the device's 24-bit truncation is
-      lossless). Consecutive recovered samples must differ by exactly 256.
-    - The delta classifies the fault by itself: `skip B`/`repeat B` where B == the ALSA buffer is an
-      **xrun** (client starvation); a delta that is not a multiple of the step is **sample-level
-      corruption**; and `skip 2016` is literally the ~42 ms platform freeze read off the wire.
-    - Drive it with `aplay`/`arecord` on `hw:N,0` (one playback + one capture substream, so the two
-      processes coexist). **Do NOT try to use PipeWire as the playback leg** — activating its sink also
-      opens the capture substream, and `arecord` then gets EBUSY.
-    Harness (ramp generator, checker, runners) is disposable but the recipe above is not.
-  - **★ THE CEILING IS FULLY EFFECTIVE ON A 20-CHANNEL MODEL (Sep 2 2026, 8Pre, `max_buffer` swept with
-    PipeWire as the only client).** `buffer == max_buffer` at every value, period always buffer/4, and
-    **`clock.quantum` pinned at 1024 throughout** — so the 2Pre finding (PipeWire shrinks the ALSA node's
-    period, not its graph quantum) generalizes:
-    | `max_buffer` | 0 | 2048 | 1024 | 512 | 256 | 128 |
-    |---|---|---|---|---|---|---|
-    | period | 512 | 512 | 256 | 128 | 64 | 32 |
-    | buffer | 2048 | 2048 | 1024 | 512 | 256 | 128 |
-    | latency | 42.7 ms | 42.7 ms | 21.3 ms | 10.7 ms | 5.3 ms | 2.7 ms |
-    Note `max_buffer=0` gave **2048 here but 1024 earlier in the same session** — PipeWire's unconstrained
-    pick is NOT deterministic, which is an independent argument for setting the ceiling explicitly.
-  - **Servicer CPU is FLAT across the whole buffer range** (8Pre, 20 s samples of the `clarett-svc` kthread):
-    11.70% at buffer 4096 / 11.25% at 512 / 11.70% at 256 / **12.25% at 128**, while the fill's memcpy load
-    rises 14 -> 461 MB/s. So the known `clarett_tx_fill` inefficiency (copying `ring - guard` every tick
-    regardless of period) is real in bytes and **irrelevant in practice** — the servicer's cost is dominated
-    by MMIO polling over the Thunderbolt link. Do not argue against a small period on CPU grounds.
-  - **★★ RETEST LIST — RUN ALL OF THIS ON THE ELITEBOOK 640 G11 BEFORE TRUSTING ANY NUMBER ABOVE
-    (queued Sep 2 2026).** Every measurement in this section was taken on the ASRock X570 Creator, i.e.
-    THROUGH the ~42 ms periodic firmware stall ([[clarett-playback-skipping]]), with a NON-REALTIME test
-    client (`/tmp` is `nosuid`, so a `setcap cap_sys_nice` wrapper was inert — put the binary on a
-    filesystem without `nosuid` next time). Both make every small-buffer number pessimistic, and the
-    stall is why only a 4096-frame buffer was ever break-free here.
-    1. ~~**The `max_buffer` sweep, repeated on the clean host**~~ **DONE Sep 4 2026 — 128 IS RIGHT, and
-       item 3's realtime client was covered in the same run.** Red 8Line, 60 channels, 48 kHz, client at
-       SCHED_FIFO 50, six 60 s legs on the EliteBook 640 G11:
-       | max_buffer | 128 | 256 | 512 | 1024 | 2048 | 4096 |
-       |---|---|---|---|---|---|---|
-       | period | 32 | 64 | 128 | 256 | 512 | 1024 |
-       | `gapmax` | 874 us | 1551 us | 2886 us | 5566 us | 10872 us | 21553 us |
-       | **excess over nominal** | **207** | **218** | **219** | **233** | **205** | **220 us** |
-       | periods delivered | 90000 | 45000 | 22500 | 11250 | 5625 | 2813 |
-       **Every leg delivered its EXACT expected period count, with `client_ov`/`late`/`overrun`/`badreads`
-       all zero throughout, `readmax` 43-97 us.** So 128 frames is clean at the widest geometry in the
-       range, on the widest device, with nothing dropped.
-       **★ THE NUMBER THAT MATTERS: worst-case servicer jitter is 205-233 us and is INDEPENDENT of the
-       period** — it does not scale, so it is pure scheduling overhead, not a stall. At buffer 128
-       (2667 us) that is 9 % of the buffer, an **11x margin**. Nothing here is marginal.
-       **★★ `gapmax` IS NOT A STALL METRIC — it tracks the NOMINAL PERIOD, and misreading it cost two
-       wrong conclusions in one session.** `gapmax` ~= period/48000 + ~220 us. A 21.5 ms `gapmax` at
-       period 1024 is *health*; the same number at period 32 would be a catastrophe. **Always divide by
-       the nominal period before interpreting it**, and judge a run by `client_ov`/`late`/`overrun`/
-       `badreads` instead. (Compare the ASRock, where `readmax` reaches 42047 us and `gapmax` runs
-       45-60 ms against a 10.7 ms nominal — that is what a real stall looks like.)
-       **Method trap that voided the first attempt:** running `sudo arecord ... /dev/null` **clobbers
-       `/dev/null`** (root recreates it as a regular file), after which every `>/dev/null` in the script
-       silently fails — so the `max_buffer` writes never happened and all six legs ran at 4096 while
-       *appearing* to sweep. Have `arecord` write to stdout (`-`) and let the unprivileged shell do the
-       redirect; read `buffer_size`/`period_size` back from `hw_params` MID-run and print them, so
-       identical legs are visible rather than inferred.
-       **★★ DUPLEX SWEEP FOLLOWED, AND IT CLOSES THE QUESTION — `max_buffer=128` IS CORRECT.** The
-       capture sweep tested the wrong direction: the floor is `2 * CLARETT_TX_GUARD_FRAMES`, so PLAYBACK
-       defines it. Red 8Line, **64ch playback + 60ch capture simultaneously**, both clients SCHED_FIFO,
-       45 s legs:
-       | max_buffer | 128 | 256 | 512 | 1024 |
-       |---|---|---|---|---|
-       | period | 32 | 64 | 128 | 256 |
-       | excess over nominal | 304 us | 218 us | 210 us | 215 us |
-       | margin (buffer/excess) | **8.8x** | 24.5x | 50.7x | 99.4x |
-       | periods delivered | 67500 | 33751 | 16875 | 8438 |
-       **Exact expected period counts at every size, with capture xruns, playback xruns, `late` and
-       `overrun` ALL ZERO throughout.** Excess is ~210-215 us as in the capture sweep, rising to 304 us
-       only at the tightest setting (where `readmax` also rose, 253 us against 42-75 us elsewhere) — two
-       realtime clients plus `clarett_tx_fill` at the smallest period, and still an 8.8x margin.
-       **Three further firsts in the same run:** the Red's **PLAYBACK works** (first playback ever on a
-       non-Clarett device, and the first non-Clarett duplex); its TX fragment at 64 channels is
-       `64*4*16` = `0x1000`, page-exact, so the 8PreX's fragment-fold hazard does not arise; and the
-       **duplex arm/close races did not recur** — simultaneous start and stop at four buffer sizes on a
-       new model left no orphaned `clarett-svc` kthread and no `WARN_ON` splat.
-       Still not covered: rates above 48 kHz, and a NON-realtime client.
-    2. **The `tx_guard` question** — does the synthetic short-lead client reproduce the 16/32 catastrophe
-       there? If it does NOT, it is this host or that client and the floor stays at one fragment; if it
-       DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
-    3. **A realtime client.** Everything here ran at normal priority; a DAW runs SCHED_FIFO. Re-run the
-       lead A/B and the buffer sweep with the client at RT before believing any break count.
-    4. ~~**Does the 128 pin survive real use?**~~ **ANSWERED NO (Sep 10 2026):** a JUCE app garbled at
-       every buffer above 64 samples. Replaced by the `CLARETT_MAX_PERIODS` rule — see the ★★★ bullet at
-       the top of this section.
-    5. **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
-       impulse, count frames). NOTHING today measured plucked-string-to-speaker latency; the digital
-       loopback cannot see the converters. This is the number the amp-modeling target is about.
-    6. **The 60 s cadence-4 duplex regression** (never re-run) and **rates other than 48 kHz** (all of
-       today was 48k).
-  - **★ THE 8PreX/8Pre "PIPEWIRE PLAYS NOTHING" EPISODE WAS DEVICE EXCLUSIVITY, NOT A DRIVER BUG
-    (Aug 27 2026, resolved Aug 31 by the operator).** `snd_pcm_new(..., 0, 1, 1, ...)` gives **one
-    playback and one capture substream** — no dmix, no sharing — so a DAW opened on `hw:N,0` **as an ALSA
-    device** locks PipeWire out of the card completely. PipeWire had the 8Pre, the DAW was then granted
-    it directly, and everything PipeWire subsequently "played" went nowhere. Corroborated by three
-    observations from that session that were each misread at the time: `aplay -D hw:N,0` returning
-    `Device or resource busy` (blamed on PipeWire, equally the DAW), `pw-record` yielding a 44-byte
-    header-only WAV with `frames=0` (the capture substream was held too), and every `Level Meter` slot
-    reading zero for a `pw-play` tone that never reached the device. **None of routing, output level,
-    channel mapping or `max_buffer` was involved**, and a long hunt through all four found nothing
-    because there was nothing there.
-    **THE ONE-LINE DISCRIMINATOR, and use it before trusting any `/proc/asound` reading:**
-    `/proc/asound/card<N>/pcm0p/sub0/status` prints **`owner_pid`** — check it against `pidof pipewire`.
-    `state: RUNNING` with an advancing `hw_ptr` only ever means *some* client is streaming, never which,
-    and reading it as "PipeWire is playing" is what cost that session. Run a DAW through PipeWire's JACK
-    layer (`pw-jack`) rather than on the raw ALSA device if both are wanted at once.
+- **★★ THE ALSA BUFFER USED TO BE PINNED TO THE 4096-FRAME RING (83 ms of playback latency at a
+  16-frame period). Full record, measurements and method: `spec/provenance/clarett-buffer-latency.md`.**
+  The buffer is now any power of two from `CLARETT_MIN_BUFFER_FRAMES` (128) up to the ring (pow2 so it
+  divides the ring). What still matters from that work:
+  - **alsa-lib resolves BUFFER_SIZE with `set_last` (the MAXIMUM)** while every other parameter gets
+    the minimum, so an app that pins only the period is handed the driver's ceiling. Making a small
+    buffer legal changes nothing without a ceiling, hence `max_buffer`, now done per stream by
+    `CLARETT_MAX_PERIODS` (see the ★★★ bullet above).
+  - **`delay` in `/proc/asound/cardN/pcm*/sub*/status` is the measured latency**; what an app displays
+    is what it requested. And `owner_pid` there says WHICH client holds the PCM: the driver offers one
+    playback and one capture substream, so a DAW on `hw:N,0` locks PipeWire out completely (that was the
+    whole "PipeWire plays nothing" episode). Use `pw-jack` to have both.
+  - **PipeWire adapts to a lower ceiling by shrinking its ALSA period, not its graph quantum** (quantum
+    stayed 1024 on 2Pre and 8Pre), and its unconstrained pick is not deterministic.
+  - **`tx_guard` is not a latency term** (a write deadline, `delay` identical at 64/128/256). With an
+    ordinary client every guard from 16 to 96 is equally clean; the 16/32 "catastrophe" came from a
+    synthetic short-lead client and is unresolved (retest item 2). Default and clamp floor unchanged.
+  - Servicer CPU is flat across buffer sizes (~11-12 %, dominated by MMIO polling), so don't argue
+    against small periods on CPU grounds, despite `clarett_tx_fill` copying `ring - guard` every tick.
+  - **★ THE DIGITAL-LOOPBACK RAMP — reuse it for any playback-glitch question.** Route a playback
+    channel back into a capture destination in the router (`PCM nn Capture Enum` accepts PLAYBACK
+    sources), pick a channel that feeds no physical output (8Pre: PCM 7-10; check per model), play a
+    sample counter x256 (24-bit-lossless) and check that consecutive captured samples differ by exactly
+    256. `skip/repeat B` with B == the ALSA buffer is an xrun; a non-multiple of the step is corruption.
+    Drive both legs with `aplay`/`arecord` on `hw:N,0`, never PipeWire (it opens the capture side too).
+  - **Retest list:** items 1, 3 and 4 are done (128 frames clean duplex at 64/60ch with RT clients on the
+    EliteBook). Still open: 2 (`tx_guard` short-lead client on a clean host), 5 (analogue round-trip
+    latency, measured), 6 (60 s cadence-4 duplex re-run; rates other than 48 kHz for these tests).
 - **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
@@ -1539,8 +1217,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
-  routing untouched. **It waits `settle_ms` (30 s) BEFORE touching the device at all** — a cold attach
-  cannot answer and asking early wedges it unrecoverably (see the SOLVED entry below); `wait_ready_ms`
+  routing untouched. **It waits `settle_ms` (3 s) BEFORE touching the device at all** — a cold attach
+  cannot answer and asking early wedges it unrecoverably (see the COLD-ATTACH REFUSAL entry below); `wait_ready_ms`
   then bounds a backstop retry. If the device never answers, probe **fails loudly (`-ENODEV`, no card
   registered)** instead of the old fake-2Pre placeholder — reload to retry.
   - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
