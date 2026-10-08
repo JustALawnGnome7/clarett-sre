@@ -173,15 +173,24 @@ seven Red sources.
 
 **Level meters (hardware-confirmed).** On every Clarett a destination's `GET_METER` slot is exactly its
 index in the band-0 `SET_MUX` table the vendor programs at bring-up -- all four measured layouts, no
-exception (the 2Pre's "dark" slots 16-17 and the 4Pre's 26-27 are those models' loopback
-destinations). The Red's 156 slots are read off its own band 0 (provenance `band0`) and were confirmed
-on the unit by routing an input signal through every kind of destination. The Level Meter is a single
+exception. The 2Pre's slots 16-17 and the 4Pre's 26-27, long read as dark, are those models' loopback
+destinations, so every model meters its loopback pair: measured live on the 2Pre (PCM 13-14 follow
+audio when loopback is fed), predicted on the 4Pre (provenance `band0`). They had only ever looked
+dark because nothing was feeding loopback when they were watched. The Red's 156 slots are read off
+its own band 0 (provenance `band0`) and were confirmed on the unit by routing an input signal through every kind of destination. The Level Meter is a single
 ALSA INTEGER control, which holds at most **128 values**, so the 32 Dante outputs are left unmetered
 (124 channels); an input meter in the GUI borrows the level of a metered destination it is routed to,
 so input meters cost no channels. The unit reports only 58 meter slots, so this needs fcp-server's
 `METER_SLOT_LIMIT` at 255 (it was 128, which discarded the whole map), and the driver's meter-map
 ioctl now refuses more than 128 channels -- it used to accept 255 and write past the kernel's value
 array.
+
+**Changing a model's meter count needs a driver reload.** The driver creates the `Level Meter`
+control(s) from the first map fcp-server sends, and an ALSA control cannot change its channel count
+while it exists. A map with more or fewer metered destinations is refused until the module is
+reloaded; fcp-server logs only `Cannot set meter map: Invalid argument` and keeps the old meters, while
+the kernel log names the cause (`meter map geometry changed ... reload the module`). Release the card
+(PipeWire, `fcp-server@N`, `alsa-state.service`), reload `snd-clarett`, and let fcp-server start again.
 
 ## What the maps deliberately don't cover
 

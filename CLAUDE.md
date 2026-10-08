@@ -168,7 +168,11 @@ into `captures/`, never `/tmp`.
     measured Clarett layouts with zero exceptions — and it explains their two old mysteries: the 2Pre's
     "dark S/PDIF" slots 16-17 and the 4Pre's "unidentified" 26-27 are the LOOPBACK destinations'
     positions. The Red's 156 slots were read off its band 0 and **user-confirmed on hardware** (every
-    routing tried lit the expected meter). **The per-rate bands 1/2 follow the same rule (Oct 2 2026):** `gen_fcp_maps.py`
+    routing tried lit the expected meter). **And LOOPBACK IS METERED on the 2Pre (Oct 8 2026):** with
+    loopback fed from playback PCM 1/2, PCM 13-14 (slots 16-17) move with the audio. The old "loopback
+    unmetered on the 2Pre/4Pre" reading came from watching those slots with nothing feeding loopback.
+    Maps now meter the 2Pre pair ("measured") and the 4Pre's 26-27 ("band0", not yet seen on a 4Pre).
+    **The per-rate bands 1/2 follow the same rule (Oct 2 2026):** `gen_fcp_maps.py`
     now derives `peak-index-m/-h` for every model from them, and it is hardware-confirmed on the Red,
     8PreX and 4Pre (see `spec/provenance/clarett-rate-aware-plan.md` item 1). It also CONFIRMED and fixed
     the suspected 2Pre/4Pre error: the old ranking skipped the loopback slots, so every mixer-input meter

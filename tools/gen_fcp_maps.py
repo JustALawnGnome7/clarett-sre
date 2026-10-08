@@ -202,9 +202,12 @@ def name_sources(srcs):
 # CHANNEL, not the input. So slots 0..n-1 are the record/capture destinations.
 #
 # The whole 48-slot array is destinations, which is why it is exactly 48 on a 2Pre:
-#   PCM 01-12 (12 record channels; the 2 loopback channels are NOT metered)
-#   Line Output 1-4 (12-15), S/PDIF Output 1-2 (16-17, dark - no router destination on this unit)
+#   PCM 01-12 (12 record channels), Line Output 1-4 (12-15), PCM 13-14 = the loopback pair (16-17),
 #   Mixer Input 01-30 (18-47)
+# 16-17 were long read as "dark S/PDIF" and loopback as unmetered, because they never lit in July. That
+# was never a real test: nothing was confirmed to be feeding loopback at the time. They are the loopback
+# destinations by the band-0 rule (see the Red section below), and MEASURED Oct 8 2026: with loopback fed
+# from playback PCM 1/2, PCM 13-14 move with the audio.
 # The record-channel count is what sets the base for everything after it: 12 on the 2Pre, 18 on the
 # 4Pre/8Pre (capture_channels minus the 2 loopback pins).
 #
@@ -216,10 +219,11 @@ def name_sources(srcs):
 # Directly measured, each alone: Analogue Output 1 -> 18, Analogue Output 6 -> 23, S/PDIF Output 1 -> 24,
 # Mixer Input 01 -> 28, Mixer Input 30 -> 57 (the last from a run-2/run-3 differential; the rest from the
 # clean zeroed run). Outputs starting at 18 (not 20) is what killed hypothesis (a): the loopback pair
-# (PCM 19-20) is NOT metered, exactly as on the 2Pre, so the record block is 18 wide and the 2-slot
-# residual is a genuine pair of reserved/unidentified slots at 26-27 (analogous to the 2Pre's dark S/PDIF
-# 16-17 — present in the array, unlit on this unit, mapped to no destination). Loopback-via-PCM-playback
-# was separately confirmed unmetered here: PCM 01 <- PCM 1 added no slot. The physical-input record slots
+# (PCM 19-20) does not sit in the record block, so that block is 18 wide. The 2-slot residual at 26-27,
+# once called "unidentified", IS the loopback pair: it is their position in band 0, and the 2Pre's
+# equivalent (16-17) was measured live Oct 8 2026. It stayed dark here only because the run zeroed all
+# routing, loopback included. Not yet measured on a 4Pre. (The old "PCM 01 <- PCM 1 added no slot" note
+# fed a record channel, not loopback, so it says nothing about these.) The physical-input record slots
 # 0-17 keep their historical "reinterpreted" provenance (this session drove destinations from PCM
 # playback, which does not exercise the input meters). The old "26+ (28/29 seen)" note was contaminated
 # by live default routing; the zeroed run supersedes it.
@@ -246,20 +250,21 @@ METER_SLOTS_DST = {
     # exactly the array GET_METER serves. Confirmed by routing one input to Mixer Input 01/02/05/13/30 and
     # watching slots 18/19/22/30/47 rise, each alone. The meter sits PRE-MIX: slot 18 stayed lit with the
     # Mix A gain pulled to -inf, which is what distinguishes it from a mix-bus meter.
-    # 16/17 are never lit on this unit because its router has NO S/PDIF output destination (confirmed by
-    # dumping the live mux table with tools/fcp_mux_probe: 0x600-0x60d, 0x400-0x403, 0x300-0x31d only).
-    # The 4Pre follows the same rule with a twist: 18 record, line outputs 18-23, S/PDIF 24-25, then a
-    # 2-slot reserved gap (26-27) before mixer inputs at 28-57 — so its mixer base is 12 + n_out + 2, not
-    # 12 + n_out. See the RESOLVED July 24 note above.
+    # 16/17 are NOT S/PDIF: this unit's router has no S/PDIF output destination (live mux table via
+    # tools/fcp_mux_probe: 0x600-0x60d, 0x400-0x403, 0x300-0x31d only). They are the loopback pair
+    # 0x604/0x605, measured Oct 8 2026. The 4Pre has the same shape: 18 record, line outputs 18-23,
+    # S/PDIF 24-25, loopback 26-27, mixer inputs 28-57. See the RESOLVED July 24 note above.
     "clarett-2pre": {
         # PCM 01-12, the physical record channels, at slots 0-11 (loopback pins 0x604/0x605 sit BETWEEN
-        # record inputs 3 and 4 and are NOT metered, so the record pins skip them — capture_record_pins).
+        # record inputs 3 and 4 in pin order but are metered AFTER the outputs, so the record pins skip
+        # them — capture_record_pins).
         # PCM 1 -> slot 0 and PCM 3 -> slot 2 were measured directly by re-routing one input between them;
         # the rest follow the stride and were each seen lit under default routing.
         **{pin: (i, "measured" if i in (0, 2) else "stride")
            for i, pin in enumerate(capture_record_pins("clarett-2pre"))},
         1024: (12, "measured"), 1025: (13, "measured"),  # Line Output 1-2 (Monitor L/R)
         1026: (14, "measured"), 1027: (15, "measured"),  # Line Output 3-4
+        0x604: (16, "measured"), 0x605: (17, "measured"),  # PCM 13-14 = loopback pins
         # Mixer Input 01-30 at pins 0x300.. -> slots 18.. (01/02/05/13/30 measured, rest by the stride)
         **{0x300 + i: (18 + i, "measured" if i in (0, 1, 4, 12, 29) else "stride")
            for i in range(30)},
@@ -270,12 +275,14 @@ METER_SLOTS_DST = {
     # this session drove destinations from PCM playback, which does not exercise the input meters.
     "clarett-4pre": {
         # PCM 01-18 physical record channels at slots 0-17 (loopback pins 0x60a/0x60b sit between record
-        # inputs 9 and 10 and are NOT metered; the record pins skip them). Outputs start at slot 18.
+        # inputs 9 and 10 in pin order but are metered after the outputs; the record pins skip them).
         **{pin: (i, "reinterpreted") for i, pin in enumerate(capture_record_pins("clarett-4pre"))},
         # Line Output 1-6 at 18-23 (1 and 6 measured, rest by stride)
         **{0x400 + i: (18 + i, "measured" if i in (0, 5) else "stride") for i in range(6)},
-        # S/PDIF Output 1-2 at 24-25 (Output 1 measured; slots 26-27 are an unidentified reserved pair)
+        # S/PDIF Output 1-2 at 24-25 (Output 1 measured)
         0x186: (24, "measured"), 0x187: (25, "stride"),
+        # PCM 19-20 = loopback pins at 26-27: their band-0 position, as on the 2Pre; unmeasured on a 4Pre
+        0x60a: (26, "band0"), 0x60b: (27, "band0"),
         # Mixer Input 01-30 at 28-57 (01 and 30 measured, rest by stride)
         **{0x300 + i: (28 + i, "measured" if i in (0, 29) else "stride") for i in range(30)},
     },
@@ -731,9 +738,11 @@ for slug, spec in MODELS.items():
         "word, so the driver relays a wildcard and every notification refreshes every control.",
         "peak-index sits on DESTINATIONS, not sources: this line meters its router destinations. Each "
         "carries a _peak-index-provenance marker — \"measured\" (that destination read directly on "
-        "hardware), \"stride\" (filled between measured anchors in a contiguous block), or "
-        "\"reinterpreted\" (re-attributed from an earlier measurement taken under different routing). "
-        "Slot order does not transfer between models; each model was measured on its own hardware.",
+        "hardware), \"stride\" (filled between measured anchors in a contiguous block), "
+        "\"reinterpreted\" (re-attributed from an earlier measurement taken under different routing), "
+        "\"band0\" (the destination's index in the vendor's band-0 routing table, the rule every measured "
+        "slot obeys, but not itself read on this model's hardware). Slot order does not transfer between "
+        "models; each model's comes from its own hardware or its own vendor bring-up.",
         "peak-index-m and peak-index-h are the same channel's slot at double and quad speed. The array "
         "COMPACTS as ADAT S/MUX removes destinations, so a slot is the channel's position in THAT rate's "
         "destination table and everything after a removed entry shifts down; a destination absent at a "
