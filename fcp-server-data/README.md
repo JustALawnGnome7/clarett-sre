@@ -4,9 +4,9 @@ Device-map / control-map files for driving the Clarett Thunderbolt line with
 Geoffrey Bennett's user-space [`fcp-server`](https://github.com/geoffreybennett/fcp-support),
 paired with `snd-clarett` supplying the FCP hwdep.
 
-These are keyed on the **model slug** the driver publishes at
-`/proc/asound/card<N>/clarett` (`clarett-2pre`, `clarett-4pre`, `clarett-8pre`,
-`clarett-8prex`) — because the whole line shares PCI id `1cb5:0002`, the slug, not
+These are keyed on the **model slug** the driver publishes in the card's ALSA
+components string as `Clarett:<slug>` (`clarett-2pre`, `clarett-4pre`, `clarett-8pre`,
+`clarett-8prex`, `red-8line`; see `alsactl info <card>`) — because the whole line shares PCI id `1cb5:0002`, the slug, not
 the PCI id, selects the per-model map. Stock fcp-server keys map filenames on the
 USB product id, so this needs the `map_key` support on the `snd_clarett` branch.
 
