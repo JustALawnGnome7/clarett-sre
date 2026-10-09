@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the snd-clarett ALSA UCM profiles (ucm2/Clarett/<card>-HiFi.conf) for the Clarett 8Pre,
+"""Generate the ALSA UCM profiles (ucm2/Clarett/<card>-HiFi.conf) for the Clarett 8Pre,
 Clarett 8PreX and Red 8Line.
 
 Each profile splits the model's playback and capture PCM into named devices for desktop sound
@@ -12,7 +12,7 @@ outputs) and the driver's GET_7.1 channel counts; playback channels map one-to-o
 The 2Pre and 4Pre profiles are hand-written (different output layouts) and are not produced here.
 ucm2/Clarett/Clarett.conf, which picks a profile by card name, is hand-written too.
 
-Usage: tools/gen_ucm.py [MODEL ...]     (default: every model below; writes into snd-clarett/ucm2/Clarett)
+Usage: tools/gen_ucm.py [MODEL ...]     (default: every model below; writes into ucm2/Clarett)
 """
 import os
 import sys
@@ -221,7 +221,7 @@ MODELS = {
     'Red-8Line': RED_8LINE,
 }
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'snd-clarett', 'ucm2', 'Clarett')
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'ucm2', 'Clarett')
 
 if __name__ == '__main__':
     models = sys.argv[1:] or list(MODELS)
