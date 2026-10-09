@@ -785,16 +785,16 @@ wrong.** Value 4 is accepted by the device but is not source-specific: it locks 
 whatever external source is present, so it is something looser (any external, or
 any optical), not a per-model S/PDIF encoding.
 
-The 8PreX's `ADAT 2` and `Wordclock` values are XML-derived and **unverified**.
-They are not verifiable by the method that measured the others, because on the
-8PreX `Sync Status` does not reliably track the selected source: feeding one ADAT
-port and stepping the value, the deliberately invalid value 7 read `Locked` in 2 of
-3 trials, while value 1 locked with either port fed and value 0 locked only with
-port 2 fed — mutually inconsistent, so no port mapping can be claimed. The likely
-explanation is that the 8PreX reports a lock if *either* ADAT receiver has locked,
-independently of the `SET_CLOCK` selection, which would make `Sync Status` useless
-as a clock-source probe on any two-ADAT-port model. `Wordclock` additionally needs
-a BNC source that was never available.
+The 8PreX's `ADAT 2 = 1` and `Wordclock = 2` are verified too, once `Sync Status`
+reads bit 0 of the `0x006004` sync word: bit 1 is a read-to-clear change latch, and
+treating the whole word as a boolean made an unlocked 8PreX read `Locked` (the
+cause of earlier, inconsistent results that had suggested the 8PreX reports a lock
+from either ADAT receiver). `ADAT 2`: with one ADAT port fed at a time, port 2
+(ADAT 9-16 In) locks on 1 and not on 0, port 1 the reverse. `Wordclock`: with a BNC
+word clock from a Red 8Line, the 8PreX locks on 2 while S/PDIF, ADAT 1 and ADAT 2
+(nothing connected) read `Unlocked`, and drops to `Unlocked` when the cable is
+pulled. The Red 8Line uses the same value and passes the same test fed from the
+8PreX.
 
 **Method trap.** The audio path is not a probe for clock source. S/PDIF and ADAT
 keep arriving on their capture channels whatever the clock source says, *even while

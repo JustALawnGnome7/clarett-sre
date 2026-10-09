@@ -136,6 +136,31 @@ the Red 8Line and the 4Pre:
   reverse; S/PDIF (nothing connected) Unlocked throughout, each source read twice from an unlocked
   state. Wordclock (=2) still needs a BNC source. On the way: the Red's S/PDIF Source = Optical turned
   its optical output into S/PDIF, so nothing locked until it was set to RCA.
+- **Wordclock (=2) VERIFIED on the 8PreX AND the Red 8Line (Oct 9 2026)**, one BNC cable, both
+  directions, receiver idle (profiles off) at 48 kHz, master on Internal, 3 reads ~8 s after each change:
+  8PreX -> Red: Red S/PDIF 0 0 0, Wordclock 1 1 1, ADAT 1 0 0 0, Wordclock 1 1 1; cable pulled with
+  Wordclock selected 0 x6. Red -> 8PreX: 8PreX S/PDIF 0 0 0, Wordclock 1 1 1, ADAT 1 0 0 0, ADAT 2
+  0 0 0, Wordclock 1 1 1; cable pulled 0 x6.
+- **Red 8Line Loop Sync (=5) VERIFIED (Oct 9 2026):** 8PreX Word Clock Out -> Red Loop Sync In (Word
+  Clock In empty), Pro Tools mode untouched (off), same procedure: Wordclock 0 0 0, Loop Sync 1 1 1,
+  S/PDIF 0 0 0, Loop Sync 1 1 1; cable pulled 0 x6. So Loop Sync In takes a plain 1x word clock and is
+  a separate input from Word Clock In.
+- **Red 8Line ADAT 2 (=1) VERIFIED (Oct 9 2026):** 8PreX ADAT 1-8 Out -> Red ADAT 9-16 In: ADAT 1
+  0 0 0, ADAT 2 1 1 1, S/PDIF 0 0 0, ADAT 1 0 0 0, ADAT 2 1 1 1. Cable moved to ADAT 1-8 In: ADAT 2
+  (still selected) 0 0 0, then ADAT 1 1 1 1, S/PDIF 0 0 0, ADAT 2 0 0 0, ADAT 1 1 1 1. So on the Red,
+  too, 0 = port 1 and 1 = port 2, and Sync tracks the selected port only.
+- **Red 8Line Dante (=4) VERIFIED (Oct 9 2026) -- every Red 8Line clock source is now verified.** Sync
+  Status CANNOT discriminate it: (a) with the Red as Dante PTP leader (its normal, preferred-leader
+  state), Dante reads Locked on a clock it generates itself; (b) with the AVIO-DAI2 made preferred
+  leader (netaudio `device config preferred-leader`) and the Red following, Dante reads Locked, and
+  it STAYS Locked for 60 s after the Red's Ethernet is pulled (its Dante module elects itself leader).
+  Two discriminators that do work:
+  - The Red's Dante module clock-source code (netaudio `device config clock-source`): 1 (follows the
+    Red) on Internal, 0 (its own) on Dante, back to 1 on Internal -- the firmware reconfigures it.
+  - The sample clock, measured on capture (hw_ptr vs CLOCK_MONOTONIC, least-squares over 30 s,
+    +/-0.3 ppm), AVIO leading: Internal -8.2/-7.9/-7.4 ppm, Dante -4.5/-5.5/-5.2 ppm, alternating;
+    no overlap (8PreX on Internal, same host clock: -13.8 ppm). The Dante legs scatter more (PTP servo).
+  Restored after: Red preferred leader on, AVIO off, Red leader, both units on Internal.
 
 ### Original plan
 

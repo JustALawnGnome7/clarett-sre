@@ -455,7 +455,7 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
   clarett-rate-aware-plan.md        The rate-aware control-plane work: (1) per-rate meters, (2) per-rate
                                     router pins for the re-pinning second ADAT port (8PreX, Red), (3) the
                                     0x006004 sync word -- ALL DONE Oct 2 2026, with results. Its "Also
-                                    open" list and the reopened 8PreX ADAT 2/Wordclock check remain.
+                                    open" list remains; 8PreX ADAT 2 and Wordclock are verified.
   clarett-packaging.md              DKMS + akmod packaging, Secure Boot and licensing: the full record
                                     (summarised under Build & test).
   clarett-buffer-latency.md         The ALSA buffer-ceiling work, tx_guard, PipeWire's adaptation, the
@@ -1146,15 +1146,19 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     a read-to-clear "changed" latch) and fcp-server showed `!!word`, so an unlocked device with the latch
     set read Locked — very likely the cause below. fcp-server now reports bit 0 on these cards, and with it
     **ADAT 2 = 1 IS VERIFIED** (Red ADAT Out into one 8PreX port at a time: port 2 fed locks on 1 not 0, port
-    1 fed the reverse, S/PDIF control unlocked throughout). Wordclock = 2 still untested (needs BNC).** Original finding: **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
+    1 fed the reverse, S/PDIF control unlocked throughout). WORDCLOCK = 2 VERIFIED Oct 9 2026 on the 8PreX AND the Red 8Line (BNC each way; the other sources
+    unlocked, and the lock drops when the cable is pulled; results in the rate-aware plan). Same day, the Red's
+    Loop Sync = 5, ADAT 2 = 1 and Dante = 4 too: EVERY Red 8Line source verified. Dante is the exception to
+    "Sync Status is the probe" — a Dante module with no leader elects itself and stays Locked even with the
+    Ethernet pulled; the sample clock (~3 ppm shift with an AVIO leading) is what discriminates.** Original finding: **8PreX ADAT 2=1 is UNVERIFIABLE by this method and stays OPEN:** on the 8PreX
     `Sync Status` does NOT reliably track the selected source — feeding one ADAT port from an 8Pre, the
     invalid control value 7 read `Locked` in 2 of 3 trials, while value 1 locked with EITHER port fed and
     value 0 locked ONLY with port 2 fed. Those are mutually inconsistent, so no port mapping can be claimed
     (a tempting "the XML labels are inverted" reading fitted 3 of 4 cells and was dropped when the control
     failed). Likely the 8PreX reports a lock if EITHER ADAT receiver has locked, independent of the
     SET_CLOCK selection — which would also make Sync useless as a probe on any two-ADAT-port model. Note the
-    2Pre/8Pre results above are NOT affected: their negative control held in every run. Wordclock=2 needs a
-    BNC source and is untested. **Anchor every such test on a negative control and re-check it per run** —
+    2Pre/8Pre results above are NOT affected: their negative control held in every run. (Wordclock=2: verified
+    Oct 9 2026, see above.) **Anchor every such test on a negative control and re-check it per run** —
     the control is what separates a finding from a pattern fitted to noise.
     **METHOD TRAP — the audio path is NOT a probe for clock source.** S/PDIF and ADAT keep arriving on their
     capture channels whatever the clock source says, *even while Sync reads Unlocked* — the router does not
