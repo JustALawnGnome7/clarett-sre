@@ -6,7 +6,7 @@ paired with `snd-clarett` supplying the FCP hwdep.
 
 These are keyed on the **model slug** the driver publishes in the card's ALSA
 components string as `Clarett:<slug>` (`clarett-2pre`, `clarett-4pre`, `clarett-8pre`,
-`clarett-8prex`, `red-8line`; see `alsactl info <card>`) — because the whole line shares PCI id `1cb5:0002`, the slug, not
+`clarett-8prex`, `red-8line`, `red-16line`, `red-4pre`, `red-8pre`; see `alsactl info <card>`) — because the whole line shares PCI id `1cb5:0002`, the slug, not
 the PCI id, selects the per-model map. Stock fcp-server keys map filenames on the
 USB product id, so this needs the `map_key` support on the `snd_clarett` branch.
 
@@ -46,8 +46,9 @@ reverse-engineering behind them. The detail behind a given number lives here, in
 
 Each model is a **pair** (`fcp-devmap-<slug>.json` + `fcp-alsa-map-<slug>.json`) —
 fcp-server needs both, and they cross-reference. All four Clarett models are covered:
-`clarett-2pre`, `clarett-4pre`, `clarett-8pre`, `clarett-8prex`. The Red 8Line, which
-the driver now also registers, deliberately has no pair — see below.
+`clarett-2pre`, `clarett-4pre`, `clarett-8pre`, `clarett-8prex`, and four Reds: `red-8line`
+(hardware-confirmed), and `red-16line`, `red-4pre`, `red-8pre` (derived from their descriptors,
+untested) — see below.
 
 - **devmap** (`fcp-devmap-<slug>.json`) — `structs.APP_SPACE` members (offsets/types)
   plus the `device-specification` binding each per-channel control to a member, and
@@ -87,8 +88,9 @@ measured, and the per-rate `peak-index-m`/`-h` compaction was measured on it.
 Meter slots carry a `_peak-index-provenance` marker: `measured` (that destination
 read directly on hardware), `stride` (filled between measured anchors in a
 contiguous block), `reinterpreted` (re-attributed from an earlier measurement
-taken under different routing), or `band0` (the destination's index in the vendor's band-0 routing
-table; see the Red section).
+taken under different routing), `band0` (the destination's index in the vendor's band-0 routing
+table; see the Red section), or `synth` (the same, in a band-0 table synthesised for a model with
+no capture; see the derived-Red section).
 
 The device byte is `0=Mic/1=Line/2=Inst` line-wide, but **only the 8PreX can select Mic
 in software** — it has separate XLR and ¼″ jacks per input, so something must choose the
@@ -191,6 +193,45 @@ while it exists. A map with more or fewer metered destinations is refused until 
 reloaded; fcp-server logs only `Cannot set meter map: Invalid argument` and keeps the old meters, while
 the kernel log names the cause (`meter map geometry changed ... reload the module`). Release the card
 (PipeWire, `fcp-server@N`, `alsa-state.service`), reload `snd-clarett`, and let fcp-server start again.
+
+## The Red 16Line, 4Pre and 8Pre map pairs (Oct 9 2026) — derived, untested
+
+Built by the same Red builder (`build_red()`) with **no capture and no hardware**. The Red range is
+two pairs of twins sharing a geometry and router layout: 8Line/4Pre (64/60) and 16Line/8Pre (64/64),
+the Pre model of each pair having preamps on inputs 1-4 / 1-8 where the Line model has 1-2. The
+16Line's basis, which the Pre models share:
+
+- **Control set = the Red 8Line's, extended.** The 16Line descriptor is the 8Line's plus eight
+  line inputs (source pins `0x40a`-`0x411`, backwards within each four like the rest) and eight
+  line outputs (`0x40e`-`0x415`), whose gain/mute-dim/hardware-control fields continue the
+  8Line's strides (gain `24+2n`, mute/dim `68+n`, hw `90+n`, n = 14..21). Every shared control
+  sits at the 8Line's offset, so the 8Line's hardware-confirmed control set carries over, and the
+  map has 22 outputs instead of 14. Meter Source gains "Analogue Inputs/Outputs 9-16" (1/3).
+- **Router tables and meter slots are SYNTHESISED** (`synth_red_bands()`, provenance `synth`). The
+  rule: capture records minus loopback, then the outputs in descriptor order, then the loopback
+  pair, then the mixer inputs (32, or 30 at quad), each speed dropping what the descriptor's
+  `pin-m`/`pin-h` drop. It reproduces the Red 8Line's captured band 0/1/2 tables exactly, and
+  `gen_fcp_maps.py` re-checks that on every run (`check_red_bands()`), so a rule change that
+  broke the 8Line would fail generation. 168 destinations: PCM 1 = slot 0, Monitor Output 1 = 62,
+  Mixer Input 01 = 136.
+- **One known risk in the slots:** the descriptor lists Dante 29-32 as capture records at pins
+  `0x000`-`0x003`, past the 64 capture channels. They are treated as absent. If the vendor
+  programs them, every output, loopback and mixer-input slot is 4 higher than the map says. The
+  first hardware check: route a signal to Monitor Output 1 and see which meter moves.
+- **The Pre models** (`red-4pre`, `red-8pre`): a field-by-field comparison of each Pre descriptor
+  with its Line twin finds every Line control at the same offset, plus the extra preamps continuing
+  the per-input strides (gains `130+3i`, phantom `154+i`, mode `162+i`, air `170+i`, high-pass
+  `178+i`, phase `186+i`, stereo link `194+i`). Inputs 3 and up are Mic/Line only (an `ml2` mode
+  control beside the `mli3` of inputs 1-2, the 8PreX's two-enum pattern), and their gain `select`
+  spans two bytes. One stereo-link control per preamp pair, each assumed to behave as the 8Line's
+  194/195 does (one switch in two bytes) — unverified. The 4Pre numbers inputs 1-4 forwards (pin
+  `0x400` = Analogue 1), and both Pre models name their line outputs from 3, as their descriptors
+  do. Their loopback pairs sit elsewhere in the capture order (`0x60a`/`0x612`), which the band
+  synthesis takes from the model facts. The `0x000`-`0x003` risk above applies to the 8Pre too.
+- **Telling the twins apart is the driver's job** (`clarett_unit_tb_gen()`): the Pre models are
+  Thunderbolt 2 units, the Line models Thunderbolt 3, and the endpoint's immediate upstream bridge
+  is always the unit's own controller. Before that, a Pre unit would have registered as its Line
+  twin and loaded these maps' Line counterparts.
 
 ## What the maps deliberately don't cover
 

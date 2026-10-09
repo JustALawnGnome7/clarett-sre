@@ -491,9 +491,11 @@ tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step
                                       kept ONLY as input to gen_fcp_maps.py (it parses the SET_MUX
                                       bands for the router pins). Regenerate with
                                       fcp_decode.py --emit-deblob.
-tools/gen_fcp_maps.py                 Generates all four map pairs (names, routing/mixer tables from
+tools/gen_fcp_maps.py                 Generates every map pair (names, routing/mixer tables from
                                       the de-blobbed bring-up tables tools/arm-tables/arm_<model>.h,
-                                      measured meter peak-index).
+                                      measured meter peak-index). The Red 16Line/4Pre/8Pre have no
+                                      capture: their tables come from synth_red_bands(), a rule
+                                      re-checked against the Red 8Line's captured tables every run.
 tools/gen_sim_state.py                Map -> alsactl .state file, so alsa-scarlett-gui can render our
                                       control set with no hardware attached.
 tools/gen_ucm.py                      Generates the Clarett 8Pre/8PreX and Red 8Line ALSA UCM profiles in
@@ -679,9 +681,16 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   actually came up**, and behind a dock plus a legacy adapter that is where a chain falls down.
   Bridge chain also identifies the device's own Thunderbolt controller: host root port → **dock switch**
   (upstream bridge + several downstream bridges) → **DSL2210 "Port Ridge 1C"** (upstream + 2 downstream
-  ports = the unit's in/thru jacks) → the `1cb5:0002` endpoint. So the **10 Gb/s single-lane link is the
-  Clarett's own TB1-class controller, not a dock penalty**, and it refines "FPGA-based Thunderbolt
-  front-end" above: the TB layer is an Intel DSL2210 and the FPGA is a PCIe endpoint *behind* it.
+  bridges: one carries the endpoint, the other is EMPTY — Port Ridge's own layout, not a thru jack; the
+  Claretts are single-port, only the Reds have a daisy-chain port) → the `1cb5:0002` endpoint. So the
+  **10 Gb/s single-lane link is the Clarett's own TB1-class controller, not a dock penalty**, and it refines
+  "FPGA-based Thunderbolt front-end" above: the TB layer is an Intel DSL2210 and the FPGA is a PCIe endpoint
+  *behind* it. **The DSL2210 is IN THE CLARETT, not the Apple adapter (re-checked Oct 9 2026, 8PreX chained
+  behind the Red 8Line):** `/sys/bus/thunderbolt/devices` lists every Thunderbolt router by its DROM — host,
+  `HP Thunderbolt Dock G4`, `Focusrite Red16Line` (gen 3, the Red's JHL6540), `Focusrite Clarett8PreX`
+  (gen 1, vendor 0x12 device 0xb) — and the adapter is NOT a router at all (its chip, a TI CD3211, is a port
+  controller). So the endpoint's immediate upstream bridge is always the unit's OWN controller, on any host,
+  through a dock or another unit's chain port: the basis of Red twin detection (Alpine Ridge = Line model).
   Irrelevant for bandwidth (worst case in the line, 8PreX 28in+28out S32 @192 kHz, is ~344 Mb/s both
   directions).
 - **★ A `BadDLLP` AER STORM ON THIS RIG IS THE DOCK'S OWN NIC LEG, NOT THE AUDIO CHAIN — and the ONLY way

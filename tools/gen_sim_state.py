@@ -77,6 +77,9 @@ CLOCK_SOURCES = {
     "clarett-8pre": ["Internal", "S/PDIF", "ADAT"],
     "clarett-8prex": ["Internal", "S/PDIF", "ADAT 1", "ADAT 2", "Wordclock"],
     "red-8line": ["Internal", "Wordclock", "ADAT 1", "ADAT 2", "S/PDIF", "Dante", "Loop Sync"],
+    "red-16line": ["Internal", "Wordclock", "ADAT 1", "ADAT 2", "S/PDIF", "Dante", "Loop Sync"],
+    "red-4pre": ["Internal", "Wordclock", "ADAT 1", "ADAT 2", "S/PDIF", "Dante", "Loop Sync"],
+    "red-8pre": ["Internal", "Wordclock", "ADAT 1", "ADAT 2", "S/PDIF", "Dante", "Loop Sync"],
 }
 clocks = CLOCK_SOURCES[slug]
 enum_ctl("Clock Source", clocks[0], clocks)

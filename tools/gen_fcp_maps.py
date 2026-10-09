@@ -370,16 +370,18 @@ TWO_ADAT_OUT_PIN_RATE = {
     0x20a: {1: 0x206, 2: 0},     0x20b: {1: 0x207, 2: 0},               # ADAT Output 2.3-2.4
     **{0x20c + i: {1: 0, 2: 0} for i in range(4)},                      # ADAT Output 2.5-2.8
 }
-DEST_PIN_RATE = {"clarett-8prex": TWO_ADAT_OUT_PIN_RATE, "red-8line": TWO_ADAT_OUT_PIN_RATE}
+DEST_PIN_RATE = {"clarett-8prex": TWO_ADAT_OUT_PIN_RATE, "red-8line": TWO_ADAT_OUT_PIN_RATE,
+                 "red-16line": TWO_ADAT_OUT_PIN_RATE}
 # The ADAT INPUTS (router sources 0x200-0x20f) renumber exactly as the outputs do [XML <inputs> pin-m/
 # pin-h, identical on both models], so the same table serves for sources.
 SOURCE_PIN_RATE = DEST_PIN_RATE
 
 
-def band_dest_slots(key, band):
-    """{dst_pin: GET_METER slot} at that speed: the destination's index in band `band`'s table."""
+def band_dest_slots(key, band, bands=None):
+    """{dst_pin: GET_METER slot} at that speed: the destination's index in band `band`'s table --
+    the captured one, or `bands[band]` where the caller has synthesised them."""
     slots = {}
-    for i, (_, d) in enumerate(band_mux(key, band)):
+    for i, (_, d) in enumerate(bands[band] if bands else band_mux(key, band)):
         slots.setdefault(d, i)
     return slots
 
@@ -399,7 +401,7 @@ def add_rate_router_pins(slug, dev_sources, dev_dests):
                     e[key] = str(rpin)
 
 
-def add_rate_meter_indices(slug, dev_dests):
+def add_rate_meter_indices(slug, dev_dests, bands=None):
     """Attach peak-index-m / peak-index-h to each metered destination that exists at that speed.
 
     A destination removed at a speed simply gets no key for it -- it has no meter there at all.
@@ -407,7 +409,7 @@ def add_rate_meter_indices(slug, dev_dests):
     key = slug.replace("-", "_")
     pin_rate = DEST_PIN_RATE.get(slug, {})
     for name, band in (("peak-index-m", 1), ("peak-index-h", 2)):
-        slots = band_dest_slots(key, band)
+        slots = band_dest_slots(key, band, bands)
         if not slots:
             continue
         for e in dev_dests:
@@ -709,7 +711,8 @@ for slug, spec in MODELS.items():
                        "DEVMAP_READ (0x80000d), so it cannot describe itself: this file is its description, "
                        "loaded from DATADIR by fcp_devmap_read_from_file(). Paired with "
                        f"fcp-alsa-map-{slug}.json, which carries the presentation layer. Keyed on the model "
-                       "slug published at /proc/asound/card<N>/clarett rather than a USB product id, because "
+                       "slug the driver publishes in the card's components string (\"Clarett:<slug>\") "
+                       "rather than a USB product id, because "
                        "every model in the line shares PCI id 1cb5:0002.")
     devmap["_schema"] = ("structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, "
                          "notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,"
@@ -1041,13 +1044,51 @@ RED_OUT_PINS = {
     0x81f: "Dante 32",
 }
 
+# The Red 16Line is the 8Line plus eight line inputs and eight line outputs [XML Red 16Line.xml]; every
+# other input, output and pin is the same. The inputs keep the backwards-within-four pin order.
+RED_16LINE_IN_PINS = {
+    **RED_IN_PINS,
+    0x40d: "Line 9",
+    0x40c: "Line 10",
+    0x40b: "Line 11",
+    0x40a: "Line 12",
+    0x411: "Line 13",
+    0x410: "Line 14",
+    0x40f: "Line 15",
+    0x40e: "Line 16",
+}
+RED_16LINE_OUT_PINS = {**RED_OUT_PINS, **{0x40e + i: f"Line Output {9 + i}" for i in range(8)}}
 
-# The 14 analogue outputs occupy pins 0x400..0x40d in order. alsa-scarlett-gui only accepts a hardware
-# output sink whose name starts with "Analogue "/"S/PDIF "/"ADAT ", and the Clarett's alsa_sink_name()
-# cannot be reused here: it keys on the name, so the Red's "Monitor Output 1" and "Line Output 1" would
-# BOTH become "Analogue Output 1". Number by pin position instead, which is collision-free by
-# construction.
-RED_N_ANALOGUE_OUT = 14
+# The Pre models [XML Red 4Pre.xml / Red 8Pre.xml]: the twins of the 8Line and 16Line (same geometry,
+# routing and config layout), with preamps on inputs 1-4 / 1-8 instead of 1-2. Their descriptors name
+# every one of inputs 1-8 "Analogue", and count the line outputs from 3 (the monitor pair is 1-2).
+# The 4Pre also numbers inputs 1-4 FORWARDS (0x400 = Analogue 1); the 8Pre keeps the Line models'
+# backwards-within-four order.
+_RED_DIGITAL_IN = {p: nm for p, nm in RED_IN_PINS.items() if not 0x400 <= p <= 0x407}
+RED_4PRE_IN_PINS = {
+    0x400: "Analogue 1", 0x401: "Analogue 2", 0x402: "Analogue 3", 0x403: "Analogue 4",
+    0x407: "Analogue 5", 0x406: "Analogue 6", 0x405: "Analogue 7", 0x404: "Analogue 8",
+    **_RED_DIGITAL_IN,
+}
+RED_8PRE_IN_PINS = {
+    0x403: "Analogue 1", 0x402: "Analogue 2", 0x401: "Analogue 3", 0x400: "Analogue 4",
+    0x407: "Analogue 5", 0x406: "Analogue 6", 0x405: "Analogue 7", 0x404: "Analogue 8",
+    **{p: nm for p, nm in RED_16LINE_IN_PINS.items() if not 0x400 <= p <= 0x407},
+}
+def _red_pre_out_pins(nout):
+    pins = {p: nm for p, nm in RED_OUT_PINS.items() if not 0x406 <= p <= 0x40d}
+    pins.update({0x406 + i: f"Line Output {3 + i}" for i in range(nout - 6)})
+    return pins
+RED_4PRE_OUT_PINS = _red_pre_out_pins(14)
+RED_8PRE_OUT_PINS = _red_pre_out_pins(22)
+
+
+# The analogue outputs occupy pins 0x400 up in order (14 on the 8Line, 22 on the 16Line).
+# alsa-scarlett-gui only accepts a hardware output sink whose name starts with "Analogue "/"S/PDIF "/
+# "ADAT ", and the Clarett's alsa_sink_name() cannot be reused here: it keys on the name, so the Red's
+# "Monitor Output 1" and "Line Output 1" would BOTH become "Analogue Output 1". Number by pin position
+# instead, which is collision-free by construction.
+RED_MAX_ANALOGUE_OUT = 22
 
 # Outputs 1-6 (Monitor 1/2, Headphones 1, Headphones 2) belong to the three front-panel knob groups,
 # which set their level, mute and dim; see build_red_8line().
@@ -1078,6 +1119,114 @@ RED_METER_SOURCE = [OD([("name", nm), ("value", v)]) for nm, v in [
     ("Dante Outputs 1-8",   14), ("Dante Outputs 9-16",  15),
     ("Dante Outputs 17-24", 16), ("Dante Outputs 25-32", 17),
 ]]
+# The 16Line fills the two gaps with its second analogue bank [XML Red 16Line.xml <meter-source>].
+RED_16LINE_METER_SOURCE = sorted(
+    RED_METER_SOURCE + [OD([("name", "Analogue Inputs 9-16"), ("value", 1)]),
+                        OD([("name", "Analogue Outputs 9-16"), ("value", 3)])],
+    key=lambda e: e["value"])
+# The Pre models name the output banks from their line-output numbering (3-10, 11-18).
+RED_4PRE_METER_SOURCE = [OD([("name", "Analogue Outputs 3-10" if e["value"] == 2 else e["name"]),
+                             ("value", e["value"])]) for e in RED_METER_SOURCE]
+RED_8PRE_METER_SOURCE = [OD([("name", {2: "Analogue Outputs 3-10", 3: "Analogue Outputs 11-18"}
+                                      .get(e["value"], e["name"])), ("value", e["value"])])
+                         for e in RED_16LINE_METER_SOURCE]
+
+# Per-model facts [XML], everything the Red builder needs that differs between models. `capture` is the
+# capture width at single/double/quad speed (the snd-clarett capture_channels / rx_live_mid / rx_live_high);
+# the loopback pair sits inside it. `npre` = inputs with a preamp (1-2 of them Mic/Line/Inst, the rest
+# Mic/Line). `init` names the de-blobbed vendor bring-up in tools/arm-tables/, or None when there is no
+# capture of the model and its routing tables are synthesised (synth_red_bands()).
+RED_MODELS = {
+    "red-8line": dict(name="Red 8Line", init="red_8line", in_pins=RED_IN_PINS, out_pins=RED_OUT_PINS,
+                      nout=14, npre=2, capture=(60, 52, 32), loopback=(0x608, 0x609),
+                      meter_source=RED_METER_SOURCE),
+    "red-16line": dict(name="Red 16Line", init=None, in_pins=RED_16LINE_IN_PINS,
+                       out_pins=RED_16LINE_OUT_PINS, nout=22, npre=2, capture=(64, 60, 40),
+                       loopback=(0x610, 0x611), meter_source=RED_16LINE_METER_SOURCE),
+    "red-4pre": dict(name="Red 4Pre", init=None, in_pins=RED_4PRE_IN_PINS, out_pins=RED_4PRE_OUT_PINS,
+                     nout=14, npre=4, capture=(60, 52, 32), loopback=(0x60a, 0x60b),
+                     meter_source=RED_4PRE_METER_SOURCE),
+    "red-8pre": dict(name="Red 8Pre", init=None, in_pins=RED_8PRE_IN_PINS, out_pins=RED_8PRE_OUT_PINS,
+                     nout=22, npre=8, capture=(64, 60, 40), loopback=(0x612, 0x613),
+                     meter_source=RED_8PRE_METER_SOURCE),
+}
+
+
+# A Red's per-rate SET_MUX tables, synthesised from the model's facts -- for a model with no capture of
+# the vendor bring-up. The rule was read off the Red 8Line's captured bands 0/1/2 [TRACE], and
+# check_red_bands() re-proves it against them on every run. Destinations come in this order:
+#   1. the capture records, in pin order, minus the loopback pair and minus whatever that speed drops
+#      (a contiguous tail: the capture widths above);
+#   2. the outputs in descriptor order: analogue 0x400 up, S/PDIF 0x186/0x187, ADAT 0x200-0x20f, Dante
+#      0x800-0x81f, each under the pin it carries at that speed (DEST_PIN_RATE; Dante 17-32 go at quad);
+#   3. the loopback pair;
+#   4. the mixer inputs, 0x300 up: 32 at single and double speed, 30 at quad. The descriptor says 30
+#      (<mixer><inputs num="30">) and its <routing num> totals count 30 at every speed, but the vendor
+#      programs 32 below quad. They are last in the table, so the count cannot move any other slot.
+# Every source is 0 (unrouted): the factory patch is unknown without a capture, and only the
+# destination order matters here -- it is what sets the GET_METER slots.
+# The 16Line's descriptor lists four more records, Dante 29-32 at pins 0x000-0x003, past its 64
+# capture channels. They are left out as not real destinations. If the vendor does program them,
+# every output, loopback and mixer-input slot sits 4 higher than synthesised.
+def synth_red_bands(spec):
+    pin_rate = TWO_ADAT_OUT_PIN_RATE
+    bands = {}
+    for band in (0, 1, 2):
+        width = spec["capture"][band]
+        dsts = [0x600 + i for i in range(width) if 0x600 + i not in spec["loopback"]]
+        outs = ([0x400 + i for i in range(spec["nout"])] + [0x186, 0x187] +
+                [0x200 + i for i in range(16)] + [0x800 + i for i in range(32 if band < 2 else 16)])
+        for pin in outs:
+            rpin = pin_rate.get(pin, {}).get(band, pin)
+            if rpin:
+                dsts.append(rpin)
+        dsts += list(spec["loopback"])
+        dsts += [0x300 + i for i in range(32 if band < 2 else 30)]
+        bands[band] = [(0, d) for d in dsts]
+    return bands
+
+
+# What a derived model's map rests on, for its _provenance [XML].
+RED_DERIVED_FROM = {
+    "red-16line": (
+        "Its descriptor is the Red 8Line's plus eight line inputs (pins 0x40a-0x411) and eight line "
+        "outputs (0x40e-0x415, gain 52+, mute/dim 82+, hardware-control 104+: the 8Line's per-output "
+        "strides continued), with every shared control at the 8Line's offset -- so the control set is "
+        "the Red 8Line map's, extended to 22 outputs."),
+    "red-4pre": (
+        "Its descriptor is the Red 8Line's with preamps on inputs 1-4 instead of 1-2 (3-4 are Mic/Line, "
+        "no Inst): every shared control sits at the 8Line's offset, and the extra preamps continue the "
+        "8Line's per-input strides (gains 130+3i, phantom 154+i, mode 162+i, air 170+i, high-pass "
+        "178+i, phase 186+i, stereo link 194+i). Its inputs 1-4 are numbered forwards (pin 0x400 = "
+        "Analogue 1) where the 8Line's run backwards, and it names its line outputs 3-10. Unmeasured "
+        "beyond what the 8Line showed: the gain range of preamps 3-4, and whether the 3-4 stereo link "
+        "behaves like the 1-2 link (one switch held in two bytes)."),
+    "red-8pre": (
+        "Its descriptor is the Red 16Line's with preamps on inputs 1-8 instead of 1-2 (3-8 are Mic/Line, "
+        "no Inst): every shared control sits at the 8Line's offset, and the extra preamps continue the "
+        "8Line's per-input strides (gains 130+3i, phantom 154+i, mode 162+i, air 170+i, high-pass "
+        "178+i, phase 186+i, stereo link 194+i). It names its line outputs 3-18. Unmeasured beyond what "
+        "the 8Line showed: the gain range of preamps 3-8, and whether the 3-4, 5-6 and 7-8 stereo links "
+        "behave like the 1-2 link (one switch held in two bytes)."),
+}
+
+
+def check_red_bands(slug):
+    """The synthesis rule must reproduce a captured model's destination order exactly, band by band."""
+    spec = RED_MODELS[slug]
+    synth = synth_red_bands(spec)
+    for band in (0, 1, 2):
+        got = [d for _, d in synth[band]]
+        want = [d for _, d in band_mux(spec["init"], band)]
+        assert got == want, f"{slug}: synthesised band {band} differs from the captured one"
+
+
+def red_bands(slug):
+    """{band: [(src, dst)]} -- the captured vendor tables where they exist, else synthesised."""
+    spec = RED_MODELS[slug]
+    if spec["init"]:
+        return {band: band_mux(spec["init"], band) for band in (0, 1, 2)}
+    return synth_red_bands(spec)
 
 # The same parse is why the two ADAT ports reach ALSA as one flat run, ADAT 1-16, as on the 8PreX:
 # "ADAT 1.1" and "ADAT 2.1" both number as 1 there. The devmap keeps the descriptor's port.channel.
@@ -1085,7 +1234,7 @@ def red_is_adat(pin, devname):
     return 0x200 <= pin < 0x210 and devname.startswith("ADAT")
 
 def red_sink_name(pin, devname):
-    if 0x400 <= pin < 0x400 + RED_N_ANALOGUE_OUT:
+    if 0x400 <= pin < 0x400 + RED_MAX_ANALOGUE_OUT:
         return f"Analogue Output {pin - 0x400 + 1}"
     if pin in RED_SPDIF_ALSA and devname.startswith("S/PDIF"):
         return f"S/PDIF Output {RED_SPDIF_ALSA[pin]}"
@@ -1115,8 +1264,8 @@ def mix_label(index):
         s = chr(ord("A") + r) + s
     return s
 
-def red_source_name(pin):
-    if pin in RED_IN_PINS:                       return RED_IN_PINS[pin]
+def red_source_name(pin, in_pins=RED_IN_PINS):
+    if pin in in_pins:                           return in_pins[pin]
     if 0x600 <= pin < 0x600 + 64:                return f"PCM {pin - 0x600 + 1}"
     if 0x300 <= pin < 0x300 + 32:                return f"Mix {mix_label(pin - 0x300)}"
     return None
@@ -1126,12 +1275,10 @@ def red_source_name(pin):
 # Clarett _source_rank/_dest_rank are Clarett-pin tables and wrong here: the Red's analogue input pins
 # run backwards within each group of four (0x403 = Analogue 1), and _dest_rank puts 0x408/0x409 first
 # because they are the 8PreX's monitor outputs -- on the Red they are Line Outputs 3/4.
-RED_IN_ORDER = {pin: i for i, pin in enumerate(
-    sorted((p for p in RED_IN_PINS if 0x400 <= p <= 0x407),
-           key=lambda p: int(RED_IN_PINS[p].split()[-1])))}
-
-def red_source_rank(pin):
-    if pin in RED_IN_ORDER:            return (0, RED_IN_ORDER[pin])   # Analogue 1-2, Line 3-8
+def red_source_rank(pin, in_pins=RED_IN_PINS):
+    nm = in_pins.get(pin, "")
+    if nm.startswith(("Analogue ", "Line ")):                          # analogue inputs, by number
+        return (0, int(nm.split()[-1]))
     if pin in (0x408, 0x409):          return (1, pin)                 # S/PDIF
     if 0x200 <= pin <= 0x20f:          return (2, pin)                 # ADAT
     if 0x800 <= pin <= 0x81f:          return (3, pin)                 # Dante
@@ -1140,7 +1287,7 @@ def red_source_rank(pin):
     return (9, pin)
 
 def red_dest_rank(pin):
-    if 0x400 <= pin <= 0x40d:          return (0, pin)                 # Monitor, Headphones, Line
+    if 0x400 <= pin <= 0x415:          return (0, pin)                 # Monitor, Headphones, Line
     if pin in (0x186, 0x187):          return (1, pin)                 # S/PDIF
     if 0x200 <= pin <= 0x20f:          return (2, pin)                 # ADAT
     if 0x800 <= pin <= 0x81f:          return (3, pin)                 # Dante
@@ -1148,18 +1295,18 @@ def red_dest_rank(pin):
     if 0x600 <= pin <= 0x63f:          return (5, pin)                 # PCM (capture)
     return (9, pin)
 
-def red_dest_name(pin):
+def red_dest_name(pin, out_pins=RED_OUT_PINS):
     """-> (device name, mixer-input index or None)."""
     if 0x300 <= pin < 0x300 + 32:                return f"Mixer Input {pin - 0x300 + 1:02d}", pin - 0x300
     if 0x600 <= pin < 0x600 + 64:                return f"PCM {pin - 0x600 + 1}", None
-    if pin in RED_OUT_PINS:                      return RED_OUT_PINS[pin], None
+    if pin in out_pins:                          return out_pins[pin], None
     return None, None
 
 
-def build_red_8line():
-    slug = "red-8line"
-    nout = RED_N_ANALOGUE_OUT
-    npre = 2          # [XML]: only Analogue 1-2 carry preamps; Line 3-8 are line-level inputs
+def build_red(slug):
+    spec = RED_MODELS[slug]
+    nout = spec["nout"]
+    npre = spec["npre"]   # [XML]: preamps on inputs 1-2 (Line models) or 1-4 / 1-8 (Pre models)
 
     # ---- devmap ----
     # notify-device is the DATA_CMD{activate} that COMMITS a write, taken from each control's
@@ -1209,6 +1356,12 @@ def build_red_8line():
     # gain change on one input moves the other by the same amount (offsets kept), air does not follow.
     m["stereoLink"] = member(194, "bool", nd=13, nc=0,
                              note="preamp stereo link @ 194 (195 mirrors it in the device); activate 13")
+    # The Pre models have a link per preamp pair [XML stereo-link 194+i]; each pair is assumed to
+    # behave as 194/195 do on the 8Line (one switch in two bytes) -- unverified.
+    for k in range(1, npre // 2):
+        m[f"stereoLink{k}"] = member(194 + 2 * k, "bool", nd=13, nc=0,
+                                     note=f"preamp stereo link, inputs {2*k+1}-{2*k+2} @ {194 + 2*k} "
+                                          f"(assumed to mirror into {195 + 2*k}); activate 13")
 
     # The monitor section: the first of the descriptor's three front-panel encoder groups (gain @112,
     # mute/dim @124 bits 0/1, commit activate 2; the other two groups, @116/126 and @120/128, are the
@@ -1254,16 +1407,20 @@ def build_red_8line():
 
     phys_in = []
     for i in range(npre):
+        # Inputs 1-2 are Mic/Line/Inst, the rest Mic/Line [XML mode enums]: no Inst gain byte to select.
+        nmode = 3 if i < 2 else 2
         phys_in.append(OD(name=f"Analogue {i+1}", controls=OD([
             ("air",         OD(index=i, member="air")),
-            ("mli3",        OD(index=i, member="mode")),
+            ("mli3" if nmode == 3 else "ml2", OD(index=i, member="mode")),
             ("phantom",     OD(index=i, member="phantom")),
             ("hpf",         OD(index=i, member="hpf")),
             ("phase",       OD(index=i, member="phase")),
             ("gain",        OD(index=3 * i, member="preampGain",
-                               select=OD(member="mode", index=i, stride=1, count=3))),
+                               select=OD(member="mode", index=i, stride=1, count=nmode))),
         ])))
     phys_in[0]["controls"]["stereo-link"] = OD(index=0, member="stereoLink")
+    for k in range(1, npre // 2):
+        phys_in[2 * k]["controls"]["stereo-link"] = OD(index=0, member=f"stereoLink{k}")
 
     phys_out = []
     for n in range(nout):
@@ -1289,16 +1446,18 @@ def build_red_8line():
                 ("dim",     OD(index=1, member=f"outMuteDim{n}")),
                 ("hw-gain", OD(index=n, member="hwGainEnable")),
             ])
-        phys_out.append(OD(name=RED_OUT_PINS[0x400 + n], controls=ctrls))
+        phys_out.append(OD(name=spec["out_pins"][0x400 + n], controls=ctrls))
 
-    # ---- router, from the de-blobbed vendor bring-up ----
+    # ---- router, from the de-blobbed vendor bring-up (or tables synthesised by its rule) ----
     dev_sources, dev_dests, alsa_sources, alsa_sinks = [], [], [], []
-    pairs = band0_mux("red_8line")
+    bands = red_bands(slug)
+    pairs = bands[0]
     src_pins = {s for s, _ in pairs if s}
+    src_pins |= set(spec["in_pins"])               # every physical input [XML]
     src_pins |= {0x600 + i for i in range(64)}     # every playback channel is a valid source
     src_pins |= {0x300 + i for i in range(32)}     # every mix bus likewise
-    for pin in sorted(src_pins, key=red_source_rank):
-        nm = red_source_name(pin)
+    for pin in sorted(src_pins, key=lambda p: red_source_rank(p, spec["in_pins"])):
+        nm = red_source_name(pin, spec["in_pins"])
         if nm is None:
             continue
         dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
@@ -1313,7 +1472,7 @@ def build_red_8line():
     for i, (_, d) in enumerate(pairs):
         b0_slot.setdefault(d, i)
     for pin in sorted({d for _, d in pairs}, key=red_dest_rank):
-        nm, mix_idx = red_dest_name(pin)
+        nm, mix_idx = red_dest_name(pin, spec["out_pins"])
         if nm is None:
             continue
         entry = OD([("name", nm), ("router-pin", str(pin))])
@@ -1323,21 +1482,21 @@ def build_red_8line():
         # values, so snd-clarett splits the meter across two "Level Meter" controls (index 0 and 1)
         # and alsa-scarlett-gui joins them again.
         entry["peak-index"] = b0_slot[pin]
-        entry["_peak-index-provenance"] = "band0"
+        entry["_peak-index-provenance"] = "band0" if spec["init"] else "synth"
         dev_dests.append(entry)
         alsa_sinks.append(OD([("device_name", nm), ("alsa_name", red_sink_name(pin, nm))]))
-    add_rate_meter_indices(slug, dev_dests)
+    add_rate_meter_indices(slug, dev_dests, None if spec["init"] else bands)
     add_rate_router_pins(slug, dev_sources, dev_dests)
     assert len({e["name"] for e in dev_sources}) == len(dev_sources), "red: duplicate source name"
     assert len({e["name"] for e in dev_dests}) == len(dev_dests), "red: duplicate sink name"
     assert len({s["alsa_name"] for s in alsa_sinks}) == len(alsa_sinks), "red: duplicate ALSA sink name"
 
     devmap = OD()
-    devmap["_note"] = ("Device map for the Focusrite Red 8Line (Thunderbolt). Like the Clarett models it "
-                       "does not answer DEVMAP_READ (0x80000d), so this file is its description, loaded "
-                       "from DATADIR by fcp_devmap_read_from_file() and keyed on the model slug "
-                       "published at /proc/asound/card<N>/clarett -- every model in both lines shares "
-                       "PCI id 1cb5:0002. Paired with fcp-alsa-map-red-8line.json.")
+    devmap["_note"] = (f"Device map for the Focusrite {spec['name']} (Thunderbolt). Like the Clarett models "
+                       "it does not answer DEVMAP_READ (0x80000d), so this file is its description, loaded "
+                       "from DATADIR by fcp_devmap_read_from_file() and keyed on the model slug the "
+                       "driver publishes in the card's components string (\"Clarett:<slug>\") -- every "
+                       f"model in both lines shares PCI id 1cb5:0002. Paired with fcp-alsa-map-{slug}.json.")
     devmap["_schema"] = ("structs.<STRUCT>.members.<name> = { offset:int, type:string, notify-device:int, "
                          "notify-client:int, array-shape?:[int] }. device-specification.physical-{inputs,"
                          "outputs}[] = { name, controls: { <type>: { index:int, member:string } } }; read "
@@ -1352,24 +1511,52 @@ def build_red_8line():
         "own -112.0 dB minimum). Router pins come from the de-blobbed band-0 SET_MUX of that same "
         "capture. Clean-room: black-box observation plus published descriptors, never a vendor device "
         "map or driver.")
+    if not spec["init"]:
+        b0 = {d: i for i, (_, d) in reversed(list(enumerate(pairs)))}
+        devmap["_provenance"] = (
+            f"DERIVED, NOT YET RUN ON A {spec['name'].upper()}. No capture of this model exists. "
+            + RED_DERIVED_FROM[slug] +
+            " Everything said below about hardware or capture confirmation was established on a Red "
+            "8Line. The router tables "
+            "and meter slots are SYNTHESISED by the rule that reproduces the Red 8Line's captured "
+            "band-0/1/2 SET_MUX tables exactly (gen_fcp_maps.py re-checks it against them on every run). "
+            "The Red 8Line provenance: " + devmap["_provenance"])
+        peak_note = (
+            "peak-index is each destination's index in a synthesised band-0 SET_MUX table (provenance "
+            "\"synth\"): capture records minus loopback, then the outputs in descriptor order, then "
+            "the loopback pair, then the mixer inputs. That order reproduces the Red 8Line's captured "
+            f"tables exactly, but is UNVERIFIED on this model. E.g. PCM 1 = slot {b0[0x600]}, Monitor "
+            f"Output 1 = {b0[0x400]}, Mixer Input 01 = {b0[0x300]}, Mixer Input 32 = {b0[0x31f]} "
+            f"({len(pairs)} slots). "
+            + ("One known risk: the descriptor lists Dante 29-32 as capture records at pins "
+               "0x000-0x003, past the 64 capture channels; they are treated as absent. If the vendor "
+               "programs them, every output, loopback and mixer-input slot is 4 higher. Check: route "
+               "a signal to Monitor Output 1 and see which meter moves. "
+               if spec["capture"][0] == 64 else "") +
+            "peak-index-m / peak-index-h, "
+            "router-pin-m / router-pin-h: as on the Red 8Line, from the synthesised band-1/2 tables. "
+            f"All {len(pairs)} destinations are metered (two Level Meter controls).")
+    else:
+        peak_note = None
     devmap["_limitations"] = [
         "Preamp gain is one control per input that follows the input's mode (select on the mode "
         "byte): mic/line/inst at 130/131/132 + 3i. The range 0..63 at 1 dB per code is measured "
         "for Mic and Inst (flat above 63; codes 1-7 act as 0, 8 dB under code 8); the absolute dB "
         "offset is assumed, not measured. Line mode's input is the DB25, which has not been "
         "measured: its byte is given the same range unverified.",
-        "peak-index is each destination's index in the band-0 SET_MUX table of the vendor bring-up "
-        "(provenance \"band0\"): the rule that reproduces all four measured Clarett layouts exactly, "
-        "and confirmed on this unit by routing an input signal through every kind of destination. "
-        "E.g. PCM 1 = slot 0, Monitor Output 1 = 58, Mixer Input 01 = 124, Mixer Input 32 = 155 (156 "
-        "slots). peak-index-m / peak-index-h are the same channel's slot at double and quad speed, "
-        "by the same rule applied to the vendor's band-1 and band-2 tables, each destination looked "
-        "up under the pin it carries at that speed (ADAT Output 2.1-2.4 take over port 1's pins); "
-        "a destination with no key has no meter at that speed. router-pin-m / router-pin-h give a "
-        "source's or destination's router pin at double/quad speed where it differs (\"0\" = gone "
-        "there), so a routing change addresses ADAT port 2 by the pins it carries at that rate. All 156 "
-        "destinations are metered; past 128 channels the driver splits the Level Meter across two "
-        "controls of that name (index 0 and 1), which alsa-scarlett-gui joins.",
+        peak_note or (
+            "peak-index is each destination's index in the band-0 SET_MUX table of the vendor bring-up "
+            "(provenance \"band0\"): the rule that reproduces all four measured Clarett layouts exactly, "
+            "and confirmed on this unit by routing an input signal through every kind of destination. "
+            "E.g. PCM 1 = slot 0, Monitor Output 1 = 58, Mixer Input 01 = 124, Mixer Input 32 = 155 (156 "
+            "slots). peak-index-m / peak-index-h are the same channel's slot at double and quad speed, "
+            "by the same rule applied to the vendor's band-1 and band-2 tables, each destination looked "
+            "up under the pin it carries at that speed (ADAT Output 2.1-2.4 take over port 1's pins); "
+            "a destination with no key has no meter at that speed. router-pin-m / router-pin-h give a "
+            "source's or destination's router pin at double/quad speed where it differs (\"0\" = gone "
+            "there), so a routing change addresses ADAT port 2 by the pins it carries at that rate. All 156 "
+            "destinations are metered; past 128 channels the driver splits the Level Meter across two "
+            "controls of that name (index 0 and 1), which alsa-scarlett-gui joins."),
         "hwGainEnable is a 2-bit field [XML] exposed as a single boolean. Only bit 0 has been seen "
         "set (the vendor wrote 1 to the monitor and headphone outputs alike); what the second bit "
         "selects is undecoded.",
@@ -1382,8 +1569,15 @@ def build_red_8line():
         "expose the FCP notification word, so the driver relays a wildcard and every notification "
         "refreshes every control. Set here on the output gain, mute, dim and Meter Source -- the "
         "things a front panel can move -- and cleared on the preamp switches.",
-        "line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
-        "applies to all eight inputs but its audible effect has not been established.",
+        ("line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
+         "applies to all eight inputs but its audible effect has not been established."
+         if slug == "red-8line" else
+         "line-input-ref (offsets 272-273, one bit per input, commit activate 21) and line-output-ref "
+         "(274-275) are not exposed: they cover all sixteen inputs and outputs, but their audible "
+         "effect has not been established."
+         if slug == "red-16line" else
+         f"The {spec['name']} descriptor has no line-input-ref / line-output-ref fields (the Line "
+         "models' input/output reference-level bits), so there is nothing to expose."),
         "The mixer matrix needs nothing from this map and comes up on its own: fcp-server reads "
         "MIX_INFO from the device and builds the gain grid, and a Red answers 32 mixes x 32 inputs. "
         "All this map supplies is mixer-input-index on the Mixer Input destinations, which is what "
@@ -1437,13 +1631,18 @@ def build_red_8line():
 
     # ---- alsa-map ----
     a = OD()
-    a["_note"] = ("Presentation layer for the Red 8Line, paired with fcp-devmap-red-8line.json. "
+    a["_note"] = (f"Presentation layer for the {spec['name']}, paired with fcp-devmap-{slug}.json. "
                   "Control names follow the scarlett2 conventions alsa-scarlett-gui matches on.")
     a["input-controls"] = OD([
         ("air",         OD(name="Line In %d Air Capture Switch", type="bool")),
         ("mli3",        OD(name="Line In %d Level Capture Enum", type="enum",
                            values=[OD(name="Mic", value=0), OD(name="Line", value=1),
                                    OD(name="Inst", value=2)])),
+    ])
+    if npre > 2:
+        a["input-controls"]["ml2"] = OD(name="Line In %d Level Capture Enum", type="enum",
+                                        values=[OD(name="Mic", value=0), OD(name="Line", value=1)])
+    a["input-controls"].update([
         ("phantom",     OD(name="Line In %d Phantom Power Capture Switch", type="bool")),
         ("hpf",         OD(name="Line In %d High Pass Filter Capture Switch", type="bool")),
         ("phase",       OD(name="Line In %d Phase Invert Capture Switch", type="bool")),
@@ -1475,7 +1674,7 @@ def build_red_8line():
         ("muteSwitch", OD([("name", "Mute Playback Switch"), ("type", "bool"), ("mask", 1)])),
         ("dimSwitch",  OD([("name", "Dim Playback Switch"),  ("type", "bool"), ("mask", 2)])),
         ("meterSource",    OD([("name", "Meter Source Enum"), ("type", "enum"),
-                               ("values", RED_METER_SOURCE)])),
+                               ("values", spec["meter_source"])])),
         # One connector setting written to both fields, as on the Clarett (SPDIF_SOURCE_ENUM above).
         ("spdifSourceInput",  OD([("name", "S/PDIF Source Capture Enum"), ("type", "enum"),
                                   ("values", RED_SPDIF_SOURCE_ENUM),
@@ -1491,4 +1690,6 @@ def build_red_8line():
           f"(level/mute/dim/hw-gain), {len(dev_sources)} sources, {len(dev_dests)} destinations")
 
 
-build_red_8line()
+check_red_bands("red-8line")
+for _slug in RED_MODELS:
+    build_red(_slug)
