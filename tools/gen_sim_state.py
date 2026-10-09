@@ -27,20 +27,26 @@ sources = [s["alsa_name"] for s in amap["sources"]]
 sinks = [s["alsa_name"] for s in amap["sinks"]]
 n_in = len([p for p in dmap["device-specification"]["physical-inputs"]])
 n_out = len([p for p in dmap["device-specification"]["physical-outputs"]])
-# fcp-server's Level Meter has one value per METERED entry (the meter map), not one per raw slot:
-# the Red reads 156 slots but meters 124 destinations, and a control over 128 values breaks. This
-# line meters its router destinations, so count sources and destinations alike.
+# fcp-server's Level Meter has one value per METERED entry (the meter map), not one per raw slot.
+# This line meters its router destinations, so count sources and destinations alike. An ALSA
+# INTEGER control holds at most 128 values, so snd-clarett splits a longer meter across several
+# "Level Meter" controls -- same name, index 0, 1, ..., up to 128 values each, at most
+# METER_PARTS of them (CLARETT_METER_PARTS) -- and alsa-scarlett-gui joins them again.
+METER_PART_MAX, METER_PARTS = 128, 2
 spec = dmap["device-specification"]
 n_meter = sum("peak-index" in s for s in spec["sources"] + spec.get("destinations", []))
-assert n_meter <= 128, f"Level Meter would have {n_meter} values; an ALSA control holds 128"
+assert n_meter < METER_PART_MAX * METER_PARTS, \
+    f"Level Meter would have {n_meter} values; snd-clarett takes at most {METER_PART_MAX * METER_PARTS - 1}"
 
 out = []
 n = [0]
 
 
-def ctl(iface, name, value, comment):
+def ctl(iface, name, value, comment, index=0):
     n[0] += 1
     lines = [f"\tcontrol.{n[0]} {{", f"\t\tiface {iface}", f"\t\tname '{esc(name)}'"]
+    if index:
+        lines.append(f"\t\tindex {index}")
     if isinstance(value, list):
         lines += [f"\t\tvalue.{i} {v}" for i, v in enumerate(value)]
     else:
@@ -174,9 +180,11 @@ for key, cfg in amap["global-controls"].items():
         ctl(iface, cfg["name"], 1,
             [f"access '{access}'", "type INTEGER", "count 1", "range '0 - 65535'"])
 
-# Level meter (kernel-owned, iface PCM, one value per measured slot)
-ctl("PCM", "Level Meter", [0] * n_meter,
-    ["access 'read volatile'", "type INTEGER", f"count {n_meter}", "range '0 - 4095'"])
+# Level meter (kernel-owned, iface PCM, one value per measured slot), split as the driver splits it
+for part, first in enumerate(range(0, n_meter, METER_PART_MAX)):
+    count = min(METER_PART_MAX, n_meter - first)
+    ctl("PCM", "Level Meter", [0] * count,
+        ["access 'read volatile'", "type INTEGER", f"count {count}", "range '0 - 4095'"], index=part)
 
 print(f"state.{slug} {{")
 print("\n".join(out))

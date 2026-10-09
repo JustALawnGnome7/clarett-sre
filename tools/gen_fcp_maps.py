@@ -1693,3 +1693,17 @@ def build_red(slug):
 check_red_bands("red-8line")
 for _slug in RED_MODELS:
     build_red(_slug)
+
+# Interface-simulation previews of the models not yet run on hardware: alsa-scarlett-gui renders
+# one with no device attached (alsa-scarlett-gui "fcp-server-data/sim/Red 8Pre.state"). Written
+# here, from the maps just generated, so a map change and its preview land together. Named after
+# the card, which the simulated card takes its name from. Replace one with an alsactl store of a
+# real unit once there is one.
+import subprocess, sys
+SIMDIR = os.path.join(OUTDIR, "sim")
+os.makedirs(SIMDIR, exist_ok=True)
+for _slug, _spec in RED_MODELS.items():
+    if _spec["init"] is None:
+        with open(os.path.join(SIMDIR, f"{_spec['name']}.state"), "w") as f:
+            subprocess.run([sys.executable, os.path.join(ROOT, "tools", "gen_sim_state.py"), _slug],
+                           stdout=f, check=True)

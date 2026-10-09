@@ -50,6 +50,13 @@ fcp-server needs both, and they cross-reference. All four Clarett models are cov
 (hardware-confirmed), and `red-16line`, `red-4pre`, `red-8pre` (derived from their descriptors,
 untested) — see below.
 
+`sim/` holds an interface-simulation preview of each untested model (`Red 16Line.state`, …), for
+alsa-scarlett-gui to render with no device attached: `alsa-scarlett-gui "sim/Red 8Pre.state"`.
+`gen_fcp_maps.py` regenerates them from the maps on every run (via `tools/gen_sim_state.py`), so
+they cannot fall behind. They lack what only exists at runtime — meter labels (so the Levels
+window groups meters by routing category), TLVs, real values. Replace one with an `alsactl store`
+of a real unit once there is one.
+
 - **devmap** (`fcp-devmap-<slug>.json`) — `structs.APP_SPACE` members (offsets/types)
   plus the `device-specification` binding each per-channel control to a member, and
   the router sources/destinations. **This is the device's description, permanently:**

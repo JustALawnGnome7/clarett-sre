@@ -482,6 +482,8 @@ snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome
                                       insmod route (PREFIX default /usr/local).
 fcp-server-data/*.json                Authored devmap + alsa-map pairs per model: the control set
                                       userspace (fcp-server) builds. See its README.
+fcp-server-data/sim/*.state           GENERATED alsa-scarlett-gui simulation previews of the Red models
+                                      not yet run on hardware; gen_fcp_maps.py rewrites them each run.
 tools/arm-tables/arm_<model>.h        The de-blobbed vendor bring-up (typed step lists + the
                                       clarett_arm_emit() builder in clarett_arm.h). <model> carries the
                                       product line -- arm_clarett_8prex.h, arm_red_8line.h -- and the
