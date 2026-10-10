@@ -1254,6 +1254,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (`0x40000000`) every 4.99 s idle** — matching the vendor's 4.99 s Red idle poll; meaning unknown.
   Not yet re-examined: the `stream_on` relay gate (its premise was the phase-bit leak) and the stream
   servicer still reading-and-discarding `0x400` while streaming (`monitor_poll` covers the knob there).
+- **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — IN PROGRESS on snd-clarett branch
+  `irq-mailbox` (not merged; clarett-sre's submodule pointer stays on main).** Plan: 4a sole `0x400`
+  reader, 4b mailbox on the phase bits (keeping main's measured lost-answer policy: no ack, resend as
+  seq 0 — NOT his "ack + next seq", which failed 0/1 at attach), 4c retire the stand-ins
+  (`stream_on` gate, `monitor_poll`, meter worker; `hw_gain_follow` onto events).
+  **4a DONE (`eaecdc4`, Oct 10 2026, 8PreX):** the vec0 ISR is the only reader of `0x400`, every MSI,
+  in or out of a command; phase bits recorded per command (`mbox_phase`, in the `FCP op=` dev_dbg and
+  `resp_trace`), event bits relayed. **TRAP, hit on the first build: `0x100` bit29 ("DONE") REFLECTS
+  "`0x400` has bits pending" (Bennett) — reading `0x400` before `0x100` cleared it, every command timed
+  out (-110), and BOTH units failed probe.** Read `0x100` first. This is also what main's old "sweeping
+  0x400 mid-command makes commands time out" lesson was. Results (`phase_check.sh`): 365 traced commands,
+  none timed out or lost; GET_METER usually shows only bit0 in flight (its bit1 lands after main has
+  finished — matters for 4b); GET_DATA mostly `0x3`. Three 25 s 28ch captures with the knob turning:
+  800-1060 `0x400000` events relayed MID-STREAM (`notify_while_streaming=1`), `late=0 overrun=0
+  badreads=0`. With `monitor_poll=0` the GUI's Monitor volume still followed (relay alone suffices) but
+  Analogue Outputs 1-2 did not: `hw_gain_follow`'s only caller is `monitor_poll` — 4c must move it.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
