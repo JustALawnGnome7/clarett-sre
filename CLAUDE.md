@@ -1278,6 +1278,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   the DONE cycle saw mostly `0x1` on GET_METER — main was acking before bit1 was handled. Landing
   latency: GET_DATA ~equal (med 149 vs 156 us); GET_METER +~100 us (med 397 vs 290, p99 945 vs 364),
   its bit1 trailing the visible echo. 25 s capture with the knob: clean, 1108 events relayed mid-stream.
+  **Red 8Line A/B:** 284 vs 286 commands, 0 failures either way, always `0x3` under the phase cycle;
+  no latency cost there (GET_DATA med 129 vs 150 us, GET_METER 262 vs 275, SYNC_READ 96 vs 154).
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
