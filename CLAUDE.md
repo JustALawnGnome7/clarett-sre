@@ -1261,13 +1261,32 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   replay is a **no-op on any used device**, and its `SET_MUX`/`SET_MIX` steps would only *reset the user's
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
-  routing untouched. **It waits `settle_ms` (3 s) BEFORE touching the device at all** — a cold attach
-  cannot answer and asking early wedges it unrecoverably (see the COLD-ATTACH REFUSAL entry below).
-  If the first command is refused, probe **fails loudly and at once (`-ENODEV`, no card registered)**
-  instead of the old fake-2Pre placeholder — power-cycle to retry. (`wait_ready_ms` and the 30 s
-  readiness retry were REMOVED Oct 9 2026: measured to recover nothing; see below.)
+  routing untouched. **Since Oct 10 2026 it asks AT ONCE and retransmits:** a lost first command is
+  re-sent every `ready_retry_ms` (250) with the SAME sequence number until answered, within
+  `ready_timeout_ms` (10 s); `settle_ms` (default now 0) is only an optional quiet period. If the
+  budget runs out, probe **fails loudly (`-ENODEV`, no card registered)** — power-cycle to retry. See
+  the COLD-ATTACH REFUSAL entry below; the "unrecoverable wedge" it describes was a sequence-number
+  problem.
+  - **★★★ RESOLVED Oct 10 2026 — THE "WEDGE" IS A LOST FIRST MESSAGE, AND RETRANSMITTING IT WITH THE
+    SAME SEQUENCE NUMBER RECOVERS IT.** A Clarett asked too early raises DONE but never DMAs the
+    response; it then keeps expecting that command's seq and refuses (err=3, stale echoed seq) anything
+    sent with a later one. Every recovery attempt ever made — retries, mailbox resets, quiet waits +
+    re-init — went out with the driver's NEXT seq, which is why "nothing recovers it". Measured on the
+    8Pre with a forced early touch (settle 300 ms), retry 3 s later: ack + next seq **0/1**; ack + same
+    seq **5/5**; same seq, no ack **3/3** — so the seq is the key and the ack is not needed.
+    **Fix (snd-clarett):** the mailbox advances `seq` only when the device answered the command as
+    ours; probe asks at once and retransmits every 250 ms (10 s budget). **Attach times, power-cycle
+    each:** 8Pre **6/6 in 378-389 ms** after enable, always attempt 2 (first lost, retransmission
+    answered — so even 250 ms retransmits stay recoverable); Red **3/3 in 21-29 ms**, attempt 1. Was 3 s
+    for both. Note the 8Pre answers a retransmission at ~0.38 s although a *first* command at 0.5-0.6 s
+    was lost in the bisection: the "variable readiness" below was variable loss of the first message.
+    **8PreX the same (Oct 10 2026): 6/6 in 379-390 ms, attempt 2 every time.** Still untried on the new
+    probe: 2Pre, 4Pre. **UNTESTED side effect:** the seq rule applies to
+    EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
+    — usually a different opcode — reuses that seq. Only same-opcode retransmission is measured. It may
+    keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
   - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
-    the Dock G4).** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
+    the Dock G4). [Superseded by the RESOLVED entry above.]** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
     pre-mailbox init. **This is an observation, not a root cause.**
     **Observed:** an in-probe first touch ~140 ms after enumeration fails reliably; a first touch at 1 s
     or later has never failed. 3 s is margin over the only failing point measured, and is
