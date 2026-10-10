@@ -1280,6 +1280,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   its bit1 trailing the visible echo. 25 s capture with the knob: clean, 1108 events relayed mid-stream.
   **Red 8Line A/B:** 284 vs 286 commands, 0 failures either way, always `0x3` under the phase cycle;
   no latency cost there (GET_DATA med 129 vs 150 us, GET_METER 262 vs 275, SYNC_READ 96 vs 154).
+  **4c part 1 DONE (Oct 10 2026, 8PreX): `hw_gain_follow` runs on events** — `follow_work` (fetch the
+  monitor region, follow) is scheduled from a relayed monitor/dim-mute event, once when the card comes
+  up, and on fcp-server's DATA_CMD{HWEN_ACTIVATE} (a SW/HW switch raises no event); delayed by
+  `notify_ms`, so the knob's ~46 events/s cost <= 20 region reads/s. With `monitor_poll=0`: outputs 1-2
+  follow the knob idle AND mid-stream (924 events relayed in a clean 25 s capture), SW->HW snaps to the
+  knob, HW->SW is silent (all user-confirmed). `monitor_poll` still runs by default (writes are
+  change-gated, so the two coexist).
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
