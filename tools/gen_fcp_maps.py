@@ -222,7 +222,8 @@ def name_sources(srcs):
 # (PCM 19-20) does not sit in the record block, so that block is 18 wide. The 2-slot residual at 26-27,
 # once called "unidentified", IS the loopback pair: it is their position in band 0, and the 2Pre's
 # equivalent (16-17) was measured live Oct 8 2026. It stayed dark here only because the run zeroed all
-# routing, loopback included. Not yet measured on a 4Pre. (The old "PCM 01 <- PCM 1 added no slot" note
+# routing, loopback included. MEASURED Oct 9 2026: loopback fed from playback PCM 1, then PCM 2, lit
+# slot 26, then 27, and nothing else. (The old "PCM 01 <- PCM 1 added no slot" note
 # fed a record channel, not loopback, so it says nothing about these.) The physical-input record slots
 # 0-17 keep their historical "reinterpreted" provenance (this session drove destinations from PCM
 # playback, which does not exercise the input meters). The old "26+ (28/29 seen)" note was contaminated
@@ -281,8 +282,8 @@ METER_SLOTS_DST = {
         **{0x400 + i: (18 + i, "measured" if i in (0, 5) else "stride") for i in range(6)},
         # S/PDIF Output 1-2 at 24-25 (Output 1 measured)
         0x186: (24, "measured"), 0x187: (25, "stride"),
-        # PCM 19-20 = loopback pins at 26-27: their band-0 position, as on the 2Pre; unmeasured on a 4Pre
-        0x60a: (26, "band0"), 0x60b: (27, "band0"),
+        # PCM 19-20 = loopback pins at 26-27: their band-0 position, as on the 2Pre; both measured
+        0x60a: (26, "measured"), 0x60b: (27, "measured"),
         # Mixer Input 01-30 at 28-57 (01 and 30 measured, rest by stride)
         **{0x300 + i: (28 + i, "measured" if i in (0, 29) else "stride") for i in range(30)},
     },

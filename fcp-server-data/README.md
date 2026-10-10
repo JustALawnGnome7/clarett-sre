@@ -184,7 +184,7 @@ seven Red sources.
 index in the band-0 `SET_MUX` table the vendor programs at bring-up -- all four measured layouts, no
 exception. The 2Pre's slots 16-17 and the 4Pre's 26-27, long read as dark, are those models' loopback
 destinations, so every model meters its loopback pair: measured live on the 2Pre (PCM 13-14 follow
-audio when loopback is fed), predicted on the 4Pre (provenance `band0`). They had only ever looked
+audio when loopback is fed) and the 4Pre (PCM 19-20, slots 26-27). They had only ever looked
 dark because nothing was feeding loopback when they were watched. The Red's 156 slots are read off its
 own band 0 (provenance `band0`) and were confirmed on the unit by routing an input signal through every
 kind of destination. An ALSA INTEGER control holds at most **128 values**, so the driver splits a longer

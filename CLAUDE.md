@@ -171,7 +171,8 @@ into `captures/`, never `/tmp`.
     routing tried lit the expected meter). **And LOOPBACK IS METERED on the 2Pre (Oct 8 2026):** with
     loopback fed from playback PCM 1/2, PCM 13-14 (slots 16-17) move with the audio. The old "loopback
     unmetered on the 2Pre/4Pre" reading came from watching those slots with nothing feeding loopback.
-    Maps now meter the 2Pre pair ("measured") and the 4Pre's 26-27 ("band0", not yet seen on a 4Pre).
+    Maps now meter the 2Pre pair ("measured") and the 4Pre's 26-27 (measured Oct 9 2026: loopback fed from
+    playback PCM 1, then PCM 2, lit slot 26, then 27, and nothing else).
     **The per-rate bands 1/2 follow the same rule (Oct 2 2026):** `gen_fcp_maps.py`
     now derives `peak-index-m/-h` for every model from them, and it is hardware-confirmed on the Red,
     8PreX and 4Pre (see `spec/provenance/clarett-rate-aware-plan.md` item 1). It also CONFIRMED and fixed
@@ -889,16 +890,27 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     (cause-register ownership) are real races and stay whatever the SMI did; `4ecfd6d` (debounce that
     never fired) is a real bug fix; `70afc2c` (meter cache) and `7fb4840`/`03ec348` (notify coalescing,
     trimmed notify-client mask) are cheap and correct as efficiency, with wrong skip attributions.
-- **★ OPEN, FOUND WHILE SETTING THAT UP — THE 2Pre's ROUTER PCM DESTINATIONS DO NOT MATCH THE ALSA
-  CAPTURE CHANNEL ORDER (Sep 17 2026, measured twice).** Routing the router's `PCM 13 Capture Enum`
+- **★ FIXED Oct 9 2026 IN THE DRIVER — THE CLARETT CAPTURE STREAM PUT THE LOOPBACK PAIR MID-STREAM, TWO
+  CHANNELS AWAY FROM THE ROUTER'S NAMES.** The device sends capture in router-pin order, loopback pair
+  after the fixed inputs and before ADAT (2Pre at position 4, 4Pre/8Pre/8PreX at 10) — so S/MUX only ever
+  removes a tail and the loopback keeps one position at every rate (`rx_live_{mid,high}` add up exactly as
+  fixed + 2 + surviving ADAT on all four). The router (and our maps) number that pair LAST (PCM 19-20 on
+  a 4Pre/8Pre), so a recording app found loopback on ch 11/12 and router PCM 11-18 on ch 13-20.
+  **The names are the operator's and stay; the driver reorders instead:** `clarett_model.rx_loopback_at`
+  + `clarett_rx_drain()` move the pair to the end of each frame and shift the rest down two, and the
+  S/MUX dead-tail blank moves down two with them. Reds are untouched (their maps name capture in stream
+  order). **Hardware-verified with the digital-loopback ramp on the 4Pre and 8Pre at 48/96/192 kHz:**
+  "PCM 19" -> ch 19, "PCM 20" -> ch 20, "PCM 11" (ADAT 1) -> ch 11, all sample-exact, removed channels
+  silent. 8PreX (same position) and 2Pre (position 4) not yet run on the new module. A renaming of the
+  maps to stream order was tried first and REJECTED by the operator: capture names stay records PCM
+  01..N, loopback last, never called "Loopback"; fix channel order in the driver, never by renaming.
+  The original 2Pre finding (Sep 17 2026, measured twice): Routing the router's `PCM 13 Capture Enum`
   from playback `PCM 3` delivered the ramp on **ALSA capture channel 5**; routing `PCM 05 Capture Enum`
   (normally ADAT 1) from playback `PCM 4` delivered it on **channel 7**. Both legs confirmed by a
   per-channel scan, with analogue 1/2 on channels 1/2 as expected. Consistent with the 2Pre's capture
   stream being ordered analogue 1-2, S/PDIF 1-2, the two spare/loopback slots, then ADAT 1-8 — i.e. the
-  authored map's PCM destination names are shifted against the stream past channel 4. If so
-  alsa-scarlett-gui shows the wrong capture routing for this model beyond channel 4, and the fix is in
-  `gen_fcp_maps.py`'s destination pins, not the driver. **Not yet investigated**; the 8Pre's ADAT
-  capture test (ch12-19 at 48k) was consistent with its own map, so this may be 2Pre-specific.
+  authored map's PCM destination names are shifted against the stream past channel 4. (The 8Pre's
+  earlier ADAT capture test, "ch12-19" at 48k, is channels 13-20 counted from 1: the same layout.)
 - **★★ THE ALSA BUFFER USED TO BE PINNED TO THE 4096-FRAME RING (83 ms of playback latency at a
   16-frame period). Full record, measurements and method: `spec/provenance/clarett-buffer-latency.md`.**
   The buffer is now any power of two from `CLARETT_MIN_BUFFER_FRAMES` (128) up to the ring (pow2 so it
@@ -1054,7 +1066,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     slot-aware fill `clarett_tx_fill` (mirror of `clarett_rx_drain`); ALSA buffer / per-period math stay on
     the LOGICAL contiguous size. Lever `tx_frag_pad` mirrors `rx_frag_pad`. No change for 2Pre/4Pre
     (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
-    Not yet tested: 8Pre playback (derived, no init blob), simultaneous duplex stress.
+    8Pre playback VERIFIED Oct 9 2026: digital-loopback ramp sample-exact at 48/96/192 kHz (480k/480k/960k
+    frames, zero breaks, no start loss). Not yet tested: simultaneous duplex stress.
   - **Sample rates 44.1/48/88.2/96/176.4/192 kHz — CAPTURE hardware-confirmed on ALL FOUR models (Aug 12
     2026).** A tone into Analogue 1 reads the correct, stable pitch at 96k and 192k with the full stream
     width and no glitches on 2Pre/4Pre/8Pre/8PreX (this was also the first 8Pre capture confirmation) —
@@ -1072,7 +1085,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
     that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
     (not blockers, none affect the audio path): HS *playback* re-verified only
-    on the 2Pre (clean 96k tone; 8Pre TX untested at any rate). The rate-dependent LEVEL METERS that used
+    on the 2Pre (clean 96k tone) and the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026). The rate-dependent LEVEL METERS that used
     to be listed here are no longer a caveat — they are a CONFIRMED BUG; see the meter bullet below.
   - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
     channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
