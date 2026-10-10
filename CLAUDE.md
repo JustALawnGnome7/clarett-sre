@@ -1293,6 +1293,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   stopped being relayed. Knob during a capture with no lever: 827 events relayed, Monitor volume and
   outputs 1-2 followed (user). Streams clean throughout. `monitor_poll` is now described as a backstop
   for changes that raise no event.
+  **4c part 3 DONE (Oct 10 2026): `monitor_poll` defaults OFF** (lever kept). Red 8Line, `monitor_poll=0`,
+  every front-panel control the user tried (order not recorded) was followed by the GUI — the Red still
+  gets the wildcard, so any event bit re-reads everything. **The Red's event bits, seen but NOT yet mapped
+  to controls:** bit23 `0x800000` (133, in bursts — a continuous control, the knob?), bit24 `0x1000000`
+  (3), `0x600000` and `0x400000` (one each), plus bit30 every 4.99 s idle. Mapping them one control at a
+  time is what would let the Red use `notify_word` like the Claretts. Halves idle mailbox traffic (the
+  monitor-region GET_DATA at 24 Hz is gone).
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
