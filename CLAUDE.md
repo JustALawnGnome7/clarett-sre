@@ -49,7 +49,8 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
   response CB, nothing extra programmed at init, no mailbox pointer-push); cold boot == warm on all
   three surfaces; **firmware-over-DMA disproven** (FPGA self-boots from flash); config space
   byte-for-byte; MSI ordering/counts matched; environment ruled out (Fedora-guest passthrough);
-  `0x400` is a 2-bit command-phase register, not an event queue. Still excluded: bus analyzer
+  ~~`0x400` is a 2-bit command-phase register, not an event queue~~ (WRONG — bits 0/1 are the command
+  phase, the bits above are device events; Oct 10 2026, see the notify entry). Still excluded: bus analyzer
   (user ruled out), disassembling the vendor driver/kext (clean-room no-go).
 
 ## Method (how the RE is done)
@@ -1233,6 +1234,26 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   those reflect live hardware. **GET-response layout decoded** (16-byte echoed FCP
   header + data at +16; `resp[16+i] == config[off+i]`; guard on the echoed cmd at
   +0). Other bytes stay write-through. See transport spec §8.
+- **★★ THE NOTIFICATION WORD IS THE 0x400 EVENT BITS — RELAYED SINCE Oct 10 2026 (port of the notify-mask
+  half of Bennett's `183f5d9` + `87d7611`).** `0x400` bits 0/1 are the mailbox phase (accepted / response
+  landed); the bits above are device events, and on a Clarett they ARE the notification word: bit22
+  monitor, bit21 dim/mute (vendor XML masks), bit3 sync. The old `NOTIFY_MONITOR_MASK` (`0x00200003`)
+  relayed the PHASE bits — every one of the driver's own commands looked like a front-panel change — and
+  missed bit22. Now the ISR collects `cause & ~0x3`, and a model with `notify_word` (the four Claretts)
+  relays that word to fcp-server instead of `~0`; the Clarett maps' `notify-client` is `0x600000`
+  (6291456). **Driver and maps must move together:** new driver + old maps (`1`) = knob silently stops
+  tracking; old driver + new maps still works (the wildcard matches). Reds keep the wildcard
+  (`notify_word` unset) until their event bits are measured.
+  **4Pre, measured (`notify_count.sh`, dyndbg on "async notification handled"):** old driver idle
+  **8.2 relays/s, all `0x2`** (the meter poll's own commands); new driver idle **zero**; turning the knob
+  **~46/s, all `0x400000`**, and alsa-scarlett-gui's Monitor volume follows "perfectly, and much faster
+  than before" (user). **8PreX (30 s, knob + Dim/Mute presses): 318 x `0x400000`, 8 x `0x200000` (one per
+  press), nothing else from it; GUI Monitor volume, Dim and Mute all followed (user). bit21 = dim/mute
+  CONFIRMED.** (The 4Pre has no front-panel Dim/Mute.) The
+  "~13.4 Hz heartbeat" the `notify_ms` comment described was this phase-bit leak. **The Red raises bit30
+  (`0x40000000`) every 4.99 s idle** — matching the vendor's 4.99 s Red idle poll; meaning unknown.
+  Not yet re-examined: the `stream_on` relay gate (its premise was the phase-bit leak) and the stream
+  servicer still reading-and-discarding `0x400` while streaming (`monitor_poll` covers the knob there).
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**

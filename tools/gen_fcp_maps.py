@@ -564,7 +564,13 @@ def mode_key(kind):
 def out_index(n):        # physical output n (0-based) -> array index onto the strided gain region
     return (n // 2) * 4 + (n % 2)
 
-def member(offset, typ, shape=None, nd=0, nc=1, note=None):
+# The Clarett notification word: the event bits of the 0x400 cause register the driver relays (bit21
+# dim/mute, bit22 monitor, as the vendor descriptors' notification masks give them). A control re-reads
+# when the relayed word intersects its notify-client. The Red maps keep 1: their driver relays a
+# wildcard until the Red's event bits are measured.
+NOTIFY_CLARETT = 0x600000
+
+def member(offset, typ, shape=None, nd=0, nc=NOTIFY_CLARETT, note=None):
     m = OD(offset=offset, type=typ)
     if shape is not None:
         m["array-shape"] = [shape]
@@ -738,8 +744,9 @@ for slug, spec in MODELS.items():
         "outputVolume is a strided array and physical-outputs index onto the real gains (pairs at "
         "base+{0,1}, pairs stepping by 4), so the generated output names are sparsely numbered. Cosmetic.",
         "Output mute is omitted: its offset has not been identified. Master mute and dim are present.",
-        "notify-client masks are approximate. The Thunderbolt device does not expose the FCP notification "
-        "word, so the driver relays a wildcard and every notification refreshes every control.",
+        "notify-client is 0x600000 (dim/mute | monitor), the event bits of the 0x400 cause register that the "
+        "driver relays as the notification word. It needs a driver that relays them (clarett_model.notify_word); "
+        "an older driver relays a wildcard, which still refreshes every notifiable control.",
         "peak-index sits on DESTINATIONS, not sources: this line meters its router destinations. Each "
         "carries a _peak-index-provenance marker — \"measured\" (that destination read directly on "
         "hardware), \"stride\" (filled between measured anchors in a contiguous block), "
