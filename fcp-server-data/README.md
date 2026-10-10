@@ -153,9 +153,10 @@ own minimum), so unlike the Clarett there is nothing to invert.
 - **The mic/line/inst preamp gains.** Offsets confirmed (`130/131/132 + 3i`, activate 9), but the
   descriptor gives no range or dB mapping and none has been measured. A guessed range on a mic preamp
   is not a cosmetic error. This is the first thing to add once measured.
-- **The mixer ceiling** (`mixer-max-db`). The matrix itself comes up unaided (32 x 32, read from
-  `MIX_INFO`), but every `SET_MIX` in the vendor capture wrote zero, so the top of the fader is
-  unknown and fcp-server's +12 dB default applies.
+- **RedNet Control's mixer ceiling.** The map sets no `mixer-max-db`, so fcp-server's +12 dB
+  default applies, on purpose: the hardware is measured exactly linear up to +12 dB (unity
+  0x2000, measured/expected 1.00000 at every step from -18 to +12 dB). What the vendor's own fader
+  tops out at is unread, because every `SET_MIX` in the vendor capture wrote zero.
 - **Unconfirmed on hardware:** Meter Source (268) comes from the descriptor alone.
 - **Dante output meters.** Deliberately absent -- see Level meters below.
 - **`line-input-ref`** (offset 272, one bit per input, activate 21) — audible effect not established.

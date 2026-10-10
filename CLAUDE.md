@@ -195,7 +195,11 @@ into `captures/`, never `/tmp`.
     Mic and Inst; Line mode's input is the DB25 and stays unmeasured. One fader per input follows the
     mode byte through fcp-server's new input-control `select`. Bytes 194/195 are ONE link switch; a
     linked pair keeps its gain OFFSET (a write moves the partner by the same delta), Air does not
-    follow. Detail in [[red-8line-open-items]] 7d. Still open: the mixer ceiling.
+    follow. Detail in [[red-8line-open-items]] 7d. ~~Still open: the mixer ceiling.~~ **Hardware side MEASURED Oct 9 2026:** playback -> Mixer Input -> Mix ->
+    capture, coefficient stepped 1024..32613: unity 0x2000, gain EXACTLY linear to +12 dB (measured/expected
+    1.00000 at every step, residual at the 24-bit floor), near the 16-bit top (+12.04 dB). The map keeps
+    fcp-server's +12 dB default on purpose (operator's call). Still unread: RedNet Control's own fader top
+    (needs a VM trace with a fader at its top; FC's on the Clarett is +6 dB).
   - **The front-panel red input (clip) indicator is NOT on the mailbox (Oct 2 2026).** It latches on
     a real overload and is cleared by that input's front-panel select button (user-found). Full
     read-only snapshots (all 16 KB of config space via GET_DATA, all 156 `GET_METER` words, the
@@ -901,7 +905,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   S/MUX dead-tail blank moves down two with them. Reds are untouched (their maps name capture in stream
   order). **Hardware-verified with the digital-loopback ramp on the 4Pre and 8Pre at 48/96/192 kHz:**
   "PCM 19" -> ch 19, "PCM 20" -> ch 20, "PCM 11" (ADAT 1) -> ch 11, all sample-exact, removed channels
-  silent. 8PreX (same position) and 2Pre (position 4) not yet run on the new module. A renaming of the
+  silent. **8PreX verified the same way (Oct 9 2026):** "PCM 27"/"PCM 28" -> ch 27/28, "PCM 11" -> ch 11
+  at 48/96/192 kHz, removed channels (19-26 at 96k, 15-26 at 192k) silent. 2Pre (position 4) not yet run. A renaming of the
   maps to stream order was tried first and REJECTED by the operator: capture names stay records PCM
   01..N, loopback last, never called "Loopback"; fix channel order in the driver, never by renaming.
   The original 2Pre finding (Sep 17 2026, measured twice): Routing the router's `PCM 13 Capture Enum`

@@ -1588,9 +1588,12 @@ def build_red(slug):
         "storing state in one (alsa-scarlett-gui does) silently dropped two whole mixes. The "
         "mix-bus router SOURCES are named here, by this map, and use the same letters: a bus "
         "named differently from its gain controls cannot be tied to its column.",
-        "The mixer ceiling is unknown, so there is no mixer-max-db and fcp-server's +12 dB default "
-        "applies. Every SET_MIX in the one vendor capture wrote zero; a session with a fader at "
-        "its top would settle it (the Clarett's is +6 dB).",
+        "No mixer-max-db, so fcp-server's +12 dB default applies, deliberately. Measured on a Red "
+        "8Line through Mixer Input -> Mix -> capture: unity is 0x2000 and the gain is exactly "
+        "linear to +12 dB (measured/expected 1.00000 at every step, residual at the 24-bit floor), "
+        "close to the top of a 16-bit coefficient (+12.04 dB). RedNet Control's own fader top is "
+        "still unread (every SET_MIX in the one vendor capture wrote zero); Focusrite Control's on "
+        "the Clarett is +6 dB.",
         "Meter Source (268) comes from the descriptor -- the capture never wrote it -- but a write "
         "from the GUI moves the front panel's selection, and the front panel's own button steps "
         "through Analogue Inputs/Outputs and ADAT Inputs/Outputs 1-8 as 0/2/6/8 with matching "
