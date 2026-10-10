@@ -24,7 +24,8 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
   power-cycle each): two gated runs arm clean, the levers-off control run walls (seed `-5`) — the
   landed-gated ack + pre-submit header zero are now the unconditional default cycle** (`gated_ack`
   lever retired; `resp_trace` kept as telemetry). **PENDING:** re-audit the shadow/`GET_DATA`
-  refresh paths and the `meter_poll_ms` "heartbeat" hypothesis (both written for a walled device).
+  refresh paths (written for a walled device). ~~The `meter_poll_ms` "heartbeat" hypothesis~~ — RESOLVED
+  Oct 10 2026: no heartbeat is needed (8PreX; see the Bennett-port step 4 entry).
 - **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
   cleanly, DMAs a burst, descriptors correct (no IOMMU faults), PTR advances — **but won't
@@ -1254,8 +1255,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (`0x40000000`) every 4.99 s idle** — matching the vendor's 4.99 s Red idle poll; meaning unknown.
   Not yet re-examined: the `stream_on` relay gate (its premise was the phase-bit leak) and the stream
   servicer still reading-and-discarding `0x400` while streaming (`monitor_poll` covers the knob there).
-- **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — IN PROGRESS on snd-clarett branch
-  `irq-mailbox` (not merged; clarett-sre's submodule pointer stays on main).** Plan: 4a sole `0x400`
+- **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — MERGED to snd-clarett main Oct 10 2026
+  (`2bde028`, fast-forward of branch `irq-mailbox`), at the operator's call before the full model
+  matrix. Tested: 8PreX for every part; Red for probe, the mailbox A/B and its front panel. NOT YET RUN
+  on this code: 4Pre and 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a
+  write), 2Pre (all of it), Red with no worker for minutes then a write.** Plan: 4a sole `0x400`
   reader, 4b mailbox on the phase bits (keeping main's measured lost-answer policy: no ack, resend as
   seq 0 — NOT his "ack + next seq", which failed 0/1 at attach), 4c retire the stand-ins
   (`stream_on` gate, `monitor_poll`, meter worker; `hw_gain_follow` onto events).
@@ -1300,6 +1304,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (3), `0x600000` and `0x400000` (one each), plus bit30 every 4.99 s idle. Mapping them one control at a
   time is what would let the Red use `notify_word` like the Claretts. Halves idle mailbox traffic (the
   monitor-region GET_DATA at 24 Hz is gone).
+  **4c part 4 DONE (Oct 10 2026, 8PreX): `meter_poll_ms` defaults to 0 — NO HOST HEARTBEAT.** Loaded with
+  `meter_poll_ms=0`: ~3 min with no host traffic at all, then a physical write (Air/48V LED), meters and
+  knob all worked; 25 s capture with the knob clean, 773 events relayed. GUI closed: **0 mailbox commands
+  in 3 s** and 0 relays in an untouched 25 s capture. With the GUI open its meter display reads ~10 Hz
+  on demand (the 50 ms cache caps it at 20). The "Focusrite Control issues a heartbeat, so the device
+  needs one" premise is retired (Bennett's finding, confirmed). `monitor_poll` now needs `meter_poll_ms`
+  set too, since it runs in that worker. NOT yet run without the worker: 4Pre, 8Pre, 2Pre, Red.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
