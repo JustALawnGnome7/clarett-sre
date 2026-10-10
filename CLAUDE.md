@@ -1270,6 +1270,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   800-1060 `0x400000` events relayed MID-STREAM (`notify_while_streaming=1`), `late=0 overrun=0
   badreads=0`. With `monitor_poll=0` the GUI's Monitor volume still followed (relay alone suffices) but
   Analogue Outputs 1-2 did not: `hw_gain_follow`'s only caller is `monitor_poll` — 4c must move it.
+  **4b DONE (Oct 10 2026, 8PreX):** with MSI up the mailbox completes on the phase bits (bit0 accepted ->
+  bit1 landed, completions from the vec0 ISR), then checks echo/seq in the buffer and acks; failure
+  policy unchanged (no ack, seq -> 0). Lever `phase_cycle` (0644, default 1; 0 = the 4a DONE cycle).
+  Both units probe on it (Red included). A/B, 5 s each (`mbox_ab.sh`): 0 failures either way; under the
+  phase cycle EVERY command shows `0x3` before its ack (Bennett's vendor-trace claim, confirmed), while
+  the DONE cycle saw mostly `0x1` on GET_METER — main was acking before bit1 was handled. Landing
+  latency: GET_DATA ~equal (med 149 vs 156 us); GET_METER +~100 us (med 397 vs 290, p99 945 vs 364),
+  its bit1 trailing the visible echo. 25 s capture with the knob: clean, 1108 events relayed mid-stream.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
