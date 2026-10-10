@@ -1300,7 +1300,29 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     costs one harmless retry). **Re-run on the new defaults:** 8PreX 3/3 in 47-51 ms (attempt 2; was
     379-390); Red 8Line 3/3 in 21-31 ms (attempt 1, unchanged). Not re-run: 4Pre (answers at once, so
     unaffected). A "never landed" line logged ~100 ms after a `Link Down` is the in-flight command
-    at power-off (seen for GET_METER and GET_DATA), not an attach fault. **UNTESTED side effect:** the seq rule applies to
+    at power-off (seen for GET_METER and GET_DATA), not an attach fault.
+    **★★★ ROOT CAUSE FOUND Oct 10 2026 — THE "LOST FIRST COMMAND" WAS OURS: main sent it before the
+    device acknowledged the response-buffer address.** The device answers the `0x414` (address high
+    word) write with `0x400` bit0; main slept a fixed ~3.22 ms there. Ported from the unmerged
+    `interrupt-driven-mailbox` branch (commit `8bb5122`, Geoffrey D. Bennett, which measured 2-11 ms on a
+    2Pre/4Pre) as lever `addr_ack_ms` (the vec0 ISR completes `addr_acked` on bit0 while init waits).
+    **8PreX, 3 power cycles, addr_ack_ms=500: acknowledged after 12.76-12.97 ms, first command answered
+    every time (attempt 1, zero lost), 28-40 ms enable->registered.** So the 8PreX acks just after
+    main's first command (see the correction below). Consequences: the retransmit/`ready_resp_ms` work is
+    a fallback, not the fix; the seq reuse-vs-0 question is moot AT PROBE (it still matters for a
+    mid-session lost response); the Oct 9 "no register signals readiness" never polled `0x400`.
+    **Confirmed and made the DEFAULT (`addr_ack_ms=500`; a missing ack warns and falls through to the
+    retransmit loop):** 8Pre 3/3 acked after 12.64-12.98 ms, attempt 1, 33-41 ms; **Red 8Line 3/3 acked
+    after 131-166 us** (~100x faster), attempt 1, 21-25 ms. Credited to Bennett in DEVELOPMENT.md and the
+    snd-clarett commit. **4Pre 3/3 acked after 10.71-11.06 ms**, attempt 1, 30-36 ms. **Correction:**
+    main's first command went out ~11.5 ms after the `0x414` write, not 3.22 ms (3.22 ms sleep + cause
+    sweep + a further 8.22 ms sleep + header reads), so the earlier "4Pre/Red ack within 3.22 ms" was
+    wrong: the Red acks at ~0.15 ms, the 4Pre at ~11 ms (half a millisecond inside the old timing),
+    8Pre/8PreX at ~12.6-13 ms (1-1.5 ms outside it). **Warm sysfs rebind with the wait, 3 each, attempt 1
+    every time: 4Pre acked after 2.10-2.17 ms (vs ~11 ms cold), Red 0.18-0.34 ms;** registered 11-14 ms
+    after the ack. This EXPLAINS the old "a manual rebind never fails, the automatic probe does"
+    asymmetry: a warm unit acks ~5x faster, well inside main's ~11.5 ms. Not yet run with the wait:
+    2Pre; an 8Pre/8PreX rebind. **UNTESTED side effect:** the seq rule applies to
     EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
     — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
     keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
