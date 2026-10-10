@@ -1262,9 +1262,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
   routing untouched. **It waits `settle_ms` (3 s) BEFORE touching the device at all** — a cold attach
-  cannot answer and asking early wedges it unrecoverably (see the COLD-ATTACH REFUSAL entry below); `wait_ready_ms`
-  then bounds a backstop retry. If the device never answers, probe **fails loudly (`-ENODEV`, no card
-  registered)** instead of the old fake-2Pre placeholder — reload to retry.
+  cannot answer and asking early wedges it unrecoverably (see the COLD-ATTACH REFUSAL entry below).
+  If the first command is refused, probe **fails loudly and at once (`-ENODEV`, no card registered)**
+  instead of the old fake-2Pre placeholder — power-cycle to retry. (`wait_ready_ms` and the 30 s
+  readiness retry were REMOVED Oct 9 2026: measured to recover nothing; see below.)
   - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
     the Dock G4).** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
     pre-mailbox init. **This is an observation, not a root cause.**
@@ -1301,6 +1302,34 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
       recovery.** Also: **the rig cannot resolve this further** — manual power cycles, one run at a time,
       on a chain that flaps unpredictably, cannot distinguish 4/4 from 4/5. Characterising the remaining
       asymmetry needs scripted power control and run counts, not more one-off bisection.
+    - **★★ CHARACTERISED Oct 9 2026 (laptop, Red 8Line + Clarett 8Pre daisy-chained behind it; scripts
+      `settle_bisect.sh`/`settle_attach.sh`/`retry_test.sh` in that session's scratchpad, wait_ready_ms=0
+      so one attempt decides). Times are from the PCI enable unless stated.**
+      | test | result |
+      |---|---|
+      | Red, sysfs rebind, settle 1000 -> 0 ms | all pass, incl. 0 |
+      | Red, power-cycle attach, settle 0 ms | **6/6 pass** (enable comes ~480 ms after TB discovery; first command answered ~25 ms after enable) |
+      | 8Pre, power-cycle attach, bisection | fail 500, 625; pass 656, 687, 750, 1000 |
+      | 8Pre, power-cycle attach, 1000 ms x5 | **4/5** — the fail was at 1.168 s after the 2nd TB appearance, where a pass had been at 1.170 s |
+      | 8Pre, plain 3000 ms (recovery attaches) | 5/5 pass |
+      | 8Pre, 3000 ms spent READ-polling 16 side-effect-free regs every 10 ms | 2/3 pass; the fail refused at 3.1 s |
+      | 8Pre, refused at 300 ms, then the 30 s-untouched + fresh-init retry x4 (100 s) | **still refused** — power cycle needed |
+      **Conclusions:** (1) The **Red needs no settle**; the **Claretts do**, and their readiness VARIES
+      per power-up (656 ms has passed, 1000 ms has failed) — so there is no threshold to tune, only margin;
+      **3000 stays**. (2) **A Clarett appears on Thunderbolt TWICE at power-up** (`new device found` ×2,
+      ~1.7-1.8 s apart); the PCI enable follows the second by ~165 ms. The Red appears once. pciehp shows
+      why: the Clarett's PCIe link comes up for ~230 ms, drops, and comes back ~1.5 s later for good. (3) **No
+      register signals readiness**: `0x000`/`0x004`/`0x008`/serial/`0x514`/`0x8000-0x801c`/`0x8020`/`0x8024`
+      hold their final values from the first read after enable (0 changes over 3 s), long before the
+      mailbox can answer. (4) Reads during the window MAY hurt (1 of 3 polled attaches failed at 3 s vs
+      0 of 5 unpolled) — unproven at n=3; the polling option was not kept. (5) **The retry recovers nothing**
+      and it held the device for 100 s, which held back pciehp's removal and the re-attach that a power
+      cycle triggers (the old "async probe does not stall hotplug" claim was false). Retry + `wait_ready_ms`
+      removed; a refusal now fails at once. (6) The "never-armed unit" scenario is believed not to exist
+      (operator's assessment): a unit arms itself at power-up provided nothing reads it too early.
+      The rebind-never-fails asymmetry above is only PARTLY explained: a rebind skips the device's
+      power-up, and the Red rebinds fine at 0 ms; but the Aug record has an 8Pre rebind failing with no
+      wait, and no Clarett rebind was tested Oct 9.
   - **★ Aug 20 2026: `force_arm` and the whole bring-up replay are REMOVED from the driver.** The
     working assumption is now that every unit in the field has been through Focusrite Control at least
     once and therefore self-arms; nothing observed on hardware has contradicted it. Deleted with it:
