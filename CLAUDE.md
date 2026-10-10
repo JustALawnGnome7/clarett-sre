@@ -1283,8 +1283,24 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     answered — so even 250 ms retransmits stay recoverable); Red **3/3 in 21-29 ms**, attempt 1. Was 3 s
     for both. Note the 8Pre answers a retransmission at ~0.38 s although a *first* command at 0.5-0.6 s
     was lost in the bisection: the "variable readiness" below was variable loss of the first message.
-    **8PreX the same (Oct 10 2026): 6/6 in 379-390 ms, attempt 2 every time.** Still untried on the new
-    probe: 2Pre, 4Pre. **UNTESTED side effect:** the seq rule applies to
+    **8PreX the same (Oct 10 2026): 6/6 in 379-390 ms, attempt 2 every time.** **4Pre is DIFFERENT
+    (Oct 10 2026, chained behind the Red): 3/3 in 15-27 ms, attempt 1 — it never lost its first
+    command**, despite the same double Thunderbolt appearance and the same ~140-165 ms enable after the
+    second one. So the lost first message is an 8Pre/8PreX trait, not a Clarett-line one, and the 4Pre
+    is no use for the seq reuse-vs-0 test. Still untried on the new probe: 2Pre.
+    **★ RETRY TUNED Oct 10 2026 (8Pre, power-cycle each, 3 per value): the device is never "not ready
+    yet" — it drops the FIRST command and answers the next one whenever it comes.** `ready_retry_ms`
+    100/50/25/0 gave 227-237/177-183/145-155/123-130 ms, attempt 2 every time; at 0 the retransmission
+    was answered ~1 ms after the lost one's 100 ms response deadline (~120 ms after enable). So the
+    floor was the response deadline, not readiness. New probe-only `ready_resp_ms` (each attempt's
+    response deadline; normal commands keep `resp_timeout_ms` 100): 20/10/5 ms gave 41-49/33-42/28-31 ms,
+    attempt 2 every time, no late landings. **Defaults now `ready_retry_ms=0`, `ready_resp_ms=20`**
+    (~45 ms 8Pre attach, was ~380). The remaining ~20 ms before the first command is the pre-mailbox
+    init. 20 kept over 5 as margin (a healthy response lands in ~150 us; a host stall that outlasts it
+    costs one harmless retry). **Re-run on the new defaults:** 8PreX 3/3 in 47-51 ms (attempt 2; was
+    379-390); Red 8Line 3/3 in 21-31 ms (attempt 1, unchanged). Not re-run: 4Pre (answers at once, so
+    unaffected). A "never landed" line logged ~100 ms after a `Link Down` is the in-flight command
+    at power-off (seen for GET_METER and GET_DATA), not an attach fault. **UNTESTED side effect:** the seq rule applies to
     EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
     — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
     keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
