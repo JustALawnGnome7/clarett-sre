@@ -1481,6 +1481,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   hypothesis in `meter_poll_ms` desc). The "re-arming an armed device wedges `GET_DATA`" rule was
   **DISPROVEN July 23** — re-armed twice with no power cycle, `GET_DATA` stayed correct; probe now always
   arms (see the bring-up entry below).
+- **★ MIDI TX FLOW CONTROL + ONE-PASS RX DRAIN — PORTED Oct 10 2026 from Bennett's `0af0398`
+  (interrupt-driven-mailbox branch).** `0x500` bit16 = TX FIFO ready; a word written while it is clear is
+  discarded. Every TX write now waits on it (`read_poll_timeout`, 200 us poll); `midi_tx_pace_us` removed.
+  RX drain bound 64 -> 256 (FIFO measured 139 B by him; a partial drain strands bytes, since a non-empty
+  FIFO raises no new interrupt). **4Pre, single-cable self-loop:** old driver at full speed delivered
+  **75 of 3003** bytes; with the fix 3003/3003, 1500/1500 notes, 4 KB SysEx PASS; TX ~7% over the wire
+  floor (poll granularity).
+  **★ OPEN — THE 8PRE LOSES 2 MIDI BYTES EVERY ~49.7 ms, AND IT IS NOT THE DRIVER'S DOING SO FAR.**
+  Self-loop, paced at half the wire rate (FIFO never full): losses sit on a strict ~49.7 ms grid
+  (phase-coherent over 2 s, skipping beats only when no byte is in flight), 2 bytes each, occasionally a
+  short burst of 2-of-every-3. Unchanged by: the port (the OLD driver loses identically), closing
+  alsa-scarlett-gui, `meter_poll_ms` 40 -> 100, stopping fcp-server, no PCM open. The 4Pre on the same
+  host, cable and driver is byte-exact. So it is 8Pre-specific and most likely device-side (a ~20 Hz
+  internal task?). Unresolved: TX or RX side (needs a second MIDI device cross-connected), and whether
+  Focusrite Control's own driver loses the same (Windows VM + the same loop). Scripts: `midi_gaps.py`,
+  `midi_paced.py` (session scratchpad); Bennett's `tools/midi_loopback.py` is on the branch.
 - **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed
