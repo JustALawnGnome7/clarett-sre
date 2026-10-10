@@ -1314,6 +1314,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
       | 8Pre, plain 3000 ms (recovery attaches) | 5/5 pass |
       | 8Pre, 3000 ms spent READ-polling 16 side-effect-free regs every 10 ms | 2/3 pass; the fail refused at 3.1 s |
       | 8Pre, refused at 300 ms, then the 30 s-untouched + fresh-init retry x4 (100 s) | **still refused** — power cycle needed |
+      | 8Pre, 500 ms, vendor command order (`READ_SEG{0,8}` first, as `FocusritePCIe.sys` opens) | **0/5** — `READ_SEG` itself never got its response and wedged the mailbox |
       **Conclusions:** (1) The **Red needs no settle**; the **Claretts do**, and their readiness VARIES
       per power-up (656 ms has passed, 1000 ms has failed) — so there is no threshold to tune, only margin;
       **3000 stays**. (2) **A Clarett appears on Thunderbolt TWICE at power-up** (`new device found` ×2,
@@ -1322,7 +1323,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
       register signals readiness**: `0x000`/`0x004`/`0x008`/serial/`0x514`/`0x8000-0x801c`/`0x8020`/`0x8024`
       hold their final values from the first read after enable (0 changes over 3 s), long before the
       mailbox can answer. (4) Reads during the window MAY hurt (1 of 3 polled attaches failed at 3 s vs
-      0 of 5 unpolled) — unproven at n=3; the polling option was not kept. (5) **The retry recovers nothing**
+      0 of 5 unpolled) — unproven at n=3; the polling option was not kept. (4b) **Command order does not matter:** any first
+      mailbox command sent before the Clarett is ready wedges it, the vendor's opener included. The vendor
+      captures show no readiness check either (34 BAR accesses, ~20 ms, then `READ_SEG`); Windows gets away
+      with it in every capture only because the guest driver first touches the unit 9 s to 10 min after
+      power-up. (5) **The retry recovers nothing**
       and it held the device for 100 s, which held back pciehp's removal and the re-attach that a power
       cycle triggers (the old "async probe does not stall hotplug" claim was false). Retry + `wait_ready_ms`
       removed; a refusal now fails at once. (6) The "never-armed unit" scenario is believed not to exist
