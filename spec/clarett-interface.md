@@ -115,12 +115,13 @@ reply to its request.
 
 GET responses do **not** appear in the BAR. The host allocates a response buffer,
 programs its bus address into `0x410`/`0x414`, and the device DMAs each response
-there. **The device acknowledges the address**: 2-11 ms after the `0x414` write it
+there. **The device acknowledges the address**: 0.1-13 ms after the `0x414` write it
 raises `0x400` bit 0 (one MSI on vector 0), and it will not answer a command sent
 before that. Measured 2-3 ms on a warm device and up to 11 ms on a cold attach; the
 figure is per model and depends on what the device's firmware is doing at the moment
 of the write (a 4Pre takes ~11 ms cold, a 2Pre 2 ms cold if written promptly after
-link-up and ~10 ms if written 5 s later). The acknowledgement carries no DMA;
+link-up and ~10 ms if written 5 s later; on cold power-ups an 8Pre or 8PreX takes 12.6-13 ms
+and a Red 8Line 0.13-0.17 ms, and a warm 4Pre ~2.1 ms). The acknowledgement carries no DMA;
 the buffer is untouched. Writing the low word alone does not raise it; rewriting the
 address raises it again. A host waits for this bit (a few hundred ms is ample) and
 only then sends its first command. The response begins with a 16-byte echoed FCP header (echoed `cmd` at
@@ -687,15 +688,18 @@ the model, and starts using it.
 
 The device signals readiness itself: the response-buffer address acknowledgement
 (§2.3). A host programs `0x410`/`0x414`, waits for `0x400` bit 0, and then sends its
-first command, which is answered. Seven cold power-ups on two models were detected on
-the first command with no other delay.
+first command, which is answered. Cold power-ups of the 2Pre, 4Pre, 8Pre, 8PreX and
+Red 8Line, and warm rebinds of the 4Pre and Red, were all detected on the first command
+with no other delay.
 
 A command sent before the acknowledgement is not answered. Its accept wait is
 satisfied by the acknowledgement itself, so the failure presents as "accepted but no
-response", and the next command is not answered either. Rewriting the address and
-waiting for the acknowledgement recovers it. Nothing else does: retrying the command,
-resetting `0x510`/`0x500`, or waiting longer for the response were all tried and all
-fail, because none of them re-arms the address.
+response", and a following command sent with the next sequence number is refused
+(`err=3`, the lost command's sequence number echoed). Two things recover it: rewriting
+the address and waiting for the acknowledgement, or re-sending a command with the lost
+command's sequence number, which is answered (8Pre, 8 of 8, with or without a trailing
+ack; at attach the lost command is seq 0). Retrying with the next sequence number,
+resetting `0x510`/`0x500`, and waiting longer for the response all fail.
 
 This is the sole cause observed of a device that appears "unarmed" or "not ready". A
 device that does not acknowledge the address within a few hundred ms is not usable and

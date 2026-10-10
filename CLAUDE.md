@@ -465,6 +465,13 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     (summarised under Build & test).
   clarett-buffer-latency.md         The ALSA buffer-ceiling work, tx_guard, PipeWire's adaptation, the
                                     digital-loopback ramp method (summarised under Driver limitations).
+  clarett-address-ack-handshake.md  G. D. Bennett's record of the response-address acknowledgement
+                                    (0x400 bit0 after the 0x414 write), with the Oct 10 2026 addendum
+                                    measuring it on every model after the port to main.
+  clarett-opcode-inference.md       G. D. Bennett: what the init-only opcodes are (0x007001 =
+                                    STREAM_INFO per speed band, 0x005000 a per-port descriptor read,
+                                    flash FLASH_INFO/SEGMENT_INFO/READ). Main still uses the old
+                                    GET_7.x / CONFIG_PUSH names.
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
@@ -532,7 +539,11 @@ tools/fcp_*.c                         Bench tools driving the hwdep directly (st
                                       fcp_cmd: ANY opcode with request bytes from the command line,
                                       response hex-dumped — the first thing to reach for on an
                                       undecoded query (what found the STREAM_INFO bands, §9 of
-                                      spec/provenance/clarett-opcode-inference.md).
+                                      spec/provenance/clarett-opcode-inference.md); fcp_flash_dump:
+                                      lists the flash segments and dumps one (each chunk read twice
+                                      until two agree, since long FLASH_READ runs return stale data).
+                                      Its author reports the REAL serial lives in the App_Env segment
+                                      (offset/value not recorded) — the lead for the dummy-serial TODO.
 vendor-reference/Devices/*.xml        Focusrite's device descriptors (RE source material).
 captures/*.log                        Trace captures (vfio_region_* logs, guest-RAM dumps, decoded
                                       dumps) + working notes (insmod/session notes; former .txt now .log).

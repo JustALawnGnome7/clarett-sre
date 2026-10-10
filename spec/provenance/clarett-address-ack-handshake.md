@@ -163,3 +163,27 @@ The trace had shown this from the first capture: the sweep after the address wri
 was read as noise and its gap as a pause. For each write in an attach sequence, ask
 what the device does in response to it, and test that with one variable changed per
 run and a negative control on the same device.
+
+## 7. Addendum (Oct 10 2026): ported to main, and every model measured
+
+Main had kept the vendor-order init with a fixed 3.22 ms after the `0x414` write, but
+its first command actually went out ~11.5 ms after the write (that sleep, the cause
+sweep, a further 8.22 ms sleep, the header reads). The wait was ported to main as
+`addr_ack_ms` (default 500; the vec0 handler completes it on `0x400` bit 0), with the
+retransmission loop kept as a fallback. Measured with it, all first-command answers:
+
+| unit | cold power-up ack | warm rebind ack | enable -> registered |
+|---|---|---|---|
+| Red 8Line | 0.13-0.17 ms | 0.18-0.34 ms | 21-25 ms |
+| Clarett 4Pre | 10.7-11.1 ms | 2.10-2.17 ms | 30-36 ms |
+| Clarett 8Pre | 12.6-13.0 ms | — | 33-41 ms |
+| Clarett 8PreX | 12.8-13.0 ms | — | 28-40 ms |
+
+This explains main's history exactly: at ~11.5 ms the 8Pre and 8PreX lost their first
+command on every cold attach, the 4Pre cleared it by half a millisecond, the Red by a
+wide margin, and a warm rebind (faster ack) never failed.
+
+One claim in the interface spec's §6.1, as first written, needed narrowing. "Retrying the command
+fails" holds for a retry with the NEXT sequence number. Re-sending with the lost
+command's sequence number is answered (8Pre, 8 of 8, with or without the trailing ack),
+which is how main recovered before the wait existed; see `CLAUDE.md`.
