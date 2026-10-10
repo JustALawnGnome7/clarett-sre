@@ -1262,7 +1262,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   routing* to the vendor default. **Default probe now arms NOTHING:** it polls `clarett_detect_model`
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
   routing untouched. **Since Oct 10 2026 it asks AT ONCE and retransmits:** a lost first command is
-  re-sent every `ready_retry_ms` (250) with the SAME sequence number until answered, within
+  re-sent every `ready_retry_ms` (250) as seq 0 (the mailbox resets to 0 after any unanswered command) until answered, within
   `ready_timeout_ms` (10 s); `settle_ms` (default now 0) is only an optional quiet period. If the
   budget runs out, probe **fails loudly (`-ENODEV`, no card registered)** — power-cycle to retry. See
   the COLD-ATTACH REFUSAL entry below; the "unrecoverable wedge" it describes was a sequence-number
@@ -1275,7 +1275,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     8Pre with a forced early touch (settle 300 ms), retry 3 s later: ack + next seq **0/1**; ack + same
     seq **5/5**; same seq, no ack **3/3** — so the seq is the key and the ack is not needed.
     **Fix (snd-clarett):** the mailbox advances `seq` only when the device answered the command as
-    ours; probe asks at once and retransmits every 250 ms (10 s budget). **Attach times, power-cycle
+    ours, and **resets it to 0 after an unanswered one** (operator's choice, Oct 10 2026, over "reuse the
+    lost seq": identical at probe, where the lost command is always seq 0; NOT YET SEPARATED — see the
+    next-session test of a nonzero first seq; 8PreX re-checked on this rule: 381 ms, attempt 2); probe asks at once and retransmits every 250 ms (10 s
+    budget). **Attach times, power-cycle
     each:** 8Pre **6/6 in 378-389 ms** after enable, always attempt 2 (first lost, retransmission
     answered — so even 250 ms retransmits stay recoverable); Red **3/3 in 21-29 ms**, attempt 1. Was 3 s
     for both. Note the 8Pre answers a retransmission at ~0.38 s although a *first* command at 0.5-0.6 s
@@ -1283,7 +1286,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     **8PreX the same (Oct 10 2026): 6/6 in 379-390 ms, attempt 2 every time.** Still untried on the new
     probe: 2Pre, 4Pre. **UNTESTED side effect:** the seq rule applies to
     EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
-    — usually a different opcode — reuses that seq. Only same-opcode retransmission is measured. It may
+    — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
     keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
   - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
     the Dock G4). [Superseded by the RESOLVED entry above.]** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
