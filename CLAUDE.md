@@ -1287,6 +1287,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   follow the knob idle AND mid-stream (924 events relayed in a clean 25 s capture), SW->HW snaps to the
   knob, HW->SW is silent (all user-confirmed). `monitor_poll` still runs by default (writes are
   change-gated, so the two coexist).
+  **4c part 2 DONE (Oct 10 2026, 8PreX): the `stream_on` relay gate and `notify_while_streaming` are
+  REMOVED.** Hands-off 25 s capture (`HANDS_OFF=1 phase_check.sh`, `monitor_poll=0`): **zero relays**
+  from the 8PreX — an audio period raises no event bit, so the gate saved nothing once the phase bits
+  stopped being relayed. Knob during a capture with no lever: 827 events relayed, Monitor volume and
+  outputs 1-2 followed (user). Streams clean throughout. `monitor_poll` is now described as a backstop
+  for changes that raise no event.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
