@@ -779,6 +779,17 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `lspci -d 1cb5:` after each. Fails anyway -> driver cleared; comes up -> repeat with the module
   loaded and only the 2Pre unbound to isolate the remove path. Separately: the 2Pre alone vs the
   direct-on-dock topology (power-cycle a 4Pre/8Pre directly on the dock).
+  **UPDATE, same day 13:38: it stopped happening, and the driver is effectively cleared** (control not
+  run). Two power cycles reconnected on their own, with the module loaded, after ~45 min of driver
+  sessions (rebinds, captures, ramp runs), so the confound is gone. Those cycles show the normal
+  pattern: authorized in ~300 ms, the unit's link bounce at ~330 ms, re-found 1.5-1.8 s later. In
+  every failure the bounce came at ~520-650 ms, DURING authorization, and **the unit never re-appeared
+  afterwards** — so the decisive difference is the device not re-establishing its link after its
+  power-on bounce, and the auth-error is a symptom. A cable replug retrains the link, which is why it
+  worked. Off time does not explain it (a 3.6 s off failed, 3.1-3.5 s now pass); host runtime PM is
+  active with a 15 s autosuspend either way. All failures fell within ~6 min of the unit's first
+  power-up that day (it had just been brought in): temperature is a guess, untested. If it recurs,
+  note how long the unit has been on, and retry after it has warmed up.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
