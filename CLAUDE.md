@@ -472,8 +472,8 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     measuring it on every model after the port to main.
   clarett-opcode-inference.md       G. D. Bennett: what the init-only opcodes are (0x007001 =
                                     STREAM_INFO per speed band, 0x005000 a per-port descriptor read,
-                                    flash FLASH_INFO/SEGMENT_INFO/READ). Main still uses the old
-                                    GET_7.x / CONFIG_PUSH names.
+                                    flash FLASH_INFO/SEGMENT_INFO/READ). Main has STREAM_INFO (§10); still the old
+                                    GET_7.2/7.3 / CONFIG_PUSH names.
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
@@ -1351,6 +1351,16 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   on demand (the 50 ms cache caps it at 20). The "Focusrite Control issues a heartbeat, so the device
   needs one" premise is retired (Bennett's finding, confirmed). `monitor_poll` now needs `meter_poll_ms`
   set too, since it runs in that worker. NOT yet run without the worker: 4Pre, 8Pre, Red (2Pre done Oct 12).
+- **STEP 5 OF THE BENNETT PORT, part 1 DONE (Oct 12 2026, 2Pre): S/MUX widths come from the device.**
+  `0x007001` is now `FCP_STREAM_INFO` (was `GET_7.1`); probe reads bands 1 and 2 into `c->rx_live[]`
+  after the model (and Red twin) is final, and prepare uses them. Main KEEPS `rx_live_mid/high` as the
+  fallback and a cross-check (warns on disagreement) instead of deleting them as Bennett's `4c975bd`
+  did, whose full-width fallback would leak the S/MUX residue. 2Pre: device 14/10/8 = table (no
+  warning), ramp 9/9 PASS at 48/96/192 kHz. Not yet attached on this code: 4Pre, 8Pre, 8PreX, Red —
+  watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
+  (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
+  `spec/provenance/clarett-opcode-inference.md` §10. Remaining parts: 2 drop the port-name burst,
+  3 minimal attach, 4 cleanups.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**

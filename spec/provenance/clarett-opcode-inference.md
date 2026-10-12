@@ -229,3 +229,32 @@ the TX page-straddle bug fixed later, not the burst. Untested: the 8PreX itself.
 S/PDIF clock value as 4 where every other model uses 3, so one of those words is plausibly the
 per-model S/PDIF clock enum. Two data points; a hypothesis, not a finding. `0x006002`'s `0x18`
 words are the current source (Internal = 24). `0x007000` answers all zeros with or without a payload.
+
+## 10. Addendum (Oct 12 2026): STREAM_INFO re-read on the 2Pre, and the port to main
+
+Read with `tools/fcp_cmd.c` through main's driver (fcp-server stopped), 20-byte replies:
+
+| band | playback / capture | trailing words |
+|---|---|---|
+| 0 | 4 / **14** | 11, 14 |
+| 1 | 4 / **10** | 9, 16 |
+| 2 | 4 / **8** | 9, 14 |
+| 3 | empty reply (size 0) | — |
+
+- **The capture widths repeat §9 exactly** (14/10/8), and equal main's `rx_live_mid`/`rx_live_high`
+  table for the 2Pre.
+- **Band 3 is an empty reply, not a repeat of band 2.** Main now fills the response payload with a
+  poison byte (`0xa5`) before every command, and band 3 came back as poison, untouched. §9's
+  "repeats band 2" was most likely band 2's reply still sitting in the response buffer, read before
+  that fill existed. The 4Pre's "all zero" may be the same thing. Nothing asks past band 2.
+- **The trailing words differ from §9** in bands 0 and 1 (§9: 14/17 and 9/17), so §9's "identical on
+  both models" does not hold across sessions either. Still undecoded; they may track device state.
+
+**Ported to main (snd-clarett), with one change of design.** Probe reads bands 1 and 2 after the
+model is final (`clarett_read_rx_live()`; after the Red twin decision, since twins share band 0) and
+the driver uses the device's answer. Unlike the branch, the per-model table is KEPT: it is the
+fallback for a band the device does not answer (the branch fell back to full width, which would pass
+the S/MUX residue through to the capture), and a cross-check that warns on any disagreement, so the
+8Pre/8PreX/Red tables, never read live at bands 1-2, are checked the first time each attaches. On the
+2Pre: no warning at probe (agreement), and the digital-loopback ramp passed 9/9 at 48/96/192 kHz with
+the removed channels (9-12, 7-12) all zero.
