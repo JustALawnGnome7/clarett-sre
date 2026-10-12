@@ -762,6 +762,23 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   the kind of bring-up testing this project does. **Consequence for measurement: check the chain is
   stable before trusting ANY probe-timing result** — a device that vanishes 574 ms after appearing
   fails readiness for reasons unrelated to the driver, and one capture was lost to precisely that.
+  **Oct 12 2026 — A RELATED FAILURE, OPEN, DRIVER NOT YET RULED OUT: a power cycle never brought the
+  2Pre's PCIe tunnel back; a TB2 cable replug did, every time (laptop, Dock G4 -> Apple adapter -> 2Pre,
+  no other unit in the chain).** The one power-on that worked was the first since boot (12:51):
+  found -> boltd authorizes in 300 ms -> the unit's usual link bounce -> found again -> authorized ->
+  PCIe up. Every power-on after a driver session: found -> boltd's authorize fails after ~640 ms
+  (`auth-error`, kernel EIO; the kernel logs `PCIe Down path activation failed: -107` /
+  `PCIe tunnel activation failed, aborting`) -> disconnected -> never found again. A dock replug did
+  NOT clear it (unlike Aug 21); a cable replug into the powered unit did. Against the driver: the
+  failure is in the host Thunderbolt driver before any PCI device exists; snd-clarett touches only the
+  endpoint; at power-off the old device's buses were released 25 ms after Link Down (remove did not
+  stall); the unit's own state cannot survive the power cycle; the Aug 21 `-107` signature predates
+  this driver version. **Confound:** the only success preceded any driver session. Zero activation
+  failures in the previous two boots' ~300 Clarett appearances, all chained behind the Red.
+  **Decisive control (not yet run):** stop fcp-server, `rmmod snd_clarett`, power-cycle 2-3 times,
+  `lspci -d 1cb5:` after each. Fails anyway -> driver cleared; comes up -> repeat with the module
+  loaded and only the 2Pre unbound to isolate the remove path. Separately: the 2Pre alone vs the
+  direct-on-dock topology (power-cycle a 4Pre/8Pre directly on the dock).
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
@@ -923,7 +940,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   order). **Hardware-verified with the digital-loopback ramp on the 4Pre and 8Pre at 48/96/192 kHz:**
   "PCM 19" -> ch 19, "PCM 20" -> ch 20, "PCM 11" (ADAT 1) -> ch 11, all sample-exact, removed channels
   silent. **8PreX verified the same way (Oct 9 2026):** "PCM 27"/"PCM 28" -> ch 27/28, "PCM 11" -> ch 11
-  at 48/96/192 kHz, removed channels (19-26 at 96k, 15-26 at 192k) silent. 2Pre (position 4) not yet run. A renaming of the
+  at 48/96/192 kHz, removed channels (19-26 at 96k, 15-26 at 192k) silent. **2Pre (position 4) verified Oct 12 2026:** ramp
+  on playback PCM 3 routed to "PCM 13"/"PCM 14"/"PCM 05" (ADAT 1) arrived on ch 13/14/5 at 48/96/192 kHz,
+  9/9 legs sample-exact over the full 3 s, nothing after the ramp, removed channels (9-12 at 96k, 7-12 at
+  192k) all zero. All four Claretts now verified. A renaming of the
   maps to stream order was tried first and REJECTED by the operator: capture names stay records PCM
   01..N, loopback last, never called "Loopback"; fix channel order in the driver, never by renaming.
   The original 2Pre finding (Sep 17 2026, measured twice): Routing the router's `PCM 13 Capture Enum`
@@ -1107,7 +1127,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
     that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
     (not blockers, none affect the audio path): HS *playback* re-verified only
-    on the 2Pre (clean 96k tone) and the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026). The rate-dependent LEVEL METERS that used
+    on the 2Pre (clean 96k tone; ramp sample-exact at 96k and 192k, Oct 12 2026) and the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026). The rate-dependent LEVEL METERS that used
     to be listed here are no longer a caveat — they are a CONFIRMED BUG; see the meter bullet below.
   - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
     channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
@@ -1257,9 +1277,18 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   servicer still reading-and-discarding `0x400` while streaming (`monitor_poll` covers the knob there).
 - **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — MERGED to snd-clarett main Oct 10 2026
   (`2bde028`, fast-forward of branch `irq-mailbox`), at the operator's call before the full model
-  matrix. Tested: 8PreX for every part; Red for probe, the mailbox A/B and its front panel. NOT YET RUN
-  on this code: 4Pre and 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a
-  write), 2Pre (all of it), Red with no worker for minutes then a write.** Plan: 4a sole `0x400`
+  matrix. Tested: 8PreX for every part; 2Pre for every part (Oct 12, below); Red for probe, the
+  mailbox A/B and its front panel. NOT YET RUN on this code: 4Pre and 8Pre (probe, knob/outputs idle +
+  streaming, Dim/Mute, minutes idle then a write), Red with no worker for minutes then a write.**
+  **2Pre on merged main (Oct 12 2026, laptop, Dock G4 -> Apple adapter -> 2Pre):** cold attach x3
+  acked after 9.42-9.53 ms, attempt 1, 33-36 ms enable -> registered (cable replugs, see the
+  Thunderbolt note under Build & test); warm rebind x3 acked after 2.08-2.14 ms, attempt 1. Phase
+  check: 29 GET_METER in 3 s (GUI), all `0x3` before the ack, none lost. 25 s 14ch capture with the
+  knob: 712 `0x400000` relayed, Monitor volume AND Analogue Outputs 1-2 followed (user), 1172/1172
+  periods, `late=0`; hands-off capture: zero relays. 3 min idle with the GUI closed: ONE command (a
+  lone GET_METER at 2 min — some ALSA control reader, unidentified), then Air 1 written: SET_DATA +
+  DATA_CMD both `0x3`, the LED lit (user); the driver's own 2 s debounced persist followed. Capture
+  reorder verified (see the capture-order entry). Plan: 4a sole `0x400`
   reader, 4b mailbox on the phase bits (keeping main's measured lost-answer policy: no ack, resend as
   seq 0 — NOT his "ack + next seq", which failed 0/1 at attach), 4c retire the stand-ins
   (`stream_on` gate, `monitor_poll`, meter worker; `hw_gain_follow` onto events).
@@ -1310,7 +1339,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   in 3 s** and 0 relays in an untouched 25 s capture. With the GUI open its meter display reads ~10 Hz
   on demand (the 50 ms cache caps it at 20). The "Focusrite Control issues a heartbeat, so the device
   needs one" premise is retired (Bennett's finding, confirmed). `monitor_poll` now needs `meter_poll_ms`
-  set too, since it runs in that worker. NOT yet run without the worker: 4Pre, 8Pre, 2Pre, Red.
+  set too, since it runs in that worker. NOT yet run without the worker: 4Pre, 8Pre, Red (2Pre done Oct 12).
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
@@ -1380,7 +1409,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     (Oct 10 2026, chained behind the Red): 3/3 in 15-27 ms, attempt 1 — it never lost its first
     command**, despite the same double Thunderbolt appearance and the same ~140-165 ms enable after the
     second one. So the lost first message is an 8Pre/8PreX trait, not a Clarett-line one, and the 4Pre
-    is no use for the seq reuse-vs-0 test. Still untried on the new probe: 2Pre.
+    is no use for the seq reuse-vs-0 test. 2Pre: answers at once too (Oct 12, with the address wait).
     **★ RETRY TUNED Oct 10 2026 (8Pre, power-cycle each, 3 per value): the device is never "not ready
     yet" — it drops the FIRST command and answers the next one whenever it comes.** `ready_retry_ms`
     100/50/25/0 gave 227-237/177-183/145-155/123-130 ms, attempt 2 every time; at 0 the retransmission
@@ -1414,8 +1443,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     8Pre/8PreX at ~12.6-13 ms (1-1.5 ms outside it). **Warm sysfs rebind with the wait, 3 each, attempt 1
     every time: 4Pre acked after 2.10-2.17 ms (vs ~11 ms cold), Red 0.18-0.34 ms;** registered 11-14 ms
     after the ack. This EXPLAINS the old "a manual rebind never fails, the automatic probe does"
-    asymmetry: a warm unit acks ~5x faster, well inside main's ~11.5 ms. Not yet run with the wait:
-    2Pre; an 8Pre/8PreX rebind. **UNTESTED side effect:** the seq rule applies to
+    asymmetry: a warm unit acks ~5x faster, well inside main's ~11.5 ms. **2Pre (Oct 12): 9.42-9.53 ms
+    cold, 2.08-2.14 ms warm, attempt 1 every time** (step 4 entry). Not yet run with the wait: an
+    8Pre/8PreX rebind. **UNTESTED side effect:** the seq rule applies to
     EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
     — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
     keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.

@@ -178,10 +178,16 @@ retransmission loop kept as a fallback. Measured with it, all first-command answ
 | Clarett 4Pre | 10.7-11.1 ms | 2.10-2.17 ms | 30-36 ms |
 | Clarett 8Pre | 12.6-13.0 ms | — | 33-41 ms |
 | Clarett 8PreX | 12.8-13.0 ms | — | 28-40 ms |
+| Clarett 2Pre (Oct 12) | 9.42-9.53 ms * | 2.08-2.14 ms | 33-36 ms |
+
+\* Not a power-up attach. On that rig (2Pre directly on an HP Dock G4) no power cycle
+re-established the PCIe tunnel, so each attach was a TB2 cable replug into a unit that had
+been powered for 15-50 s. The figure matches §3's rows 4 and 6 (9.48-10.08 ms), not the
+2.0 ms of a prompt write after a power cycle; this run cannot say which condition sets it.
 
 This explains main's history exactly: at ~11.5 ms the 8Pre and 8PreX lost their first
-command on every cold attach, the 4Pre cleared it by half a millisecond, the Red by a
-wide margin, and a warm rebind (faster ack) never failed.
+command on every cold attach, the 4Pre cleared it by half a millisecond, the 2Pre by
+about 2 ms, the Red by a wide margin, and a warm rebind (faster ack) never failed.
 
 One claim in the interface spec's §6.1, as first written, needed narrowing. "Retrying the command
 fails" holds for a retry with the NEXT sequence number. Re-sending with the lost
