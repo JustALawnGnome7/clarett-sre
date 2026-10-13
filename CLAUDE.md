@@ -829,7 +829,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `PCM registered`, `descriptor rings:`, `stream-handshake:`, `engine armed:`, `stream-ev[0..7]`.
   Still `info` unconditionally: `stream-badread[n]`, and the probe `dev_err` when the device never
   becomes ready. Everything else already sat behind an opt-in param (`stream_probe`,
-  `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`).
+  `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`). **Since Oct 13
+  2026 only `resp_trace` and `tx_trace` remain of those** (Bennett port step 5 part 4).
   - **`stream-svc:` telemetry is now anomaly-gated, not unconditional** (`clarett_svc_log`). The 2-second
     window line prints at `info` only when that window had `late`, an `overrun`, a `badread`, or a
     `rekick`; otherwise `dev_dbg`. Same rule for the per-stream `stream-svc: stopped` summary, which now
@@ -1131,7 +1132,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     per-fragment TX *read* mis-frames across the boundary into 4-channel groups. **Fix:** mirror RX slotting
     for TX — `c->tx_slot` = fragment rounded up to pow2 (`0x700→0x800`), descriptors strided by the slot,
     slot-aware fill `clarett_tx_fill` (mirror of `clarett_rx_drain`); ALSA buffer / per-period math stay on
-    the LOGICAL contiguous size. Lever `tx_frag_pad` mirrors `rx_frag_pad`. No change for 2Pre/4Pre
+    the LOGICAL contiguous size. Lever `tx_frag_pad` mirrors `rx_frag_pad` [both REMOVED Oct 13 2026;
+    the page-safe slot is unconditional]. No change for 2Pre/4Pre
     (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
     8Pre playback VERIFIED Oct 9 2026: digital-loopback ramp sample-exact at 48/96/192 kHz (480k/480k/960k
     frames, zero breaks, no start loss). Not yet tested: simultaneous duplex stress.
@@ -1374,7 +1376,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   warning), ramp 9/9 PASS at 48/96/192 kHz. Not yet attached on this code: 4Pre, 8Pre, 8PreX, Red —
   watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
   (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
-  `spec/provenance/clarett-opcode-inference.md` §10. Remaining part: 4 cleanups.
+  `spec/provenance/clarett-opcode-inference.md` §10. **All four parts done on the 2Pre (Oct 13).**
   **Part 2 DONE (Oct 13 2026, 2Pre): the per-channel port-name burst is gone from the stream
   handshake** (port of Bennett's `7662df4`). Before every arm the driver sent GET_6.2, `0x007002`,
   one `0x005000` per playback channel, `0x007003`, one per capture channel; now only SET_CLOCK + the
@@ -1398,6 +1400,25 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   before Oct 13 used journald RECEIVE times, which batch kernel lines: approximate, the 2Pre's off by
   ~4 ms. The ack times are the driver's own and exact. `tools/bench/kmsg_times.py` now reads kernel
   timestamps and both scripts use it.
+  **Part 4 DONE (Oct 13 2026, 2Pre): cleanups — 28 module parameters down to 16** (ports of Bennett's
+  `c9fbedb`, `3a272d1`, `e0e6704`, `ef59ef3`, adapted to main). REMOVED, keeping the winning behaviour:
+  `rx_frag_pad`/`tx_frag_pad` (page-safe slots always), `dma_bits` (32-bit mask always),
+  `monitor_enables` (the Mute/Dim enable write always), `dyn_period` (the period-derived cadence and
+  the `CLARETT_MAX_PERIODS` buffer rule always; the fixed-256 path is gone). REMOVED diagnostics:
+  `stream_probe` (+ `clarett_engine_start()`, its report worker, the per-vector IRQ counters, the
+  `stream_frag` model field), `stream_batch`, `error_probe` (use `tools/fcp_cmd`), `seed_dump` (use
+  `tools/fcp_cfg_read`), `legacy_mbox_cycle` (the wall's negative control; in git history). REMOVED
+  probe tuning: `settle_ms`, `ready_retry_ms`. REMOVED dead model fields: `n_analogue`/`analogue`
+  (+ the preamp tables), `in_prefix`, `mode_label`, `has_spdif_source`. Unreferenced defines folded into
+  comments (opcode numbers, the FCP status codes, MUX_READ's 28-entry cap); `NOTIFY_EV_SYNC` kept as
+  part of the event-bit set. KEPT: `enable_pcm`, `enable_midi`, `clock_source`, `hw_gain_follow`,
+  `max_buffer`, `notify_ms`, `meter_poll_ms`, `monitor_poll`, `addr_ack_ms`, `ready_resp_ms`,
+  `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 open),
+  `phase_cycle` (remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix). Also fixed
+  `addr_ack_ms`'s description (0 now means no wait, not 3.22 ms). 2Pre on the part 4 build: rebind
+  ack 2.0-2.1 ms attempt 1; loopback 9/9 at 48/96/192 kHz; 4 commands to arm, simultaneous starts
+  3/3; period -> buffer 16/128, 64/256, 256/1024, 1024/4096 (unchanged); no warnings. **Next: steps 4-5
+  on the 8PreX (first: the port-name-burst risk), 8Pre, 4Pre and Red.**
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
@@ -1443,7 +1464,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (GET_7.1, quietly) until the flash-persisted session answers, detects the model from it, and leaves
   routing untouched. **Since Oct 10 2026 it asks AT ONCE and retransmits:** a lost first command is
   re-sent every `ready_retry_ms` (250) as seq 0 (the mailbox resets to 0 after any unanswered command) until answered, within
-  `ready_timeout_ms` (10 s); `settle_ms` (default now 0) is only an optional quiet period. If the
+  `ready_timeout_ms` (10 s); `settle_ms` (default now 0) is only an optional quiet period
+  [`ready_retry_ms` and `settle_ms` REMOVED Oct 13 2026: retries go back to back, paced by
+  `ready_resp_ms`]. If the
   budget runs out, probe **fails loudly (`-ENODEV`, no card registered)** — power-cycle to retry. See
   the COLD-ATTACH REFUSAL entry below; the "unrecoverable wedge" it describes was a sequence-number
   problem.
