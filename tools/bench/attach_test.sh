@@ -10,9 +10,7 @@ cursor() { journalctl -k -n0 --show-cursor | sed -n 's/^-- cursor: //p'; }
 trap 'echo "format \"readiness:\" -p" > $DD' EXIT
 echo 'format "readiness:" +p' > $DD
 
-# seconds.microseconds from a short-unix journal line
-ts() { awk '{print $1}' <<<"$1"; }
-ms() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
+D=$(dirname "$(readlink -f "$0")")
 
 echo "== $(date) cold attach x$N" | tee -a "$LOG"
 for i in $(seq 1 "$N"); do
@@ -32,16 +30,13 @@ for i in $(seq 1 "$N"); do
 		continue
 	fi
 	bdf=$(sed -n 's/.*snd_clarett \([0-9a-f:.]*\): .*/\1/p' <<<"$reg")
-	en=$(grep "snd_clarett $bdf: enabling device" <<<"$k" | tail -1)
-	ack=$(grep "snd_clarett $bdf: readiness: response address acknowledged" <<<"$k" | tail -1)
 	att=$(grep "snd_clarett $bdf: readiness: answered on attempt" <<<"$k" | tail -1)
 	tb=$(grep -c "thunderbolt.*new device found" <<<"$k")
 	{
 		echo "-- cycle $i ($bdf): TB appearances $tb"
-		echo "   ack:      $(sed -n 's/.*acknowledged after \([0-9]*\) us.*/\1 us/p' <<<"$ack")"
+		echo "   $(journalctl -k -q -o json --after-cursor "$cur" | python3 -I "$D/kmsg_times.py" "$bdf" | tail -1)"
 		a=$(sed -n 's/.*attempt \([0-9]*\).*/\1/p' <<<"$att")
 		echo "   attempt:  ${a:-1}"	# only a retry is logged
-		[ -n "$en" ] && echo "   enable -> registered: $(ms "$(ts "$en")" "$(ts "$reg")") ms"
 		grep "$bdf" <<<"$k" | grep -E "never landed|not acknowledged|refus|-110" | sed 's/^/   /'
 	} | tee -a "$LOG"
 done

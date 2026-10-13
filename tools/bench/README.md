@@ -16,5 +16,6 @@ hand on the unit is needed. `<card>` is the ALSA card number, `<bdf>` the unit's
 | `stream_info.sh <card>` | Raw STREAM_INFO replies for bands 0-3 via `tools/fcp_cmd.c` (stops fcp-server meanwhile). |
 | `loopback_order_2pre.sh <card>` | 2Pre digital-loopback ramp at 48/96/192 kHz: capture channel order (loopback and ADAT), sample-exactness, S/MUX-removed channels silent. Edit its three model constants for another model. |
 | `ramp_check.py` | Ramp generator and checker used by the loopback script. |
+| `kmsg_times.py` | Attach intervals from kernel timestamps (`journalctl -k -o json \| kmsg_times.py [bdf]`), used by the attach and rebind scripts. journald's receive times batch kernel lines and are not usable for millisecond intervals. |
 
 The digital-loopback ramp method and what each result means are described in `CLAUDE.md`.

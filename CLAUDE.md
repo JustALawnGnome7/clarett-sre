@@ -801,7 +801,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (tunnel `-107` ~540 ms after found, never re-appeared). So it needs no driver at all, and yesterday's
   13:38 successes straight after driver sessions already showed a session does not cause it. The unit
   had been on at least 14 min. A TB2 cable replug restores it. What decides it is still unknown;
-  next step is the same power cycle with a 4Pre or 8Pre directly on the dock.
+  next step is the same power cycle with a 4Pre or 8Pre directly on the dock. **Later the same morning
+  (11:49-11:52), with the driver loaded again, two of three power cycles reconnected on their own and
+  the third needed a replug** — intermittent, and independent of the driver.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
@@ -1304,7 +1306,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   mailbox A/B and its front panel. NOT YET RUN on this code: 4Pre and 8Pre (probe, knob/outputs idle +
   streaming, Dim/Mute, minutes idle then a write), Red with no worker for minutes then a write.**
   **2Pre on merged main (Oct 12 2026, laptop, Dock G4 -> Apple adapter -> 2Pre):** cold attach x3
-  acked after 9.42-9.53 ms, attempt 1, 33-36 ms enable -> registered (cable replugs, see the
+  acked after 9.42-9.53 ms, attempt 1, 37.8-40.0 ms enable -> registered (kernel timestamps; first
+  recorded as 33-36 ms from journald receive times, which batch kernel lines) (cable replugs, see the
   Thunderbolt note under Build & test); warm rebind x3 acked after 2.08-2.14 ms, attempt 1. Phase
   check: 29 GET_METER in 3 s (GUI), all `0x3` before the ack, none lost. 25 s 14ch capture with the
   knob: 712 `0x400000` relayed, Monitor volume AND Analogue Outputs 1-2 followed (user), 1172/1172
@@ -1371,7 +1374,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   warning), ramp 9/9 PASS at 48/96/192 kHz. Not yet attached on this code: 4Pre, 8Pre, 8PreX, Red —
   watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
   (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
-  `spec/provenance/clarett-opcode-inference.md` §10. Remaining parts: 3 minimal attach, 4 cleanups.
+  `spec/provenance/clarett-opcode-inference.md` §10. Remaining part: 4 cleanups.
   **Part 2 DONE (Oct 13 2026, 2Pre): the per-channel port-name burst is gone from the stream
   handshake** (port of Bennett's `7662df4`). Before every arm the driver sent GET_6.2, `0x007002`,
   one `0x005000` per playback channel, `0x007003`, one per capture channel; now only SET_CLOCK + the
@@ -1383,6 +1386,18 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   **RISK, first thing to check on the 8PreX:** its old id-table comment said that without the burst
   "a 28ch playback ring is consumed as ~12ch"; Bennett attributes that to the TX page-straddle bug
   fixed since. Untested on 8PreX, 8Pre, 4Pre and Red on this code: run a loopback ramp on each.
+  **Part 3 DONE (Oct 13 2026, 2Pre): the attach is cut to what the device needs** (port of Bennett's
+  `b1c984b`): serial/fw reads, `0x510`/`0x500` = 8, `0x104`, the address, the ack wait. Gone: the
+  other register reads, the cause-block sweep, ~25 ms of vendor-gap sleeps, and the
+  `premailbox_reads` lever. Kernel timestamps: **cold enable -> registered 37.8-40.0 -> 11.0-11.8 ms**,
+  warm ack -> registered 11-12 -> 1.8-2.2 ms; the ack latency itself unchanged (cold ~10, warm ~2.1 ms),
+  every attach answered first time, loopback 9/9 at 48/96/192 kHz. Two of the cold attaches were real
+  power-ups and still acked at ~10 ms (Bennett recorded 2.0 ms for that case). No Analogue 2 LED flash
+  seen on a rebind. Detail: `spec/provenance/clarett-address-ack-handshake.md` §8.
+  **MEASUREMENT CORRECTION:** every "enable -> registered" figure taken with the attach/rebind scripts
+  before Oct 13 used journald RECEIVE times, which batch kernel lines: approximate, the 2Pre's off by
+  ~4 ms. The ack times are the driver's own and exact. `tools/bench/kmsg_times.py` now reads kernel
+  timestamps and both scripts use it.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**

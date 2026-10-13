@@ -10,8 +10,7 @@ DD=/sys/kernel/debug/dynamic_debug/control
 cursor() { journalctl -k -n0 --show-cursor | sed -n 's/^-- cursor: //p'; }
 trap 'echo "format \"readiness:\" -p" > $DD' EXIT
 echo 'format "readiness:" +p' > $DD
-ts() { awk '{print $1}' <<<"$1"; }
-ms() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
+D=$(dirname "$(readlink -f "$0")")
 
 echo "== $(date) warm rebind $BDF x$N" | tee -a "$LOG"
 for i in $(seq 1 "$N"); do
@@ -26,12 +25,13 @@ for i in $(seq 1 "$N"); do
 		[ -n "$reg" ] && break
 	done
 	k=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep "snd_clarett $BDF")
-	# a rebind logs no "enabling device"; time from the address ack instead
-	en=$(grep "readiness: response address acknowledged" <<<"$k" | head -1)
-	ack=$(sed -n 's/.*acknowledged after \([0-9]*\) us.*/\1 us/p' <<<"$k" | tail -1)
 	a=$(sed -n 's/.*answered on attempt \([0-9]*\).*/\1/p' <<<"$k" | tail -1)
 	{
-		echo "-- rebind $i: ack ${ack:-none}  attempt ${a:-1}  $( [ -n "$reg" ] && [ -n "$en" ] && echo "ack -> registered $(ms "$(ts "$en")" "$(ts "$reg")") ms" || echo "NOT REGISTERED")"
+		if [ -n "$reg" ]; then
+			echo "-- rebind $i: attempt ${a:-1}  $(journalctl -k -q -o json --after-cursor "$cur" | python3 -I "$D/kmsg_times.py" "$BDF" | tail -1)"
+		else
+			echo "-- rebind $i: NOT REGISTERED"
+		fi
 		grep -E "never landed|not acknowledged|refus|-110|error" <<<"$k" | sed 's/^/   /'
 	} | tee -a "$LOG"
 	sleep 3

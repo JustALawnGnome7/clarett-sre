@@ -178,12 +178,19 @@ retransmission loop kept as a fallback. Measured with it, all first-command answ
 | Clarett 4Pre | 10.7-11.1 ms | 2.10-2.17 ms | 30-36 ms |
 | Clarett 8Pre | 12.6-13.0 ms | — | 33-41 ms |
 | Clarett 8PreX | 12.8-13.0 ms | — | 28-40 ms |
-| Clarett 2Pre (Oct 12) | 9.42-9.53 ms * | 2.08-2.14 ms | 33-36 ms |
+| Clarett 2Pre (Oct 12) | 9.42-9.53 ms * | 2.08-2.14 ms | 37.8-40.0 ms † |
 
 \* Not a power-up attach. On that rig (2Pre directly on an HP Dock G4) no power cycle
 re-established the PCIe tunnel, so each attach was a TB2 cable replug into a unit that had
 been powered for 15-50 s. The figure matches §3's rows 4 and 6 (9.48-10.08 ms), not the
-2.0 ms of a prompt write after a power cycle; this run cannot say which condition sets it.
+2.0 ms of a prompt write after a power cycle; this run cannot say which condition sets it
+(but see §8: genuine power-ups on the minimal init gave the same ~10 ms).
+
+† Corrected Oct 13 from kernel timestamps; first recorded as 33-36 ms. The enable -> registered
+column was measured from journald's receive times, which batch kernel lines, so every figure in it
+is approximate (the 2Pre's was off by ~4 ms; one Oct 13 run even came out shorter than the ack
+inside it). The ack columns are the driver's own measurement and are exact.
+`tools/bench/kmsg_times.py` now reads the kernel's timestamps.
 
 This explains main's history exactly: at ~11.5 ms the 8Pre and 8PreX lost their first
 command on every cold attach, the 4Pre cleared it by half a millisecond, the 2Pre by
@@ -193,3 +200,24 @@ One claim in the interface spec's §6.1, as first written, needed narrowing. "Re
 fails" holds for a retry with the NEXT sequence number. Re-sending with the lost
 command's sequence number is answered (8Pre, 8 of 8, with or without the trailing ack),
 which is how main recovered before the wait existed; see `CLAUDE.md`.
+
+## 8. Addendum (Oct 13 2026): the minimal attach on main (2Pre)
+
+Main's init now matches §4a: serial and firmware reads, `0x510 = 8`, `0x500 = 8`, `0x104`, the
+address and the wait. Gone: the other register reads, the cause-block sweep, and the vendor-gap
+sleeps (about 17.5 ms before the address write, 8.2 ms after it). Measured by kernel timestamp,
+2Pre on an HP Dock G4, merged main (Oct 12) against the minimal init:
+
+| | merged main | minimal init |
+|---|---|---|
+| cold: enable -> ack | 27.8-28.0 ms | 9.7-10.4 ms |
+| cold: enable -> registered | 37.8-40.0 ms | 11.0-11.8 ms |
+| ack latency, cold / warm | 9.42-9.53 / 2.08-2.14 ms | 9.45-10.04 / 2.03-2.22 ms |
+| warm: ack -> registered | 11.0-12.0 ms | 1.8-2.2 ms |
+
+Every attach answered its first command, and a loopback ramp ran 9/9 sample-exact at 48/96/192 kHz.
+The ack latency does not move, so the device never needed the sleeps. Two of the three cold
+attaches were genuine power-ups (the third needed a cable replug), and they acked at ~10 ms, not the
+2.0 ms §3 records for a prompt write after a power cycle; what sets the difference is unknown. The
+brief Analogue 2 gain-LED flash that the cause sweep used to trigger was not seen on a rebind of the
+minimal init (not compared against the old init the same day).
