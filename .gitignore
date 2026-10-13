@@ -15,3 +15,6 @@ tools/fcp_mux_probe
 # Python bytecode cache (auto-generated when tools/*.py are imported)
 __pycache__/
 *.pyc
+
+# Bench script logs (tools/bench/ writes them to the current directory)
+tools/bench/*.log

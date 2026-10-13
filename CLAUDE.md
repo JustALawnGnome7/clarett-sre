@@ -531,6 +531,10 @@ tools/dma_bases.py                    vfio_region_* -> the live DMA base GPAs + 
                                       commands to dump the guest ring buffers.
 tools/dma_classify.py                 pmemsave dump -> classifies it flat-audio / descriptor-table /
                                       all-zero (automates the §9 buffer-mode analysis; flags pre-seeding).
+tools/bench/                          Hardware test scripts (attach/rebind timing, mailbox phase check,
+                                      idle-then-write, stream-start cost, STREAM_INFO read, the 2Pre
+                                      loopback-ramp order/S/MUX check). See its README. Kept here because
+                                      the session scratchpad is lost at every reboot.
 tools/fcp_*.c                         Bench tools driving the hwdep directly (stop fcp-server first —
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
                                       byte range, the only way to see what actually reached the device;
@@ -790,6 +794,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   active with a 15 s autosuspend either way. All failures fell within ~6 min of the unit's first
   power-up that day (it had just been brought in): temperature is a guess, untested. If it recurs,
   note how long the unit has been on, and retry after it has warmed up.
+  **Oct 13 2026 — RECURRED, AND THE DRIVER IS NOW RULED OUT BY THE CONTROL; the warm-up guess is
+  weakened.** The laptop booted at 11:16 with the 2Pre already on and attached (authorized at once,
+  PCIe up). Power cycles at 11:30 and 11:31 failed with the identical signature; then
+  `rmmod snd_clarett` (11:32:30) and a power cycle at 11:32:46 with NO driver loaded failed the same way
+  (tunnel `-107` ~540 ms after found, never re-appeared). So it needs no driver at all, and yesterday's
+  13:38 successes straight after driver sessions already showed a session does not cause it. The unit
+  had been on at least 14 min. A TB2 cable replug restores it. What decides it is still unknown;
+  next step is the same power cycle with a 4Pre or 8Pre directly on the dock.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
@@ -1359,8 +1371,18 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   warning), ramp 9/9 PASS at 48/96/192 kHz. Not yet attached on this code: 4Pre, 8Pre, 8PreX, Red —
   watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
   (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
-  `spec/provenance/clarett-opcode-inference.md` §10. Remaining parts: 2 drop the port-name burst,
-  3 minimal attach, 4 cleanups.
+  `spec/provenance/clarett-opcode-inference.md` §10. Remaining parts: 3 minimal attach, 4 cleanups.
+  **Part 2 DONE (Oct 13 2026, 2Pre): the per-channel port-name burst is gone from the stream
+  handshake** (port of Bennett's `7662df4`). Before every arm the driver sent GET_6.2, `0x007002`,
+  one `0x005000` per playback channel, `0x007003`, one per capture channel; now only SET_CLOCK + the
+  three sync queries. The id tables (`stream_tx_ids`/`stream_rx_ids`) and `FCP_CONFIG_PUSH`/
+  `FCP_GET_72`/`FCP_GET_73` are removed. `tools/bench/arm_cost.sh`, same unit, part 1 build vs part 2:
+  **25 -> 4 commands before arm, 5.6 -> 1.3 ms first command -> armed**; simultaneous capture +
+  playback starts 3/3 clean on both; loopback ramp 9/9 sample-exact at 48/96/192 kHz on part 2
+  (Bennett's own record took the 2Pre to 96 kHz only, though his commit message says 192).
+  **RISK, first thing to check on the 8PreX:** its old id-table comment said that without the burst
+  "a 28ch playback ring is consumed as ~12ch"; Bennett attributes that to the TX page-straddle bug
+  fixed since. Untested on 8PreX, 8Pre, 4Pre and Red on this code: run a loopback ramp on each.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
