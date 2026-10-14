@@ -815,10 +815,20 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   hypothesis is a race between host authorization (~300 ms, sometimes slower) and the unit's own
   power-on link bounce (~0.4-0.65 s); why the unit does not re-train after a bounce that hit a
   half-built tunnel is unknown. Every Clarett power-cycled while chained behind the Red (Oct 9, ~300
-  appearances) reconnected, so the Red's controller in the path may be what hides it. Untried: delaying
-  authorization past the bounce (boltd `auto-auth` off + a manual `boltctl authorize` ~2 s after
-  found). The driver plays no part (no PCI device exists yet); the attach timing itself was clean, see
-  the 4Pre step 4 entry.
+  appearances) reconnected, so the Red's controller in the path may be what hides it. The driver plays
+  no part (no PCI device exists yet); the attach timing itself was clean, see the 4Pre step 4 entry.
+  **★ RACE CONFIRMED THE SAME DAY: AUTHORIZING AFTER THE BOUNCE CONNECTS 5/5** (vs 1/3 with boltd's
+  auto-auth just before). `tools/bench/tb_manual_auth.sh` sets the unit's boltd `device.policy` to
+  `manual` (restored at exit), waits until the unit has been present unbroken for 2.5 s, then
+  `boltctl authorize`. Every cycle: the unit vanished 311-452 ms after found and returned 1.4-1.6 s
+  later, **with nothing authorized** — so the bounce is the unit's own Thunderbolt link cycling at
+  power-on, not a reaction to the tunnel — then authorize (~4.4 s after found) -> PCIe up and
+  snd_clarett registered, zero `activation failed` lines. The failure needs the tunnel build to be in
+  flight when that bounce lands (boltd's auto-auth takes ~300 ms, so it straddles 311-452 ms only
+  some of the time); afterwards the unit never re-appears. **Possible fixes, none chosen:** a
+  host-side helper that authorizes Focusrite TB1 units a couple of seconds after they appear (with
+  their boltd policy `manual`); or a report to the kernel Thunderbolt maintainers, since an aborted
+  tunnel leaving the peer unable to re-appear looks like a host-side recovery gap.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,

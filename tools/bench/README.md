@@ -16,6 +16,7 @@ hand on the unit is needed. `<card>` is the ALSA card number, `<bdf>` the unit's
 | `stream_info.sh <card>` | Raw STREAM_INFO replies for bands 0-3 via `tools/fcp_cmd.c` (stops fcp-server meanwhile). |
 | `loopback_order.sh <card>` | Digital-loopback ramp at 48/96/192 kHz on any Clarett (model from the card id): capture channel order (loopback and ADAT 1), sample-exactness, S/MUX-removed channels silent. Whatever the ramp channel feeds is switched off for the run and restored; `RAMP=<n>` picks another playback channel. Run as your user. |
 | `midi_loop.py --card <card> [--mode sysex\|notes] [--rate B/s]` | DIN MIDI self-loop (5-pin cable Out -> In): byte-exact check; in `sysex` mode the payload is a 7-bit counter, so each lost run is logged with its size and time, and the intervals between losses summarised. No root needed; nothing else may hold the rawmidi open. |
+| `tb_manual_auth.sh <bolt uuid> [N] [hold_s]` | Thunderbolt reconnect race: sets the unit's boltd policy to `manual` (restored at exit), and per power cycle logs the unit's power-on link bounce, then authorizes once it has been present unbroken for hold_s and checks PCIe comes up. |
 | `ramp_check.py` | Ramp generator and checker used by the loopback script. |
 | `kmsg_times.py` | Attach intervals from kernel timestamps (`journalctl -k -o json \| kmsg_times.py [bdf]`), used by the attach and rebind scripts. journald's receive times batch kernel lines and are not usable for millisecond intervals. |
 
