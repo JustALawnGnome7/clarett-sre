@@ -532,8 +532,8 @@ tools/dma_bases.py                    vfio_region_* -> the live DMA base GPAs + 
 tools/dma_classify.py                 pmemsave dump -> classifies it flat-audio / descriptor-table /
                                       all-zero (automates the §9 buffer-mode analysis; flags pre-seeding).
 tools/bench/                          Hardware test scripts (attach/rebind timing, mailbox phase check,
-                                      idle-then-write, stream-start cost, STREAM_INFO read, the 2Pre
-                                      loopback-ramp order/S/MUX check). See its README. Kept here because
+                                      idle-then-write, stream-start cost, STREAM_INFO read, the
+                                      loopback-ramp order/S/MUX check, the MIDI self-loop). See its README. Kept here because
                                       the session scratchpad is lost at every reboot.
 tools/fcp_*.c                         Bench tools driving the hwdep directly (stop fcp-server first —
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
@@ -804,6 +804,21 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   next step is the same power cycle with a 4Pre or 8Pre directly on the dock. **Later the same morning
   (11:49-11:52), with the driver loaded again, two of three power cycles reconnected on their own and
   the third needed a replug** — intermittent, and independent of the driver.
+  **Oct 14 2026 — NOT 2Pre-SPECIFIC: THE 4PRE FAILS THE SAME WAY** (same rig, 4Pre in place of the
+  2Pre; `attach_test.sh 3`). Cycle 1 reconnected on its own; cycles 2 and 3 failed with the identical
+  signature (tunnel `-107` 572-578 ms after found, boltd `auth-error` at ~555 ms, never re-found) and
+  needed a TB2 cable replug. **The timing separates pass from fail cleanly:** in the pass, boltd's
+  authorization finished at ~325 ms and the unit's power-on link bounce came AFTER it (~407 ms), as a
+  clean disconnect, then re-found 1.5 s later and authorized again; in both fails the authorization
+  had not finished when the bounce landed, the tunnel build aborted, and the unit never came back. A
+  replug of the powered unit appears ONCE (no bounce) and authorizes in ~300 ms. So the working
+  hypothesis is a race between host authorization (~300 ms, sometimes slower) and the unit's own
+  power-on link bounce (~0.4-0.65 s); why the unit does not re-train after a bounce that hit a
+  half-built tunnel is unknown. Every Clarett power-cycled while chained behind the Red (Oct 9, ~300
+  appearances) reconnected, so the Red's controller in the path may be what hides it. Untried: delaying
+  authorization past the bounce (boltd `auto-auth` off + a manual `boltctl authorize` ~2 s after
+  found). The driver plays no part (no PCI device exists yet); the attach timing itself was clean, see
+  the 4Pre step 4 entry.
 - **★ THE PLATFORM SMI IS CONFIRMED PLATFORM-SPECIFIC (Aug 19 2026) — the driver is exonerated on
   independent hardware.** The retest this section used to call for has RUN, on the EliteBook 640 G11 above.
   The 2Pre streamed **292 s / 13,694 periods with ZERO SMI-class events**: `gapmax` pinned at nominal,
@@ -1305,8 +1320,18 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
 - **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — MERGED to snd-clarett main Oct 10 2026
   (`2bde028`, fast-forward of branch `irq-mailbox`), at the operator's call before the full model
   matrix. Tested: 8PreX for every part; 2Pre for every part (Oct 12, below); Red for probe, the
-  mailbox A/B and its front panel. NOT YET RUN on this code: 4Pre and 8Pre (probe, knob/outputs idle +
-  streaming, Dim/Mute, minutes idle then a write), Red with no worker for minutes then a write.**
+  mailbox A/B and its front panel; 4Pre for every part (Oct 14, below). NOT YET
+  RUN on this code: 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a write),
+  Red with no worker for minutes then a write.**
+  **4Pre on main + the step 5 parts + the MIDI RX decode (Oct 14 2026, laptop, Dock G4 -> Apple
+  adapter -> 4Pre):** cold attach x3 acked after 10.3-10.7 ms, attempt 1, **11.5-12.8 ms enable ->
+  registered** (kernel timestamps; ~30-36 ms before step 5 part 3, from journald times; 2 of the 3 power-ons needed a
+  cable replug, the Thunderbolt reconnect failure under Build & test). Warm rebind x3 acked after 2.11-2.18 ms,
+  attempt 1, registered 1.8-2.3 ms later. Phase check: 30 GET_METER in 3 s (GUI), all `0x3`, none
+  lost. 25 s 20ch capture with the knob: 723 `0x400000` relayed, Monitor volume AND Analogue Outputs
+  1-2 followed (user), 1172/1172 periods, `late=0 overrun=0 badreads=0`; hands-off: zero relays.
+  3 min idle with the GUI closed: ZERO commands; then Air 1: GET_METER + SET_DATA + DATA_CMD all `0x3`,
+  the LED lit (user). (No Dim/Mute on the 4Pre's front panel.)
   **2Pre on merged main (Oct 12 2026, laptop, Dock G4 -> Apple adapter -> 2Pre):** cold attach x3
   acked after 9.42-9.53 ms, attempt 1, 37.8-40.0 ms enable -> registered (kernel timestamps; first
   recorded as 33-36 ms from journald receive times, which batch kernel lines) (cable replugs, see the
@@ -1373,7 +1398,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   after the model (and Red twin) is final, and prepare uses them. Main KEEPS `rx_live_mid/high` as the
   fallback and a cross-check (warns on disagreement) instead of deleting them as Bennett's `4c975bd`
   did, whose full-width fallback would leak the S/MUX residue. 2Pre: device 14/10/8 = table (no
-  warning), ramp 9/9 PASS at 48/96/192 kHz. Not yet attached on this code: 4Pre, 8Pre, 8PreX, Red —
+  warning), ramp 9/9 PASS at 48/96/192 kHz. 4Pre (Oct 14): no warning, so device == table (16/14 of
+  20), ramp 9/9 PASS. Not yet attached on this code: 8Pre, 8PreX, Red —
   watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
   (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
   `spec/provenance/clarett-opcode-inference.md` §10. **All four parts done on the 2Pre (Oct 13).**
@@ -1387,7 +1413,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (Bennett's own record took the 2Pre to 96 kHz only, though his commit message says 192).
   **RISK, first thing to check on the 8PreX:** its old id-table comment said that without the burst
   "a 28ch playback ring is consumed as ~12ch"; Bennett attributes that to the TX page-straddle bug
-  fixed since. Untested on 8PreX, 8Pre, 4Pre and Red on this code: run a loopback ramp on each.
+  fixed since. **4Pre (Oct 14): 4 commands before arm, 1.5-1.6 ms; simultaneous starts 3/3; ramp on
+  playback PCM 7 (8ch ring) -> capture 19/20/11 sample-exact 9/9 at 48/96/192 kHz**
+  (`tools/bench/loopback_order.sh`, now model-generic: it takes the model from the card id and
+  switches off whatever the ramp channel feeds for the run). Untested on 8PreX, 8Pre and Red on this
+  code: run a loopback ramp on each.
   **Part 3 DONE (Oct 13 2026, 2Pre): the attach is cut to what the device needs** (port of Bennett's
   `b1c984b`): serial/fw reads, `0x510`/`0x500` = 8, `0x104`, the address, the ack wait. Gone: the
   other register reads, the cause-block sweep, ~25 ms of vendor-gap sleeps, and the
@@ -1417,8 +1447,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `phase_cycle` (remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix). Also fixed
   `addr_ack_ms`'s description (0 now means no wait, not 3.22 ms). 2Pre on the part 4 build: rebind
   ack 2.0-2.1 ms attempt 1; loopback 9/9 at 48/96/192 kHz; 4 commands to arm, simultaneous starts
-  3/3; period -> buffer 16/128, 64/256, 256/1024, 1024/4096 (unchanged); no warnings. **Next: steps 4-5
-  on the 8PreX (first: the port-name-burst risk), 8Pre, 4Pre and Red.**
+  3/3; period -> buffer 16/128, 64/256, 256/1024, 1024/4096 (unchanged); no warnings. **4Pre (Oct 14):
+  the same period -> buffer results, rebind and arm as above.** **Next: steps 4-5 on the 8PreX (first:
+  the port-name-burst risk), 8Pre and Red.**
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
@@ -1686,6 +1717,20 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   internal task?). Unresolved: TX or RX side (needs a second MIDI device cross-connected), and whether
   Focusrite Control's own driver loses the same (Windows VM + the same loop). Scripts: `midi_gaps.py`,
   `midi_paced.py` (session scratchpad); Bennett's `tools/midi_loopback.py` is on the branch.
+  **LIKELY CAUSE FOUND — A DRIVER RX-DECODE BUG; FIX CHERRY-PICKED Oct 14 2026, 8Pre/8PreX PROOF PENDING.**
+  Bennett's `e206432` (snd-clarett `origin/g-port`, now main `60c7189`): RX words use the TX layout,
+  a byte COUNT in bits 24-31 with up to 3 bytes packed low->high. The old bit24 "valid" test read a
+  count=2 word (bit24 clear) as an empty FIFO, dropping both bytes and, with nothing else read, skipping
+  the ack; it kept only the first byte of a count=3 word. That is exactly the 2-byte losses and the
+  2-of-3 bursts above. His commit says the 2Pre returns one byte per read and the 8PreX also returns
+  count=2 words; the ~49.7 ms rhythm (when the device packs) is still unexplained. **2Pre, self-loop
+  (`tools/bench/midi_loop.py`), before AND after the fix: byte-exact** — 6000 B SysEx unpaced (3123 B/s,
+  the wire rate) and paced at 1560 B/s, 1500 note pairs, 4 KB SysEx, and after the fix 25 KB unpaced
+  during a 14ch capture. So no regression; the 2Pre cannot show the fix. **4Pre on the fix, same day:
+  the same five runs byte-exact** (25 KB during a 20ch capture); it was exact before too, so it cannot
+  show the fix either. Its probe on this build printed no STREAM_INFO mismatch (step 5 part 1: device
+  widths == table on the 4Pre). **Next: the same loop on an
+  8Pre or 8PreX** — byte-exact there closes this item.
 - **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed

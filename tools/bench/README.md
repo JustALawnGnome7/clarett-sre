@@ -14,7 +14,8 @@ hand on the unit is needed. `<card>` is the ALSA card number, `<bdf>` the unit's
 | `idle_write.sh <card> <bdf> [idle_s] [control]` | No host traffic for minutes (GUI closed), then a switch write through fcp-server; asks whether the front panel followed. |
 | `arm_cost.sh <card> <bdf> [label] [N]` | Mailbox commands and time from stream open to engine armed, plus simultaneous capture + playback starts. Logs the module srcversion, for before/after comparisons. |
 | `stream_info.sh <card>` | Raw STREAM_INFO replies for bands 0-3 via `tools/fcp_cmd.c` (stops fcp-server meanwhile). |
-| `loopback_order_2pre.sh <card>` | 2Pre digital-loopback ramp at 48/96/192 kHz: capture channel order (loopback and ADAT), sample-exactness, S/MUX-removed channels silent. Edit its three model constants for another model. |
+| `loopback_order.sh <card>` | Digital-loopback ramp at 48/96/192 kHz on any Clarett (model from the card id): capture channel order (loopback and ADAT 1), sample-exactness, S/MUX-removed channels silent. Whatever the ramp channel feeds is switched off for the run and restored; `RAMP=<n>` picks another playback channel. Run as your user. |
+| `midi_loop.py --card <card> [--mode sysex\|notes] [--rate B/s]` | DIN MIDI self-loop (5-pin cable Out -> In): byte-exact check; in `sysex` mode the payload is a 7-bit counter, so each lost run is logged with its size and time, and the intervals between losses summarised. No root needed; nothing else may hold the rawmidi open. |
 | `ramp_check.py` | Ramp generator and checker used by the loopback script. |
 | `kmsg_times.py` | Attach intervals from kernel timestamps (`journalctl -k -o json \| kmsg_times.py [bdf]`), used by the attach and rebind scripts. journald's receive times batch kernel lines and are not usable for millisecond intervals. |
 
