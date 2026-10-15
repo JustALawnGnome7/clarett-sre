@@ -533,7 +533,7 @@ tools/dma_classify.py                 pmemsave dump -> classifies it flat-audio 
                                       all-zero (automates the §9 buffer-mode analysis; flags pre-seeding).
 tools/bench/                          Hardware test scripts (attach/rebind timing, mailbox phase check,
                                       idle-then-write, stream-start cost, STREAM_INFO read, the
-                                      loopback-ramp order/S/MUX check, the MIDI self-loop). See its README. Kept here because
+                                      loopback-ramp order/S/MUX check, the MIDI self-loop, the duplex stress). See its README. Kept here because
                                       the session scratchpad is lost at every reboot.
 tools/fcp_*.c                         Bench tools driving the hwdep directly (stop fcp-server first —
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
@@ -1145,7 +1145,34 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     never torn); `pcm_lock` serialises the copies vs `hw_free`. TX plays silence when no playback stream is
     attached. **Confirmed audible** via `aplay` once **PCM 1 is routed to Analogue Output 1** in the router
     (alsa-scarlett-gui) — there is NO default route, so playback is silent until a PCM source is wired to a
-    physical output (a mixer-config step, not a DMA problem). Simultaneous duplex stress not yet stressed.
+    physical output (a mixer-config step, not a DMA problem).
+  - **★ SIMULTANEOUS DUPLEX STRESS PASSES ON THE 2PRE (Oct 15 2026, laptop, Dock G4 -> Apple adapter;
+    `tools/bench/duplex_stress.sh`, fcp-server + alsa-scarlett-gui Levels window open throughout).**
+    14ch capture + 4ch playback at once, a streamed ramp on playback PCM 3 looped to "PCM 13" (ch 13),
+    checked live: **48 kHz 300 s (14.4 M frames), 96 kHz 120 s (11.5 M), 192 kHz 120 s (23.0 M) all
+    sample-exact, no start loss, 0 breaks, 0 xruns**; period 64 / buffer 256 for 120 s also sample-exact
+    (one arecord overrun outside the ramp, non-RT clients — no RT limit on that host). **Churn: 30/30**
+    capture + playback started and stopped in the same instant, rotating 44.1-192 kHz: ramp unbroken,
+    both clients exit, no `clarett-svc` thread left, no D-state. A 96 kHz playback opened during a
+    48 kHz capture is NARROWED to 48 kHz (aplay "rate is not accurate"), not refused, and plays
+    unbroken. Kernel: no `badreads`, `overrun=0`, no WARN. Not yet run on 4Pre/8Pre/8PreX/Red.
+    **★ SIDE FINDING — the clock keeps the OLD rate for ~20-30 ms after a change to a faster one.** The
+    first stream after 48->96 or 96->192 kHz logs `late=1..3` in its first `stream-svc` window with
+    `gapmax` equal to the OLD rate's period (21.3 ms at "96k", 10.7 ms at "192k") while each step is
+    still one period: the device runs the previous rate after SET_CLOCK while the late threshold already
+    uses the new one. Same-rate repeats and changes to a slower rate are clean. No audio is lost (the
+    ramps are intact); a played stream is at the old rate for those first events. Fits Bennett's
+    ~25 ms SYNC_READ transition window (`fc67daf`). Telemetry only; not fixed.
+    **★ TRAP that faked a failure: alsa-scarlett-gui CLEARS MONO ROUTES FROM A LINKED PAIR AT STARTUP.**
+    The first full run lost the ramp 68 s in, at the second the GUI was launched. Its stereo-link
+    state lives only in its own config (`~/.config/alsa-scarlett-gui/clarett-2pre.conf`: `PCM Out 3-4
+    Link=1`, `PCM In 13-14 Link=1`, `Analogue Out 3-4 Link=1`); loading a `Link=1` runs
+    `validate_src_pair_routing()` (`src/stereo-link.c`), which WRITES Off to every destination fed by
+    PCM 3 that is not a matching stereo pair. Reproduced by a restart: exactly `PCM 13 Capture Enum` and
+    `Analogue Output 3 Playback Enum` went PCM 3 -> Off, nothing else in 3724 control lines. While the
+    GUI runs it leaves a mono route alone. So **do not start the GUI during a ramp test**, and the GUI
+    silently rewrites device routing set by any other tool while it was closed — not Clarett-specific;
+    worth raising with Bennett (not filed).
   - **8PreX PLAYBACK WORKS — TX fragments must be page-safe too (July 30 2026, hardware-confirmed; spec
     data-plane §16).** 8PreX playback was garbled and folded 28ch→4 (a tone on PCM 1 also drove PCM 5/9/… —
     every output ≡ its source mod 4) while capture was clean. Everything the device reads was proven
@@ -1161,7 +1188,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     the page-safe slot is unconditional]. No change for 2Pre/4Pre
     (fragment already pow2). Diagnostic `tx_trace` (per-period 0x218/0x318 ptr + `pcm_frames`) kept.
     8Pre playback VERIFIED Oct 9 2026: digital-loopback ramp sample-exact at 48/96/192 kHz (480k/480k/960k
-    frames, zero breaks, no start loss). Not yet tested: simultaneous duplex stress.
+    frames, zero breaks, no start loss). Simultaneous duplex stress: 2Pre only so far (above).
   - **Sample rates 44.1/48/88.2/96/176.4/192 kHz — CAPTURE hardware-confirmed on ALL FOUR models (Aug 12
     2026).** A tone into Analogue 1 reads the correct, stable pitch at 96k and 192k with the full stream
     width and no glitches on 2Pre/4Pre/8Pre/8PreX (this was also the first 8Pre capture confirmation) —
@@ -1179,7 +1206,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
     that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
     (not blockers, none affect the audio path): HS *playback* re-verified only
-    on the 2Pre (clean 96k tone; ramp sample-exact at 96k and 192k, Oct 12 2026) and the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026). The rate-dependent LEVEL METERS that used
+    on the 2Pre (clean 96k tone; ramp sample-exact at 96k and 192k, Oct 12 2026), the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026) and the 4Pre (ramp on playback PCM 7 sample-exact at 96k and 192k, Oct 14 2026); the 8PreX remains. The rate-dependent LEVEL METERS that used
     to be listed here are no longer a caveat — they are a CONFIRMED BUG; see the meter bullet below.
   - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
     channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
