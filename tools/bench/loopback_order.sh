@@ -1,5 +1,5 @@
 #!/bin/bash
-# Capture-order and S/MUX check with the digital-loopback ramp, for any Clarett. Run as your user:
+# Capture-order and S/MUX check with the digital-loopback ramp, for any Clarett or a Red 8Line/4Pre. Run as your user:
 #   bash loopback_order.sh <card>          (RAMP=<n> overrides the playback channel)
 # The model comes from the card id. Playback PCM $RAMP carries a ramp; each leg routes it to one
 # router capture destination and checks which ALSA capture channel it arrives on, sample-exact,
@@ -24,6 +24,12 @@ C4Pre|C8Pre)
 	DEAD96=15,16,17,18 DEAD192=13,14,15,16,17,18;;
 C8PreX) CH=28 PB=28 R0=7 LEGS="27:27 28:28 11:11"
 	DEAD96=19,20,21,22,23,24,25,26 DEAD192=15,16,17,18,19,20,21,22,23,24,25,26;;
+# The Red names capture in stream order (no reorder) and drops a tail per speed: capture 53-60 at
+# double, 33-60 at quad (playback 63-64 and 37-64), so each rate gets legs that survive it.
+# LEGS96/LEGS192 override LEGS at that rate.
+R8Line|R4Pre)
+	CH=60 PB=64 R0=31 LEGS="59:59 60:60 31:31" LEGS96="51:51 52:52 31:31" LEGS192="31:31 32:32"
+	DEAD96=$(seq -s, 53 60) DEAD192=$(seq -s, 33 60);;
 *) echo "unknown card id $ID"; exit 1;;
 esac
 RAMP=${RAMP:-$R0}
@@ -48,7 +54,10 @@ echo "== $(date) loopback order card $CARD $ID, ramp on PCM $RAMP (srcversion $(
 [ -s "$W/restore" ] && echo "   switched off for the run: $(cut -f1 "$W/restore" | paste -sd, -)" | tee -a "$LOG"
 for R in 48000 96000 192000; do
 	$PY gen "$W/ramp_$R.raw" $((R * 3)) "$PB" "$RAMP"
-	for leg in $LEGS; do
+	legs=$LEGS
+	[ $R = 96000 ] && legs=${LEGS96:-$LEGS}
+	[ $R = 192000 ] && legs=${LEGS192:-$LEGS}
+	for leg in $legs; do
 		dst=${leg%:*}; exp=${leg#*:}
 		ctl="PCM $dst Capture Enum"
 		was=$(amixer -c "$CARD" cget name="$ctl" | sed -n 's/.*: values=//p')

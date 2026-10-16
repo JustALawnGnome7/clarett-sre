@@ -29,6 +29,10 @@ C2Pre)       CH=14 PB=4  R0=3 DST=13 EXP=13;;
 C4Pre)       CH=20 PB=8  R0=7 DST=19 EXP=19;;
 C8Pre)       CH=20 PB=20 R0=7 DST=19 EXP=19;;
 C8PreX)      CH=28 PB=28 R0=7 DST=27 EXP=27;;
+# 31 -> 31 survives every speed's S/MUX tail. The Red's playback ring is 2048 frames against capture's
+# 4096, so each side's default period differs (512 vs 1024) and two clients configuring in the same
+# instant can trip the duplex period lock; the churn gives both the same geometry.
+R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 CHURN_XA="--period-size=512 --buffer-size=2048";;
 *) echo "unknown card id $ID"; exit 1;;
 esac
 RAMP=${RAMP:-$R0}
@@ -109,9 +113,9 @@ RATES=(48000 96000 192000 44100 88200 176400)
 bf=0; left=0
 for i in $(seq 1 $NB); do
 	R=${RATES[$(( (i - 1) % 6 ))]}; fr=$(( R * 3 ))
-	arecord -D hw:$CARD,0 -f S32_LE -c $CH -r $R -t raw -d 3 2>"$W/rec.err" | $PY check $CH $EXP > "$W/res" &
+	arecord -D hw:$CARD,0 -f S32_LE -c $CH -r $R -t raw -d 3 ${CHURN_XA:-} 2>"$W/rec.err" | $PY check $CH $EXP > "$W/res" &
 	rp=$!
-	$PY gen $fr $PB $RAMP | aplay -D hw:$CARD,0 -f S32_LE -c $PB -r $R -t raw 2>"$W/play.err" &
+	$PY gen $fr $PB $RAMP | aplay -D hw:$CARD,0 -f S32_LE -c $PB -r $R -t raw ${CHURN_XA:-} 2>"$W/play.err" &
 	pp=$!
 	reap 20 $pp $rp
 	sleep 0.3

@@ -566,9 +566,19 @@ def out_index(n):        # physical output n (0-based) -> array index onto the s
 
 # The Clarett notification word: the event bits of the 0x400 cause register the driver relays (bit21
 # dim/mute, bit22 monitor, as the vendor descriptors' notification masks give them). A control re-reads
-# when the relayed word intersects its notify-client. The Red maps keep 1: their driver relays a
-# wildcard until the Red's event bits are measured.
+# when the relayed word intersects its notify-client.
 NOTIFY_CLARETT = 0x600000
+
+# The Red notification word: one bit per category of control [XML <notifications>], relayed by the
+# driver as on the Clarett (clarett_model.notify_word; NOTIFY_EV_RED_* in snd-clarett). Seen on a
+# Red 8Line: OUTPUT in bursts while a front-panel knob turns, GLOBAL and the input pair on
+# front-panel presses. fcp-server also re-reads every control sharing a written output control's mask
+# after the write, so the controls bound to one knob group must share OUTPUT. The Dante and
+# temperature bits match no control here.
+NOTIFY_RED_INPUT_GAIN  = 0x00200000
+NOTIFY_RED_INPUT_OTHER = 0x00400000
+NOTIFY_RED_OUTPUT      = 0x00800000
+NOTIFY_RED_GLOBAL      = 0x01000000
 
 def member(offset, typ, shape=None, nd=0, nc=NOTIFY_CLARETT, note=None):
     m = OD(offset=offset, type=typ)
@@ -1326,13 +1336,13 @@ def build_red(slug):
     # Output gain: SIGNED 16-bit dB, 1 dB/step, -112..0 [XML min-gain/max-gain, and the vendor wrote
     # 0xff90 = -112 to every one of these at init]. Nothing like the Clarett's attenuation byte, so
     # there is no invert here.
-    m["outputVolume"] = member(24, "int16", shape=nout, nd=1, nc=1,
+    m["outputVolume"] = member(24, "int16", shape=nout, nd=1, nc=NOTIFY_RED_OUTPUT,
                                note="per-output gain @ 24+2i, signed 16-bit dB (-112..0), 1 dB/step; "
                                     "commit activate 1")
     # Mute and dim share one byte per output (68+i, bits 0 and 1), so a control has to address a BIT
     # within a single member -- one member per output byte, as the Clarett does for hwGainEnable.
     for n in range(RED_N_GROUPED, nout):
-        m[f"outMuteDim{n}"] = member(68 + n, "bool", nd=15, nc=1,
+        m[f"outMuteDim{n}"] = member(68 + n, "bool", nd=15, nc=NOTIFY_RED_OUTPUT,
                                      note=f"output {n+1} mute (bit 0) and dim (bit 1) @ {68+n}; "
                                           f"commit activate 15")
     m["hwGainEnable"] = member(90, "bool", shape=nout, nd=3, nc=0,
@@ -1341,11 +1351,11 @@ def build_red(slug):
                                     "2 = HW (its gain tracks the Monitor group exactly); 3 is kept "
                                     "but follows no group (the level holds). Exposed as a bool: "
                                     "SW = 0, HW = 1, read back as any non-zero")
-    m["phantom"]    = member(154, "bool",  shape=npre, nd=11, nc=0, note="per-preamp 48V @ 154+i; activate 11")
-    m["mode"]       = member(162, "uint8", shape=npre, nd=7,  nc=0, note="per-preamp mode @ 162+i, 0=Mic/1=Line/2=Inst; activate 7")
-    m["air"]        = member(170, "bool",  shape=npre, nd=8,  nc=0, note="per-preamp air @ 170+i; activate 8")
-    m["hpf"]        = member(178, "bool",  shape=npre, nd=10, nc=0, note="per-preamp high-pass @ 178+i; activate 10")
-    m["phase"]      = member(186, "bool",  shape=npre, nd=12, nc=0, note="per-preamp phase invert @ 186+i; activate 12")
+    m["phantom"]    = member(154, "bool",  shape=npre, nd=11, nc=NOTIFY_RED_INPUT_OTHER, note="per-preamp 48V @ 154+i; activate 11")
+    m["mode"]       = member(162, "uint8", shape=npre, nd=7,  nc=NOTIFY_RED_INPUT_OTHER, note="per-preamp mode @ 162+i, 0=Mic/1=Line/2=Inst; activate 7")
+    m["air"]        = member(170, "bool",  shape=npre, nd=8,  nc=NOTIFY_RED_INPUT_OTHER, note="per-preamp air @ 170+i; activate 8")
+    m["hpf"]        = member(178, "bool",  shape=npre, nd=10, nc=NOTIFY_RED_INPUT_OTHER, note="per-preamp high-pass @ 178+i; activate 10")
+    m["phase"]      = member(186, "bool",  shape=npre, nd=12, nc=NOTIFY_RED_INPUT_OTHER, note="per-preamp phase invert @ 186+i; activate 12")
     # Preamp gain: one byte per mode per input -- mic/line/inst at 130/131/132 + 3i [XML], commit
     # activate 9 -- and the mode byte (162+i, Mic=0/Line=1/Inst=2) picks which one is live, so a
     # single fader per input follows the mode through fcp-server's "select": element 3i + mode.
@@ -1353,21 +1363,23 @@ def build_red(slug):
     # Inst): 0.99 dB per code, flat above code 63 (64-255 are stored but act as 63), and codes 1-7
     # act as code 0, which sits 8 dB under code 8. So 0..63 at 1 dB/step; the absolute offset is
     # not measured (code = dB is assumed). Line mode's input is the DB25 and is UNMEASURED; its
-    # byte gets the same range. nc=1: while linked, a write to one input moves the other by the
-    # same amount, and the front panel can change gain too.
-    m["preampGain"] = member(130, "uint8", shape=3 * npre, nd=9, nc=1,
+    # byte gets the same range. Re-read on INPUT_GAIN: while linked, a write to one input moves the
+    # other by the same amount, and the front panel can change gain too; and on INPUT_OTHER, since a
+    # mode change selects another gain byte.
+    m["preampGain"] = member(130, "uint8", shape=3 * npre, nd=9,
+                             nc=NOTIFY_RED_INPUT_GAIN | NOTIFY_RED_INPUT_OTHER,
                              note="preamp gain @ 130 + 3i + mode (mic/line/inst), 0..63 = dB; "
                                   "activate 9")
     # Stereo link is ONE switch held in two bytes: a write of 1 or 0 to either of 194/195 sets or
     # clears both (hardware-measured). So it is exposed once, on input 1 -- a second control on 195
     # would go stale whenever the first changed. Linking copies no setting across; while linked, a
     # gain change on one input moves the other by the same amount (offsets kept), air does not follow.
-    m["stereoLink"] = member(194, "bool", nd=13, nc=0,
+    m["stereoLink"] = member(194, "bool", nd=13, nc=NOTIFY_RED_INPUT_OTHER,
                              note="preamp stereo link @ 194 (195 mirrors it in the device); activate 13")
     # The Pre models have a link per preamp pair [XML stereo-link 194+i]; each pair is assumed to
     # behave as 194/195 do on the 8Line (one switch in two bytes) -- unverified.
     for k in range(1, npre // 2):
-        m[f"stereoLink{k}"] = member(194 + 2 * k, "bool", nd=13, nc=0,
+        m[f"stereoLink{k}"] = member(194 + 2 * k, "bool", nd=13, nc=NOTIFY_RED_INPUT_OTHER,
                                      note=f"preamp stereo link, inputs {2*k+1}-{2*k+2} @ {194 + 2*k} "
                                           f"(assumed to mirror into {195 + 2*k}); activate 13")
 
@@ -1376,11 +1388,11 @@ def build_red(slug):
     # headphone knobs). Mute and dim share one byte, so each control masks its own bit -- which needs
     # the fcp-server fix that makes a set masked switch write its whole mask (a bare `value & mask`
     # writes 0 for any bit but bit 0). Capture-confirmed: FC wrote 01/02/00 to 124, each committed
-    # with activate 2. nc=1 on both: the front panel can move them behind us. Two members on one byte
+    # with activate 2. Re-read on OUTPUT, both: the front panel can move them behind us. Two members on one byte
     # because an alsa-map global control is keyed by its member, so one member can carry one control.
-    m["muteSwitch"] = member(124, "uint8", nd=2, nc=1,
+    m["muteSwitch"] = member(124, "uint8", nd=2, nc=NOTIFY_RED_OUTPUT,
                              note="monitor mute = bit 0 of @ 124 (dim is bit 1); commit activate 2")
-    m["dimSwitch"]  = member(124, "uint8", nd=2, nc=1,
+    m["dimSwitch"]  = member(124, "uint8", nd=2, nc=NOTIFY_RED_OUTPUT,
                              note="monitor dim = bit 1 of @ 124 (mute is bit 0); commit activate 2")
     # No read-only "Master HW" view of the monitor group gain (@112): the Monitor fader below IS
     # that field, writable, so a separate dial would only show the same number again.
@@ -1392,9 +1404,10 @@ def build_red(slug):
                                     note="S/PDIF output connector @ 236; Optical=1/RCA=2; activate 4")
     # Front-panel meter-bridge bank [XML <meter-source>], commit activate 14. Never written in the
     # capture, but a write from the GUI moves the front panel's source (hardware-confirmed). Unlike the
-    # Clarett's, the Red's front panel can change it too, so it is re-read on a notification (nc=1);
-    # the driver's monitor poll covers @268 for the same reason.
-    m["meterSource"] = member(268, "uint8", nd=14, nc=1,
+    # Clarett's, the Red's front panel can change it too, so it is re-read on a notification; which
+    # category it raises is not established, so both GLOBAL and OUTPUT (the front-panel bits seen).
+    # The driver's monitor poll covers @268 for the same reason.
+    m["meterSource"] = member(268, "uint8", nd=14, nc=NOTIFY_RED_GLOBAL | NOTIFY_RED_OUTPUT,
                               note="front-panel meter-bridge source @ 268; activate 14; enum [XML]; "
                                    "settable from the front panel, so re-read on notification")
 
@@ -1406,10 +1419,10 @@ def build_red(slug):
     # encoders). Signed 16-bit dB, hardware-confirmed: the group gain tracks the encoder exactly.
     # FC never wrote 68-73 (outputs 1-6 mute/dim) but did write the group byte 124, consistent with this.
     for g, nm in enumerate(RED_GROUP_NAMES):
-        m[f"grpGain{g}"] = member(112 + 4 * g, "int16", nd=6, nc=1,
+        m[f"grpGain{g}"] = member(112 + 4 * g, "int16", nd=6, nc=NOTIFY_RED_OUTPUT,
                                   note=f"{nm} knob group gain @ {112 + 4*g}, signed dB -112..0; "
                                        f"commit activate 6")
-        m[f"grpMuteDim{g}"] = member(124 + 2 * g, "bool", nd=2, nc=1,
+        m[f"grpMuteDim{g}"] = member(124 + 2 * g, "bool", nd=2, nc=NOTIFY_RED_OUTPUT,
                                      note=f"{nm} knob group mute (bit 0) / dim (bit 1) @ "
                                           f"{124 + 2*g}; commit activate 2")
 
@@ -1434,8 +1447,8 @@ def build_red(slug):
     for n in range(nout):
         if n < RED_N_GROUPED:
             # Every output of a knob group gets a fader bound to the group gain, so each keeps its
-            # own level meter; the two move together (fcp-server re-reads every nc=1 control after
-            # a write). Mute and dim exist once per group, so they sit on the group's first output
+            # own level meter; the two move together (fcp-server re-reads every control sharing the
+            # written one's notify-client after a write, and both carry OUTPUT). Mute and dim exist once per group, so they sit on the group's first output
             # only (the GUI spans them across both columns), and the Monitor group has none here at
             # all: the global Mute/Dim buttons are the same bits of @124, and the GUI draws them
             # under the Monitor faders.
@@ -1573,10 +1586,12 @@ def build_red(slug):
         "socket-path TLV and lock handshake. NOTE the descriptor does place App and FPGA versions at "
         "offsets 8 and 12, but inside a firmware-upgrade segment block whose address space has not "
         "been shown to be the appspace -- unverified, so not used.",
-        "notify-client masks are approximate, as on the Clarett: the Thunderbolt device does not "
-        "expose the FCP notification word, so the driver relays a wildcard and every notification "
-        "refreshes every control. Set here on the output gain, mute, dim and Meter Source -- the "
-        "things a front panel can move -- and cleared on the preamp switches.",
+        "notify-client is the descriptor's notification category per control (input-gain 0x200000, "
+        "input-other 0x400000, output 0x800000, global 0x1000000), the event bits of the 0x400 cause "
+        "register that the driver relays as the notification word. It needs a driver that relays them "
+        "(clarett_model.notify_word); an older driver relays a wildcard, which still refreshes every "
+        "notifiable control. Meter Source carries global and output, its category being unknown. "
+        "hwGainEnable and the S/PDIF connectors stay at 0: host-owned.",
         ("line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
          "applies to all eight inputs but its audible effect has not been established."
          if slug == "red-8line" else

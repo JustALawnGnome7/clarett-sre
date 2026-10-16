@@ -1155,7 +1155,19 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     capture + playback started and stopped in the same instant, rotating 44.1-192 kHz: ramp unbroken,
     both clients exit, no `clarett-svc` thread left, no D-state. A 96 kHz playback opened during a
     48 kHz capture is NARROWED to 48 kHz (aplay "rate is not accurate"), not refused, and plays
-    unbroken. Kernel: no `badreads`, `overrun=0`, no WARN. Not yet run on 4Pre/8Pre/8PreX/Red.
+    unbroken. Kernel: no `badreads`, `overrun=0`, no WARN. **Red 8Line PASSES the same run (Oct 16 2026,
+    laptop; 64ch playback + 60ch capture, ramp playback 31 -> "PCM 31" -> ch 31, which survives every
+    speed):** 14.4 M / 11.5 M / 23.0 M frames sample-exact at 48/96/192 kHz, 0 xruns, no start loss;
+    64/256 sample-exact (one arecord overrun outside the ramp, non-RT); churn 30/30 with both clients at
+    512/2048; the 96k-into-48k open narrowed and unbroken; first-window `late=4-5` after a change to a
+    faster rate (the old-rate tail below, at the churn's shorter period). Not yet run on 4Pre/8Pre/8PreX.
+    **★ RED-ONLY: TWO CLIENTS CONFIGURING IN THE SAME INSTANT CAN TRIP THE DUPLEX PERIOD LOCK.** The
+    Red's playback ring is 2048 frames (its halved TX fragment) against capture's 4096, so the defaults
+    differ (aplay 512/2048, arecord 1024/4096). When both refine before either's hw_params lands, the
+    second hw_params fails the now-pinned `lock_period` (`Unable to install hw params`; aplay asserts):
+    7/10 clean with defaults, **10/10 with both at 512/2048**, and no hang or leftover thread either way.
+    A single duplex client (configures one direction, then the other) never hits it. Possible fix, not
+    chosen: cap the Red's capture buffer at the TX ring so both defaults agree.
     **★ SIDE FINDING — the clock keeps the OLD rate for ~20-30 ms after a change to a faster one.** The
     first stream after 48->96 or 96->192 kHz logs `late=1..3` in its first `stream-svc` window with
     `gapmax` equal to the OLD rate's period (21.3 ms at "96k", 10.7 ms at "192k") while each step is
@@ -1342,8 +1354,28 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   missed bit22. Now the ISR collects `cause & ~0x3`, and a model with `notify_word` (the four Claretts)
   relays that word to fcp-server instead of `~0`; the Clarett maps' `notify-client` is `0x600000`
   (6291456). **Driver and maps must move together:** new driver + old maps (`1`) = knob silently stops
-  tracking; old driver + new maps still works (the wildcard matches). Reds keep the wildcard
-  (`notify_word` unset) until their event bits are measured.
+  tracking; old driver + new maps still works (the wildcard matches). ~~Reds keep the wildcard
+  (`notify_word` unset) until their event bits are measured.~~ **Reds use `notify_word` too since Oct 15
+  2026, hardware-verified on the Red 8Line Oct 16:** their masks were in the vendor descriptors all along —
+  the Red `<notifications>` block, in the 2023 Focusrite Control XMLs as well as the RedNet Control 2 ones
+  (now in `vendor-reference/RedNet Control 2/Devices/`): input-gain `0x200000`, input-other `0x400000`,
+  output `0x800000`, global `0x1000000`, dante-persist `0x2000000`, dante-volatile `0x4000000`,
+  temperature `0x40000000` (8Line/16Line). They explain every bit measured on the Red 8Line (below).
+  Driver: `NOTIFY_EV_RED_*` + `.notify_word` on all four Reds, and `clarett_schedule_follow()` skips a
+  model with no output gains (on a Red, bits 21-22 are input events, so they used to trigger a wasted
+  269-byte region read). Maps (`gen_fcp_maps.py` `build_red`, copied to the fcp-support fork): output
+  gains/mute/dim, the knob groups and the monitor Mute/Dim on OUTPUT; preamp switches and link on
+  INPUT_OTHER (were 0, to spare the wildcard's cost); preamp gain on INPUT_GAIN|INPUT_OTHER (mode selects
+  its byte); Meter Source on GLOBAL|OUTPUT (category unknown); hwGainEnable and S/PDIF connectors stay 0.
+  **Red 8Line, Oct 16 2026, all four checks PASS.** (1) Front-panel knob and Mute followed in the GUI
+  (user). (2) Idle 30 s: only `0x40000000` (temperature), 6 events, ~1 per 5 s — no control carries the bit,
+  so nothing is re-read. (3) **Sync Status: the Red DOES raise bit3** (`0x8`, 1-2 per Clock Source change);
+  ADAT 1 / S/PDIF (nothing connected) read Unlocked, Internal Locked, so fcp-server's hard-coded bit3 mask
+  (`server/sync.c`) is right for the Red too. Run with PipeWire's profile off: while a PCM is open the
+  driver defers the SET_CLOCK to the next arm, so the change does nothing (the first attempt). (4) Linked
+  preamps: link 1-2, input 1 gain 10 -> 15 moved input 2 to 15, carried by one `0x200000` (input-gain).
+  **Trap hit first:** the new driver ran against the OLD installed Red maps (every mask `1`), so the knob
+  and Mute stopped reaching the GUI until the new maps were installed — the driver/maps rule, in practice.
   **4Pre, measured (`notify_count.sh`, dyndbg on "async notification handled"):** old driver idle
   **8.2 relays/s, all `0x2`** (the meter poll's own commands); new driver idle **zero**; turning the knob
   **~46/s, all `0x400000`**, and alsa-scarlett-gui's Monitor volume follows "perfectly, and much faster
@@ -1358,8 +1390,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   (`2bde028`, fast-forward of branch `irq-mailbox`), at the operator's call before the full model
   matrix. Tested: 8PreX for every part; 2Pre for every part (Oct 12, below); Red for probe, the
   mailbox A/B and its front panel; 4Pre for every part (Oct 14, below). NOT YET
-  RUN on this code: 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a write),
-  Red with no worker for minutes then a write.**
+  RUN on this code: 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a write).
+  Red, Oct 16 2026: 180 s idle with the GUI closed = ZERO commands, then Air 1: SET_DATA + DATA_CMD both
+  `0x3`, nothing lost. The Air LED was not watched during that run, so the write was repeated with the
+  user watching: Air 1 on for 5 s, then off — the LED followed both ways (user-confirmed).**
   **4Pre on main + the step 5 parts + the MIDI RX decode (Oct 14 2026, laptop, Dock G4 -> Apple
   adapter -> 4Pre):** cold attach x3 acked after 10.3-10.7 ms, attempt 1, **11.5-12.8 ms enable ->
   registered** (kernel timestamps; ~30-36 ms before step 5 part 3, from journald times; 2 of the 3 power-ons needed a
@@ -1418,10 +1452,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   for changes that raise no event.
   **4c part 3 DONE (Oct 10 2026): `monitor_poll` defaults OFF** (lever kept). Red 8Line, `monitor_poll=0`,
   every front-panel control the user tried (order not recorded) was followed by the GUI — the Red still
-  gets the wildcard, so any event bit re-reads everything. **The Red's event bits, seen but NOT yet mapped
-  to controls:** bit23 `0x800000` (133, in bursts — a continuous control, the knob?), bit24 `0x1000000`
-  (3), `0x600000` and `0x400000` (one each), plus bit30 every 4.99 s idle. Mapping them one control at a
-  time is what would let the Red use `notify_word` like the Claretts. Halves idle mailbox traffic (the
+  gets the wildcard, so any event bit re-reads everything. **The Red's event bits seen:** bit23 `0x800000`
+  (133, in bursts — a continuous control, the knob?), bit24 `0x1000000`
+  (3), `0x600000` and `0x400000` (one each), plus bit30 every 4.99 s idle. ~~Mapping them one control at a
+  time is what would let the Red use `notify_word` like the Claretts.~~ No mapping needed: the descriptors
+  name them (output, global, input-gain|input-other, input-other, temperature; see the notify entry). Halves idle mailbox traffic (the
   monitor-region GET_DATA at 24 Hz is gone).
   **4c part 4 DONE (Oct 10 2026, 8PreX): `meter_poll_ms` defaults to 0 — NO HOST HEARTBEAT.** Loaded with
   `meter_poll_ms=0`: ~3 min with no host traffic at all, then a physical write (Air/48V LED), meters and
@@ -1437,7 +1472,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   did, whose full-width fallback would leak the S/MUX residue. 2Pre: device 14/10/8 = table (no
   warning), ramp 9/9 PASS at 48/96/192 kHz. 4Pre (Oct 14): no warning, so device == table (16/14 of
   20), ramp 9/9 PASS. Not yet attached on this code: 8Pre, 8PreX, Red —
-  watch the probe log for `STREAM_INFO{n}: device writes ...`. The 2Pre's band 3 is an EMPTY reply
+  watch the probe log for `STREAM_INFO{n}: device writes ...`. Red 8Line and 8PreX probed on this code
+  Oct 16 2026 with no warning, so both match their tables (Red 52/32 of 60, 8PreX 20/16 of 28). The 2Pre's band 3 is an EMPTY reply
   (Bennett's "repeats band 2" was a stale buffer) and its trailing words differ from his read; see
   `spec/provenance/clarett-opcode-inference.md` §10. **All four parts done on the 2Pre (Oct 13).**
   **Part 2 DONE (Oct 13 2026, 2Pre): the per-channel port-name burst is gone from the stream
@@ -1453,8 +1489,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   fixed since. **4Pre (Oct 14): 4 commands before arm, 1.5-1.6 ms; simultaneous starts 3/3; ramp on
   playback PCM 7 (8ch ring) -> capture 19/20/11 sample-exact 9/9 at 48/96/192 kHz**
   (`tools/bench/loopback_order.sh`, now model-generic: it takes the model from the card id and
-  switches off whatever the ramp channel feeds for the run). Untested on 8PreX, 8Pre and Red on this
-  code: run a loopback ramp on each.
+  switches off whatever the ramp channel feeds for the run). **Red 8Line (Oct 16 2026): 4 commands
+  before arm (the four sync queries), 2.2-2.8 ms (one 22.5 ms outlier); ramp on playback 31 sample-exact
+  8/8 — capture 59/60/31 at 48k, 51/52/31 at 96k, 31/32 at 192k — with the dropped tails (53-60, 33-60)
+  all zero** (`loopback_order.sh` now has a Red preset with per-rate legs). Simultaneous starts with
+  each app's defaults: see the Red note under the duplex stress entry. Untested on 8PreX and 8Pre on
+  this code: run a loopback ramp on each.
   **Part 3 DONE (Oct 13 2026, 2Pre): the attach is cut to what the device needs** (port of Bennett's
   `b1c984b`): serial/fw reads, `0x510`/`0x500` = 8, `0x104`, the address, the ack wait. Gone: the
   other register reads, the cause-block sweep, ~25 ms of vendor-gap sleeps, and the
