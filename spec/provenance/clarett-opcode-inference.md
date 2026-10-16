@@ -258,3 +258,57 @@ the S/MUX residue through to the capture), and a cross-check that warns on any d
 8Pre/8PreX/Red tables, never read live at bands 1-2, are checked the first time each attaches. On the
 2Pre: no warning at probe (agreement), and the digital-loopback ramp passed 9/9 at 48/96/192 kHz with
 the removed channels (9-12, 7-12) all zero.
+
+## 11. Addendum (Oct 16 2026): `0x800005` on every model, the serial, and the firmware words
+
+Read on all five Thunderbolt models with `tools/bench/unit_ident.sh` (fcp-server stopped; appspace
+bytes 0-127, `0x800005 {0, 8}`, the first 32 bytes of flash segments 3 and 4), through main's driver.
+
+**`0x800005` is a {family, model} pair, not the S/PDIF clock value.** §9 read `{1, 3}` on the 4Pre and
+`{1, 4}` on the 2Pre and suggested the second word might be the per-model S/PDIF clock enum, since the
+2Pre's XML gives S/PDIF as 4. With the other three units:
+
+| model | `0x800005 {0,8}` |
+|---|---|
+| Clarett 8Pre | `{1, 1}` |
+| Clarett 8PreX | `{1, 2}` |
+| Clarett 4Pre | `{1, 3}` (as §9) |
+| Clarett 2Pre | `{1, 4}` (as §9) |
+| Red 8Line | `{2, 6}` |
+
+The S/PDIF clock value is 3 on every Clarett, the 2Pre included (measured with `Sync Status` against a
+live S/PDIF source; the 2Pre's XML is wrong there), so the 8Pre's 1 and the 8PreX's 2 rule that
+reading out. Five distinct values over five models, the first word 1 on every Clarett and 2 on the
+Red, fit a model identifier, and would explain why the vendor driver sends it first. Not yet shown:
+that a second unit of a model gives the same value (one unit per model so far), and whether the Red
+twins (8Line/4Pre, 16Line/8Pre, which share stream geometry) differ; no Red Pre or 16Line has been
+read. Replies were stable across reads. A Clarett 8Pre **USB**, switched to the kernel `fcp` driver for
+the test (`snd_usb_audio vid=0x1235 pid=0x8208 device_setup=8`), answers `0x800005` at lengths 8, 16, 32
+and 64 with FCP error 7, as it does `DEVMAP_INFO`, while `GET_DATA` works on the same path: the query
+is Thunderbolt-firmware only, as fits USB models already being told apart by their USB product ID.
+§9 also noted `0x006000`'s second word tracking the same 3/4; it has not been read on the other three.
+
+**The serial is in flash `App_Env`, as the branch's note said.** The segment (index 4 on both the Red
+and the Claretts; 64 KB) begins with one ASCII line, `SERIAL_NO = <decimal>`, and is otherwise erased
+(`0xff`). Six or seven digits, different on every unit; the Clarett lines end in a newline, the Red's
+does not. The values are deliberately not recorded in this repo. Main's driver now reads it at probe
+(segment found by name) and exposes it as `/sys/bus/pci/devices/<bdf>/serial`, never logged.
+
+**The firmware versions are appspace words.** The descriptors' `<firmware>` `<version offset-bytes>`
+are appspace offsets: App at 8, FPGA at 12 (low 16 bits), and on a Red the front panel at 20. Every
+Clarett reads App 1016 / FPGA 1021; the Red 8Line App 1077 / FPGA 1020 / Front 242. All match the
+versions the descriptors name. Appspace word 12 equals BAR0 `0x000`, so that register (main's
+Red-vs-Clarett "family register") is the FPGA version word: the build in the low 16 bits, a family code
+above (`0x0320` Clarett, `0x0420` Red). Flash agrees for the App (`App_Upgrade`+8); the FPGA segments
+instead open with a Xilinx bitstream header naming the design (`fp001005_tb_top` on every Clarett,
+`fp001100_tb_top` on the Red). Appspace word 0 (5 on every Clarett, 2 on the Red) and the FPGA `type`
+word at 16 (1 / 4, named in the Red XMLs, which pick between two Red 4Pre FPGA images with it) are not
+decoded further.
+
+**`FLASH_INFO` replies `{u32 total size, u32 segment count, u8[4]}`**, as §9's table already reads it
+(`0x3f0000`, 6 segments, then `02 00 e8 03`). `tools/fcp_flash_dump.c`'s header comment had the count
+first; corrected.
+
+**Appspace @80 on the Claretts (@202 on a Red) is the descriptor's `<nickname>`**: a saved, renamable
+name, not identity. Its default is `<model>-<serial as 8 hex digits>` on every unit read but the 8Pre,
+whose suffix is `00000001`.

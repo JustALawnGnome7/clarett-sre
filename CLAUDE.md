@@ -101,7 +101,10 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
   Front_Upgrade). The vendor's first init command `0x800005 {0, 8}` answers u32 pairs, `2, 6` on the Red
   and `1, 3` on the 4Pre, stable across reads: NOT the serial. **It is a {family, model} ID** (all five units,
   Oct 16 2026, `tools/bench/unit_ident.sh`): Clarett 8Pre `1,1`, 8PreX `1,2`, 4Pre `1,3`, 2Pre `1,4`, Red 8Line
-  `2,6` — the vendor's first command identifies the model. For the Claretts it duplicates the stream
+  `2,6`. **Bennett read it first** (`spec/provenance/clarett-opcode-inference.md` §9, Sep 9: 4Pre `{1,3}`,
+  2Pre `{1,4}`, and `{0,12}` -> `{1,3,0}`) and guessed the second word was the per-model S/PDIF clock
+  value; the 8Pre's 1 and 8PreX's 2 refute that (S/PDIF = 3 on every model), and five distinct values fit
+  a model ID, which would explain why the vendor driver sends it first. Recorded in that file's §11. For the Claretts it duplicates the stream
   geometry; for the Reds it is the best candidate to separate 8Line/16Line from 4Pre/8Pre without the
   Thunderbolt-controller check (needs a Red Pre unit to confirm). Not in any public FCP source (kernel
   `scarlett2` and fcp-server define only `0x800000-2` and `0x80000c/d` in that category), and **USB firmware
@@ -526,8 +529,10 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     measuring it on every model after the port to main.
   clarett-opcode-inference.md       G. D. Bennett: what the init-only opcodes are (0x007001 =
                                     STREAM_INFO per speed band, 0x005000 a per-port descriptor read,
-                                    flash FLASH_INFO/SEGMENT_INFO/READ). Main has STREAM_INFO (§10); still the old
-                                    GET_7.2/7.3 / CONFIG_PUSH names.
+                                    flash FLASH_INFO/SEGMENT_INFO/READ). Main has STREAM_INFO (§10); §11 = 0x800005 as a
+                                    model ID, the App_Env serial, the appspace firmware words. (0x007002/0x007003,
+                                    once "GET_7.2/7.3", are width declarations the driver no
+                                    longer sends; its CONFIG_PUSH/GET_7x names left with the burst.)
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
