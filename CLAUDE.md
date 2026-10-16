@@ -87,7 +87,15 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
   **★ THE REAL SERIAL IS IN FLASH (Oct 16 2026):** the `App_Env` flash segment (#4 on both units read,
   64 KB) starts with one ASCII line, `SERIAL_NO = <digits>`, the rest erased (`0xff`): a 6- or 7-digit
   decimal on every unit read, all different (the Claretts' line ends in a newline, the Red's does not).
-  Serial VALUES are deliberately kept out of this public repo. Read with `tools/fcp_flash_dump` (FLASH_INFO / SEGMENT_INFO / READ, read-only; Bennett's
+  Serial VALUES are deliberately kept out of this public repo. **THE DRIVER USES BOTH (Oct 16 2026):** the probe line prints
+  `App <n>, FPGA <n>` (+ `Front <n>` on a Red, model field `fw_front`) from the seeded appspace shadow,
+  and the serial is read at probe (FLASH_INFO -> SEGMENT_INFO by name `App_Env` -> FLASH_READ 64 B, parse
+  `SERIAL_NO =`) into `/sys/bus/pci/devices/<bdf>/serial` (0444, like USB's; absent if the read fails),
+  NEVER logged. The BAR0 placeholder reads (`0x010/0x014`, `0x8000`) and the longname's `fw app` are gone.
+  Verified on the Red 8Line and 8Pre: both files correct. Two traps hit on the way: FLASH_INFO's reply is
+  `{u32 total size, u32 segment count, u8[4]}` (the count is at +4; fcp_flash_dump's header comment had it
+  at +0, now fixed), and the kernel's `isalnum()` follows Latin-1, so the erased `0xff` after the Red's
+  unterminated line parsed as letters until the check was made ASCII-only. Read with `tools/fcp_flash_dump` (FLASH_INFO / SEGMENT_INFO / READ, read-only; Bennett's
   lead). Not yet checked against the units' labels. Segment lists: Red 7 segments / 8 MB (App_Gold,
   App_Upgrade, FPGA_Gold, FPGA_Upgrade, App_Env, App_Settings, Front_Upgrade); 4Pre 6 / 4 MB (no
   Front_Upgrade). The vendor's first init command `0x800005 {0, 8}` answers u32 pairs, `2, 6` on the Red
@@ -891,7 +899,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
 - **★ LOG POLICY — the default load is ONE `dev_info` line (Aug 20 2026).** The RE instrumentation that
   used to print unconditionally is now `dev_dbg`, so a healthy driver prints:
   ```
-  snd_clarett 0000:0a:00.0: Clarett 2Pre: serial ... fw app 0x... fpga 0x...; FCP hwdep, PCM 4/14ch, MIDI
+  snd_clarett 0000:0a:00.0: Clarett 2Pre: App 1016, FPGA 1021; FCP hwdep, PCM 4/14ch, MIDI
   ```
   and **nothing at all while streaming**. The rules: `info` = the probe summary; `warn` = degraded but
   working (short MSI count, a subsystem that failed to register, a seed failure); `dev_dbg` = everything

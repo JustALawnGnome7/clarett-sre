@@ -13,7 +13,7 @@
  * READ ONLY by design: the FLASH category also has erase (0x004002) and write (0x004004) opcodes.
  * They are deliberately not implemented here — a bad write to App_Gold bricks the unit.
  *
- * Opcodes: FLASH_INFO 0x004000 {} -> {u32 count, u8 unknown[8]}
+ * Opcodes: FLASH_INFO 0x004000 {} -> {u32 total size, u32 count, u8 unknown[4]}
  *          FLASH_SEGMENT_INFO 0x004001 {u32 index} -> {u32 size, u32 flags, char name[16]}
  *          FLASH_READ 0x004005 {u32 segment, u32 offset, u32 len} -> len bytes
  *
