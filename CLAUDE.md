@@ -1160,7 +1160,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     speed):** 14.4 M / 11.5 M / 23.0 M frames sample-exact at 48/96/192 kHz, 0 xruns, no start loss;
     64/256 sample-exact (one arecord overrun outside the ramp, non-RT); churn 30/30 with both clients at
     512/2048; the 96k-into-48k open narrowed and unbroken; first-window `late=4-5` after a change to a
-    faster rate (the old-rate tail below, at the churn's shorter period). Not yet run on 4Pre/8Pre/8PreX.
+    faster rate (the old-rate tail below, at the churn's shorter period). **8PreX PASSES too (Oct 16 2026,
+    28ch each way, ramp PCM 7 -> "PCM 27"):** 14.4 M / 11.5 M / 23.0 M frames sample-exact, 0 xruns, churn
+    30/30, the 96k-into-48k open narrowed. The script now counts servicer threads against a baseline
+    taken at its start: every card's thread is named `clarett-svc`, so with the Red streaming under
+    PipeWire the old "must be zero" check refused to start. **8Pre PASSES too (Oct 16 2026, 20ch each way):**
+    14.4 M / 11.5 M / 23.0 M frames sample-exact, 0 xruns, churn 30/30, the 96k-into-48k open narrowed.
+    Not yet run on the 4Pre.
     **★ RED-ONLY: TWO CLIENTS CONFIGURING IN THE SAME INSTANT CAN TRIP THE DUPLEX PERIOD LOCK.** The
     Red's playback ring is 2048 frames (its halved TX fragment) against capture's 4096, so the defaults
     differ (aplay 512/2048, arecord 1024/4096). When both refine before either's hw_params lands, the
@@ -1218,7 +1224,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     rates). The stream width genuinely does not shrink — but the "SMUX'd-away channels go silent" half of
     that claim was **WRONG, disproven on hardware Aug 14 2026**; see the S/MUX bullet below. Still untested
     (not blockers, none affect the audio path): HS *playback* re-verified only
-    on the 2Pre (clean 96k tone; ramp sample-exact at 96k and 192k, Oct 12 2026), the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026) and the 4Pre (ramp on playback PCM 7 sample-exact at 96k and 192k, Oct 14 2026); the 8PreX remains. The rate-dependent LEVEL METERS that used
+    on the 2Pre (clean 96k tone; ramp sample-exact at 96k and 192k, Oct 12 2026), the 8Pre (ramp sample-exact at 96k and 192k, Oct 9 2026) the 4Pre (ramp on playback PCM 7 sample-exact at 96k and 192k, Oct 14 2026) and the 8PreX (playback
+    PCM 7 and PCM 25 sample-exact at 96k and 192k, Oct 16 2026): ALL FOUR done. The rate-dependent LEVEL METERS that used
     to be listed here are no longer a caveat — they are a CONFIRMED BUG; see the meter bullet below.
   - **ADAT capture + S/MUX HARDWARE-CONFIRMED at single, double AND quad speed, and the S/MUX-removed
     channels carry junk that the driver must blank — FIXED (Aug 14 2026, 8PreX -> 8Pre).** Rig: **8PreX
@@ -1276,8 +1283,18 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     `{rate, source}` while fcp-server has no notion of the sample rate — the same gap that blocks the
     per-rate meter fix. The driver already sends SET_CLOCK at every arm and knows the rate, so it owns this.
     Backed by the `clock_source[]` module param, so control and sysfs are ONE value (a sysfs write bypasses
-    the control's change notification). Changing it while idle sends SET_CLOCK immediately so Sync Status
-    updates live; while streaming the change is deferred to the next arm rather than re-clocking mid-stream.
+    the control's change notification). ~~Changing it while idle sends SET_CLOCK immediately so Sync Status
+    updates live; while streaming the change is deferred to the next arm rather than re-clocking mid-stream.~~
+    **Since Oct 16 2026 (Bennett port step 6, his `b7aa347`, hand-ported) a control change sends SET_CLOCK
+    at once at the live rate (`cur_rate`, 48000 if unset), streaming or not** — the deferral made the
+    control inert on a desktop, where PipeWire holds a PCM open permanently (seen on the Red that morning:
+    a change while RUNNING did nothing). A sysfs write still waits for the next arm. **Hardware-verified
+    (`tools/bench/clock_live.sh`):** 8Pre and Red 8Line, a 20 s loopback ramp with Clock Source switched to
+    an absent external source at 5 s and back to Internal at 12 s: Sync Unlocked then Locked, **960,000
+    frames with 0 breaks** on both, both clients exit 0, nothing in the kernel log. The engine keeps
+    running through a re-clock; the loopback stays inside the device clock, so a glitch on an analogue or
+    external signal during the change-over is not excluded. With PipeWire holding the Red RUNNING both
+    ways, Sync followed both changes.
   - **`clock_source` is PER-CARD** (`module_param_array`, indexed by ALSA card number, runtime-writable,
     default Internal everywhere). A two-Clarett ADAT rig needs one master and one slave, so a scalar
     parameter would have slaved both. It is **not a config-space byte** — `<clocking>` has
@@ -1388,9 +1405,17 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   servicer still reading-and-discarding `0x400` while streaming (`monitor_poll` covers the knob there).
 - **★ STEP 4 OF THE BENNETT PORT (interrupt-driven mailbox) — MERGED to snd-clarett main Oct 10 2026
   (`2bde028`, fast-forward of branch `irq-mailbox`), at the operator's call before the full model
-  matrix. Tested: 8PreX for every part; 2Pre for every part (Oct 12, below); Red for probe, the
+  matrix. Tested: 8PreX for every part (re-run on the step 5 code Oct 16 2026: idle 180 s = 0 commands,
+  Air write 2 commands `0x3` with the LED confirmed; GUI 30 GET_METER all `0x3`; knob + Dim/Mute during a
+  28ch capture 528 `0x400000` + 8 `0x200000` relayed, 1172/1172 periods, `late=0`; hands-off 0 relays;
+  probe: no STREAM_INFO mismatch); 2Pre for every part (Oct 12, below); Red for probe, the
   mailbox A/B and its front panel; 4Pre for every part (Oct 14, below). NOT YET
-  RUN on this code: 8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a write).
+  RUN on this code: ~~8Pre (probe, knob/outputs idle + streaming, Dim/Mute, minutes idle then a write)~~ —
+  **8Pre DONE Oct 16 2026:** probe with no STREAM_INFO mismatch, 7.9 ms enable -> registered; idle 180 s
+  = 0 commands, Air write 2 commands `0x3`, LED seen; GUI 30 GET_METER all `0x3`; knob + Dim/Mute during
+  a 20ch capture 942 `0x400000` + 4 `0x200000`, 1172/1172 periods, `late=0`, Monitor volume, outputs
+  1-2, Dim and Mute followed (user); hands-off 0 relays; ramp 9/9; 4 commands to arm 1.4-1.9 ms,
+  simultaneous starts 3/3; MIDI 5/5 byte-exact.
   Red, Oct 16 2026: 180 s idle with the GUI closed = ZERO commands, then Air 1: SET_DATA + DATA_CMD both
   `0x3`, nothing lost. The Air LED was not watched during that run, so the write was repeated with the
   user watching: Air 1 on for 5 s, then off — the LED followed both ways (user-confirmed).**
@@ -1484,9 +1509,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   **25 -> 4 commands before arm, 5.6 -> 1.3 ms first command -> armed**; simultaneous capture +
   playback starts 3/3 clean on both; loopback ramp 9/9 sample-exact at 48/96/192 kHz on part 2
   (Bennett's own record took the 2Pre to 96 kHz only, though his commit message says 192).
-  **RISK, first thing to check on the 8PreX:** its old id-table comment said that without the burst
+  ~~**RISK, first thing to check on the 8PreX:** its old id-table comment said that without the burst
   "a 28ch playback ring is consumed as ~12ch"; Bennett attributes that to the TX page-straddle bug
-  fixed since. **4Pre (Oct 14): 4 commands before arm, 1.5-1.6 ms; simultaneous starts 3/3; ramp on
+  fixed since.~~ **CLEARED Oct 16 2026 (8PreX, laptop):** the ramp on playback PCM 7 AND on PCM 25 (a
+  channel a 12ch read could not carry) arrived sample-exact on capture 27/28/11 at 48/96/192 kHz,
+  18/18 legs, removed channels (19-26 at 96k, 15-26 at 192k) all zero; 4 commands before arm, 2.2 ms,
+  simultaneous starts 3/3. Bennett's attribution holds. **4Pre (Oct 14): 4 commands before arm, 1.5-1.6 ms; simultaneous starts 3/3; ramp on
   playback PCM 7 (8ch ring) -> capture 19/20/11 sample-exact 9/9 at 48/96/192 kHz**
   (`tools/bench/loopback_order.sh`, now model-generic: it takes the model from the card id and
   switches off whatever the ramp channel feeds for the run). **Red 8Line (Oct 16 2026): 4 commands
@@ -1521,12 +1549,21 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   part of the event-bit set. KEPT: `enable_pcm`, `enable_midi`, `clock_source`, `hw_gain_follow`,
   `max_buffer`, `notify_ms`, `meter_poll_ms`, `monitor_poll`, `addr_ack_ms`, `ready_resp_ms`,
   `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 open),
-  `phase_cycle` (remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix). Also fixed
+  `phase_cycle` (~~remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix~~ REMOVED Oct 16
+  2026, the polled fallback kept; see below). Also fixed
   `addr_ack_ms`'s description (0 now means no wait, not 3.22 ms). 2Pre on the part 4 build: rebind
   ack 2.0-2.1 ms attempt 1; loopback 9/9 at 48/96/192 kHz; 4 commands to arm, simultaneous starts
   3/3; period -> buffer 16/128, 64/256, 256/1024, 1024/4096 (unchanged); no warnings. **4Pre (Oct 14):
-  the same period -> buffer results, rebind and arm as above.** **Next: steps 4-5 on the 8PreX (first:
-  the port-name-burst risk), 8Pre and Red.**
+  the same period -> buffer results, rebind and arm as above.** ~~**Next: steps 4-5 on the 8PreX (first:
+  the port-name-burst risk), 8Pre and Red.**~~ **ALL FIVE MODELS DONE Oct 16 2026** (8PreX, Red and 8Pre
+  that day). **★ `phase_cycle` REMOVED the same day (15 parameters now):** with MSI up the phase-bit
+  cycle is the only one; the old cycle's MSI-wait branch and the ISR's `mbox_done`/`mbox_cause` hand-off
+  are gone. The ISR still reads `0x100` before `0x400` while a command is in flight (the 4a trap). KEPT,
+  operator's call: the polled DONE + sweep + buffer-poll cycle as the fallback when MSI allocation or
+  `request_irq` fails, which the driver survives; no unit has ever needed it (always 4/4 vectors), so it
+  is untested on hardware. Regression on the new build: 8Pre ramp 9/9 and Red 8/8 at 48/96/192 kHz,
+  8Pre 4 commands to arm in 1.3-1.4 ms and simultaneous starts 3/3, warm rebinds 8Pre ack 2.08-2.14 ms
+  and Red 63-115 us, attempt 1 every time, no warnings.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
   `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
@@ -1633,8 +1670,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     every time: 4Pre acked after 2.10-2.17 ms (vs ~11 ms cold), Red 0.18-0.34 ms;** registered 11-14 ms
     after the ack. This EXPLAINS the old "a manual rebind never fails, the automatic probe does"
     asymmetry: a warm unit acks ~5x faster, well inside main's ~11.5 ms. **2Pre (Oct 12): 9.42-9.53 ms
-    cold, 2.08-2.14 ms warm, attempt 1 every time** (step 4 entry). Not yet run with the wait: an
-    8Pre/8PreX rebind. **UNTESTED side effect:** the seq rule applies to
+    cold, 2.08-2.14 ms warm, attempt 1 every time** (step 4 entry). ~~Not yet run with the wait: an
+    8Pre/8PreX rebind.~~ **8Pre warm rebind (Oct 16 2026): 2.01-2.07 ms, then 2.08-2.14 ms on the
+    no-lever build, attempt 1 every time** — the same ~2 ms as the other Claretts warm. **UNTESTED side effect:** the seq rule applies to
     EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
     — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
     keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
@@ -1806,8 +1844,15 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   during a 14ch capture. So no regression; the 2Pre cannot show the fix. **4Pre on the fix, same day:
   the same five runs byte-exact** (25 KB during a 20ch capture); it was exact before too, so it cannot
   show the fix either. Its probe on this build printed no STREAM_INFO mismatch (step 5 part 1: device
-  widths == table on the 4Pre). **Next: the same loop on an
-  8Pre or 8PreX** — byte-exact there closes this item.
+  widths == table on the 4Pre). ~~**Next: the same loop on an
+  8Pre or 8PreX** — byte-exact there closes this item.~~ **★ PROVEN Oct 16 2026 ON THE 8PREX — ITEM
+  CLOSED.** Self-loop on the fixed driver, all byte-exact (6000 B unpaced at 3106 B/s, paced 1560 B/s,
+  1500 note pairs, 4 KB, 25 KB, all during a 28ch duplex stress). A temporary debug build (scratch copy,
+  never committed) counted RX words by byte count: **1=5926 2=38 3=0** for the 6000 B run, 2=23 paced,
+  2=58 notes, 2=161 for 25 KB. The old decode dropped both bytes of every count=2 word: 38 such words in
+  ~2 s is one per ~50 ms — exactly the 8Pre's "2 bytes every ~49.7 ms". No count=3 word was seen. **And the
+  8Pre itself, the unit that lost the bytes, the same day on the fix: the same five loops byte-exact**
+  (6000 B unpaced at 3121 B/s and paced at 1560 B/s, 1500 note pairs, 4 KB, 25 KB).
 - **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed

@@ -36,7 +36,7 @@ R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 CHURN_XA="--period-size=512 --buff
 *) echo "unknown card id $ID"; exit 1;;
 esac
 RAMP=${RAMP:-$R0}
-PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="$(basename "$(readlink -f /sys/class/sound/card$CARD/device)")" \
+PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readlink -f /sys/class/sound/card$CARD/device)" | tr ":" "_")" \
 	'$2 ~ b {print $2}')
 
 # PipeWire off the card, ramp channel's other uses off, loopback route on; all restored at exit
@@ -100,13 +100,16 @@ leg() {
 }
 
 say "== $(date) duplex stress card $CARD $ID, ${CH}ch capture + ${PB}ch playback, ramp PCM $RAMP -> \"$CTL\" -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
-[ $(svc) = 0 ] || { say "!! a clarett-svc thread exists before the run; stopping"; exit 1; }
+# Every card's servicer is named clarett-svc, so another card streaming (PipeWire on a second unit) shows
+# up here too: take the count now as the baseline, and require each check to return to it.
+BASE=$(svc)
+[ "$BASE" = 0 ] || say "   baseline: $BASE clarett-svc thread(s) from other cards; checks compare against it"
 
 if [ "$SHORT" = 1 ]; then A="48000:30 96000:20 192000:20"; ASM=20; NB=10; else A="48000:300 96000:120 192000:120"; ASM=120; NB=30; fi
 say "-- A. sustained duplex"
 for a in $A; do leg ${a%:*} ${a#*:} 1 "" "${a%:*} Hz ${a#*:} s, default buffer"; done
 leg 48000 $ASM 1 "--period-size=64 --buffer-size=256" "48000 Hz $ASM s, period 64 / buffer 256 (non-RT clients; informational)" 1
-[ $(svc) = 0 ] || say "!! clarett-svc thread left after part A"
+[ $(svc) = "$BASE" ] || say "!! clarett-svc thread left after part A"
 
 say "-- B. churn: $NB simultaneous start/stop cycles"
 RATES=(48000 96000 192000 44100 88200 176400)
@@ -121,7 +124,7 @@ for i in $(seq 1 $NB); do
 	sleep 0.3
 	n=$(svc)
 	r=$(cat "$W/res")
-	ok=1; grep -q '^PASS' "$W/res" || ok=0; [ "$n" = 0 ] || { ok=0; left=$((left + 1)); }
+	ok=1; grep -q '^PASS' "$W/res" || ok=0; [ "$n" = "$BASE" ] || { ok=0; left=$((left + 1)); }
 	grep -qiE 'error|busy|underrun|overrun' "$W/rec.err" "$W/play.err" && ok=0
 	[ $ok = 1 ] || { bf=$((bf + 1)); say "   cycle $i $R Hz: $r; svc threads $n; $(cat "$W/rec.err" "$W/play.err" | grep -v '^\(Recording\|Playing\)' | head -2 | tr '\n' ' ')"; }
 done
@@ -139,7 +142,7 @@ say "   aplay exit $c96 ($(grep -v '^Playing' "$W/play.err" | head -1)); capture
 # arrive as one unbroken ramp at 48 kHz
 { [ $c96 = 0 ] && grep -q 'got = 48000Hz' "$W/play.err" && grep -q '^PASS' "$W/res"; } || FAILS=$((FAILS + 1))
 
-[ $(svc) = 0 ] || { say "!! clarett-svc thread left at the end"; FAILS=$((FAILS + 1)); }
+[ $(svc) = "$BASE" ] || { say "!! clarett-svc thread left at the end"; FAILS=$((FAILS + 1)); }
 say "-- kernel (snd_clarett / WARN / hung) since $T0:"
 journalctl -k -o cat --since "$T0" | grep -E 'snd_clarett|WARNING|BUG|hung_task|blocked for' | sed 's/^/   /' | tee -a "$LOG" | head -40
 say "== done: $FAILS failing part(s)/leg(s)"
