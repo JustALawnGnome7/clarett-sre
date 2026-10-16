@@ -84,6 +84,52 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
 - **4 MSI vectors**; MSI-driven (`DisINTx+`). PCIe Gen1 x1. **Dummy serial AND dummy firmware-version
   words** — an 8Pre and an 8PreX report byte-identical `serial`/`fw app`/`fpga`, so none of the three
   identifies a unit or a model (Aug 21 2026; see the detection bullet under Driver limitations).
+  **★ THE REAL SERIAL IS IN FLASH (Oct 16 2026):** the `App_Env` flash segment (#4 on both units read,
+  64 KB) starts with one ASCII line, `SERIAL_NO = <digits>`, the rest erased (`0xff`): a 6- or 7-digit
+  decimal on every unit read, all different (the Claretts' line ends in a newline, the Red's does not).
+  Serial VALUES are deliberately kept out of this public repo. Read with `tools/fcp_flash_dump` (FLASH_INFO / SEGMENT_INFO / READ, read-only; Bennett's
+  lead). Not yet checked against the units' labels. Segment lists: Red 7 segments / 8 MB (App_Gold,
+  App_Upgrade, FPGA_Gold, FPGA_Upgrade, App_Env, App_Settings, Front_Upgrade); 4Pre 6 / 4 MB (no
+  Front_Upgrade). The vendor's first init command `0x800005 {0, 8}` answers u32 pairs, `2, 6` on the Red
+  and `1, 3` on the 4Pre, stable across reads: NOT the serial. **It is a {family, model} ID** (all five units,
+  Oct 16 2026, `tools/bench/unit_ident.sh`): Clarett 8Pre `1,1`, 8PreX `1,2`, 4Pre `1,3`, 2Pre `1,4`, Red 8Line
+  `2,6` — the vendor's first command identifies the model. For the Claretts it duplicates the stream
+  geometry; for the Reds it is the best candidate to separate 8Line/16Line from 4Pre/8Pre without the
+  Thunderbolt-controller check (needs a Red Pre unit to confirm). Not in any public FCP source (kernel
+  `scarlett2` and fcp-server define only `0x800000-2` and `0x80000c/d` in that category), and **USB firmware
+  does not implement it**: a Clarett 8Pre USB, switched to the kernel `fcp` driver for the test
+  (`snd_usb_audio vid=0x1235 pid=0x8208 device_setup=8`, `SCARLETT2_USE_FCP_DRIVER`; reverted after), answers
+  `0x800005` at lengths 8/16/32/64 with FCP error 7 (as it does `DEVMAP_INFO 0x80000c`), while `GET_DATA` works
+  on the same path. USB models are identified by their USB product ID, so they never needed it. Its appspace
+  layout differs too. **Full 8352-byte dump the same day** (kept git-ignored in `vendor-reference/dumps/`, since
+  it carries the serial): word @0 = `0x20a0` = the appspace size, App firmware 1195 @12 (= its descriptor's
+  `<version offset-bytes="12">` and version, so current), nickname @16 whose default suffix is the USB
+  `iSerial` in hex (the Thunderbolt units' convention too), output gains signed dB @52-71, HW-control
+  enables @102, mode @124, S/PDIF source @140/@158. From @160 on is Focusrite Control's own storage
+  (`app-ofs="160" appstorage-size="8192"`): undescribed 3-byte-entry tables (296-493, 876-940) and two
+  words near 6574/6688. 184 of 8352 bytes non-zero. Serials (flash `App_Env`) read on all
+  five, all distinct (values not recorded here). Appspace offset 80 on the Claretts is the
+  descriptor's `<nickname offset-bytes="80" bytes="32"/>`: a SAVED, user-renamable name, NOT an identity
+  field. Its default reads `<model>-<serial as 8 hex digits>` (the suffix is the flash serial in hex on the 2Pre, 4Pre and 8PreX), but
+  the 8Pre's is `Clarett8Pre-00000001`; the Red's nickname is @202 (writable, `command="23"`). Use the
+  `0x800005` model ID or the stream geometry for identity, never the nickname. Shared by all
+  four Claretts, so useless to tell them apart: App 1016, FPGA 1021, FPGA image `fp001005_tb_top`, FPGA
+  `type` @16 = 1, appspace word 0 = 5 (Red: 2, type 4, `fp001100`). The 2Pre alone has a 5 @20 (0 on the
+  other Claretts; the Red's front-panel version there), undecoded.
+  **★ AND THE REAL FIRMWARE VERSIONS ARE IN THE APPSPACE (Oct 16 2026):** the descriptors' `<firmware>`
+  `<version offset-bytes>` are offsets into the device's appspace — the ~16 KB settings area read with the
+  mailbox's `GET_DATA` (`0x800000`), where every control lives; NOT PCI configuration space. Offset 8 = App (Red 8Line `0x435` =
+  1077, 4Pre `0x3f8` = 1016), offset 12 = FPGA in its low 16 bits (Red `0x042003fc` -> 1020, 4Pre
+  `0x032003fd` -> 1021), offset 20 = Front panel (Red `0xf2` = 242). All match the descriptors exactly;
+  the Red runs the firmware RedNet Control 2 ships (1077/1020, not the 2023 XML's 1036/1012). The flash
+  agrees for the App: `App_Upgrade`+8 holds 1077/1016 (the recovery `App_Gold` +8: 1071 / 655). The FPGA
+  segments carry no version at +12; they open with a Xilinx bitstream header naming the design
+  (`fp001005_tb_top` on the 4Pre, the file its XML names; `fp001100_tb_top` on the Red). Appspace words
+  0 and 4 (Red 2/4, 4Pre 5/1) are not decoded. **Appspace offset 12 == BAR0 register `0x000`, so `0x000`
+  is the FPGA version word:** low 16 bits the FPGA build, the bits above a family code (`0x0420` Red,
+  `0x0320` Clarett). That is why all four Claretts read `0x032003fd` (every Clarett XML names FPGA 1021).
+  The driver's Red-vs-Clarett check keys on this word; safe while the high bits carry the family, but a
+  future FPGA update moves the low 16 bits.
   **A Red 8Line reports the same three constants too** (Sep 2 2026) — so this holds across product
   *lines*, not just within the Clarett line. See the Red range section below.
 - FPGA-based Thunderbolt front-end (firmware has App + FPGA segments).
@@ -1166,7 +1212,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     taken at its start: every card's thread is named `clarett-svc`, so with the Red streaming under
     PipeWire the old "must be zero" check refused to start. **8Pre PASSES too (Oct 16 2026, 20ch each way):**
     14.4 M / 11.5 M / 23.0 M frames sample-exact, 0 xruns, churn 30/30, the 96k-into-48k open narrowed.
-    Not yet run on the 4Pre.
+    **4Pre PASSES (Oct 16 2026, 20ch in / 8ch out, ramp PCM 7 -> "PCM 19"): the same figures, 0 failing
+    parts, so ALL FIVE MODELS PASS THE DUPLEX STRESS.**
     **★ RED-ONLY: TWO CLIENTS CONFIGURING IN THE SAME INSTANT CAN TRIP THE DUPLEX PERIOD LOCK.** The
     Red's playback ring is 2048 frames (its halved TX fragment) against capture's 4096, so the defaults
     differ (aplay 512/2048, arecord 1024/4096). When both refine before either's hw_params lands, the
@@ -1487,7 +1534,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `meter_poll_ms=0`: ~3 min with no host traffic at all, then a physical write (Air/48V LED), meters and
   knob all worked; 25 s capture with the knob clean, 773 events relayed. GUI closed: **0 mailbox commands
   in 3 s** and 0 relays in an untouched 25 s capture. With the GUI open its meter display reads ~10 Hz
-  on demand (the 50 ms cache caps it at 20). The "Focusrite Control issues a heartbeat, so the device
+  on demand (the 50 ms cache caps it at 20). **Oct 16 2026: `CLARETT_METER_CACHE_MS` 50 -> 40, and the GUI's
+  default 20 Hz Levels rate now gets fresh data on every read** — measured 19.9 Hz of GET_METER per card
+  (Red 8Line and 8Pre at once), gaps median 50.0 ms, p5-p95 49.7-51.2 ms. The GUI's 50 ms timer often
+  fires a fraction of a ms early, which the 50 ms cache answered from cache: hence the old ~10 Hz. (The
+  change is header-only, and srcversion hashes the .c files only, so it did not change: srcversion cannot
+  tell such builds apart.) The "Focusrite Control issues a heartbeat, so the device
   needs one" premise is retired (Bennett's finding, confirmed). `monitor_poll` now needs `meter_poll_ms`
   set too, since it runs in that worker. NOT yet run without the worker: 4Pre, 8Pre, Red (2Pre done Oct 12).
 - **STEP 5 OF THE BENNETT PORT, part 1 DONE (Oct 12 2026, 2Pre): S/MUX widths come from the device.**

@@ -280,8 +280,8 @@ macOS device answers with:
 - device caps `04 00 00 00 0e 00 00 00` = **4 playback / 14 record** (2Pre, matches RE);
 - firmware build **"Jan 20 2021 09:55:25"** + versions;
 - firmware segment names **App_Gold / App_Upgrade / FPGA_Gold / FPGA_Upgrade / App_Env / App_Settings**;
-- serial string **`SERIAL_NO = 998559`**;
-- the 8 KB config: device name `Clarett2Pre-000f3c9f`, the `7f 7f 7f…` gain-attenuation floor codes, and
+- serial string **`SERIAL_NO = <the unit's serial>`** (value redacted from this public repo);
+- the 8 KB config: device name `Clarett2Pre-<serial in hex>`, the `7f 7f 7f…` gain-attenuation floor codes, and
   at config offset **`0xc8`** (= appspace `app-ofs=200`) the same **`90 19 06 30…`** blob it writes back.
 
 Our Linux driver's **identical** `GET_DATA` requests return `size=0`, empty (§5a/§5c). So this is the wall
