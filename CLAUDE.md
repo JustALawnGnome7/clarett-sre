@@ -98,7 +98,8 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
   it then read EVERY Red control as the poison byte `0xa5` (volumes -23131, enums 165, firmware
   `0xa5a5a5a5`). A rebind cleared it. **That is the session-collapse signature (see the OPEN BUG entry),
   caused by one lost response mid-session — the strongest evidence yet for that bug's lost-response
-  theory, and proof the seq-0 reset does NOT recover a mid-session loss.** Steady state the flash is fast
+  theory, and proof the seq-0 reset does NOT recover a mid-session loss.** (Fixed the same day: the late
+response is acknowledged and the session continues; see the LOST-RESPONSE RECOVERY entry.) Steady state the flash is fast
   (`tools/bench/flash_latency.sh`, 200 reads of 64 B each: Red median 2.8 / max 4.7 ms, 8Pre 3.1 / 6.6 ms,
   none over 100 ms), so the miss is tied to the moment just after attach; whether it was late or never sent
   is unknown. With the lazy read, rebinds are back to baseline (8Pre ack -> registered 1.9-2.3 ms, Red
@@ -1748,10 +1749,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     asymmetry: a warm unit acks ~5x faster, well inside main's ~11.5 ms. **2Pre (Oct 12): 9.42-9.53 ms
     cold, 2.08-2.14 ms warm, attempt 1 every time** (step 4 entry). ~~Not yet run with the wait: an
     8Pre/8PreX rebind.~~ **8Pre warm rebind (Oct 16 2026): 2.01-2.07 ms, then 2.08-2.14 ms on the
-    no-lever build, attempt 1 every time** — the same ~2 ms as the other Claretts warm. **UNTESTED side effect:** the seq rule applies to
-    EVERY command, so after a response lost mid-session (e.g. the ASRock MMIO blackout) the NEXT command
-    — usually a different opcode — goes out as seq 0. Only a same-opcode retry at probe is measured. It may
-    keep the session in step (possibly relevant to the session-collapse bug) or may not; watch for it.
+    no-lever build, attempt 1 every time** — the same ~2 ms as the other Claretts warm. ~~**UNTESTED side effect:** after a response lost
+    mid-session the NEXT command goes out as seq 0.~~ **MEASURED Oct 16 2026: it does not keep the session in
+    step, and is replaced** — see the LOST-RESPONSE RECOVERY entry.
   - **★★ COLD-ATTACH REFUSAL — MITIGATED, NOT DIAGNOSED (Aug 21 2026, 8Pre, EliteBook 640 G11 behind
     the Dock G4). [Superseded by the RESOLVED entry above.]** `settle_ms` (default **3000**) leaves the device untouched after attach, before the
     pre-mailbox init. **This is an observation, not a root cause.**
@@ -1858,6 +1858,33 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     Aug 12 confirmed it covers writes too, and that "unarmed"-looking devices are the cold-readiness-race
     collapse (which arming does **not** rescue — only waiting does). So the unconditional arm was inverted
     to opt-in. The old `skip_arm` lever is **removed** — the default now *is* "don't arm".
+- **★★ LOST-RESPONSE RECOVERY — FIXED Oct 16 2026: A "LOST" RESPONSE IS A LATE ONE, AND ACKING IT WHEN IT
+  LANDS RESTORES THE SESSION.** Measured with a scratch test build (never committed) whose `lose_next`
+  lever treated the next N accepted commands as lost: no landing wait, ack withheld, as main does at its
+  100 ms deadline. On the 8Pre and Red 8Line, fcp-server stopped, `GET_DATA{0,16}` by `fcp_cmd`:
+  - **The response always landed, 17-21 ms late** (8/8: echo, seq, `err=0`, `size=16` all correct).
+  - **Until it is acked the device refuses EVERYTHING:** the next command draws `err=5` with the stale
+    rseq 8, then `err=3 size=0` forever, **whatever seq it carries** — tested seq 0 (main's rule), the lost
+    seq reused, and the next seq; all three left both units refusing for every read after. So the Oct 10
+    probe rule ("same seq recovers, next seq does not") was really about the response never having landed;
+    the seq-reuse-vs-0 question is moot.
+  - **Acking the late response once it has landed, then the next seq: every read after it correct** on
+    both units, sequence unbroken.
+  - **And main handed every refusal to the caller AS DATA:** `fcp_status` does not fail a call (INIT_1),
+    and a `size=0` reply copied the response buffer, i.e. the `0xa5` poison. That was the Red incident's
+    `0xa5` controls.
+  **Fix (snd-clarett, `clarett_retire_lost()`):** a command accepted but not landed by its deadline is
+  marked pending, its call fails `-ETIMEDOUT`; the NEXT command first waits for that response up to the lost
+  command's own deadline, acks it and continues at lost seq + 1 (if it never lands, as at power-up, seq 0 as
+  before). A reply with another command's seq fails `-EIO`, and so does a nonzero status with no data where
+  data was asked for. **Verified on the fixed build + the lever:** 8Pre and Red, one loss and three in a row:
+  the lost reads fail cleanly, the late responses are acked (0.3-23 ms), every read after them correct;
+  a loss of probe's first command (STREAM_INFO seq 0) on each: acked within 1 ms, probe registered; live,
+  with fcp-server and the GUI's Levels window running, 4 lost `GET_METER`s across both units: each acked at
+  the unit's next command, fcp-server logged nothing, both stayed Locked and working. Cost: at probe a
+  response that never lands now adds one `ready_resp_ms` (20 ms) wait before the retransmission (no unit
+  loses its first command since the address-ack wait). **Likely relevant to the session-collapse bug
+  below** (its zero-payload/refusal signature is this one), not yet tested on the ASRock.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
   the opcode correctly, but **every response payload is zeros** — `CAP_READ` reports no category supported
