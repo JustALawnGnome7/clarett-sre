@@ -11,7 +11,7 @@ DD=/sys/kernel/debug/dynamic_debug/control
 cursor() { journalctl -k -n0 --show-cursor | sed -n 's/^-- cursor: //p'; }
 dbg() { for f in "FCP op=" "engine armed" "stream-handshake:"; do echo "format \"$f\" $1" > $DD; done; }
 trap 'dbg -p' EXIT
-CH=$(journalctl -k -q | grep "snd_clarett $BDF: .*serial" | tail -1 | sed -n 's/.*PCM \([0-9]*\)\/\([0-9]*\)ch.*/\1 \2/p')
+CH=$(journalctl -k -q | grep "snd_clarett $BDF: .*FCP hwdep" | tail -1 | sed -n 's/.*PCM \([0-9]*\)\/\([0-9]*\)ch.*/\1 \2/p')
 [ -n "$CH" ] || { echo "no registration line for $BDF"; exit 1; }
 PB=${CH% *}; RC=${CH#* }
 echo "== $(date) arm cost card $CARD ($BDF) [$LABEL] srcversion $(cat /sys/module/snd_clarett/srcversion)" | tee -a "$LOG"

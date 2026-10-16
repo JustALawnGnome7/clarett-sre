@@ -21,7 +21,7 @@ for i in $(seq 1 "$N"); do
 	reg=""
 	for _ in $(seq 1 40); do
 		sleep 0.25
-		reg=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep "snd_clarett $BDF: [^:]*: serial" | tail -1)
+		reg=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep -E "snd_clarett $BDF: [^:]*: .*(FCP hwdep|no interfaces registered)" | tail -1)
 		[ -n "$reg" ] && break
 	done
 	k=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep "snd_clarett $BDF")

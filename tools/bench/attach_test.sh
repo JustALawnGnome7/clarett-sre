@@ -19,7 +19,7 @@ for i in $(seq 1 "$N"); do
 	reg=""
 	for _ in $(seq 1 240); do
 		sleep 0.5
-		reg=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep -E "snd_clarett .*: Clarett [^:]*: serial|snd_clarett .*: Red [^:]*: serial" | tail -1)
+		reg=$(journalctl -k -q -o short-unix --after-cursor "$cur" | grep -E "snd_clarett .*: Clarett [^:]*: .*(FCP hwdep|no interfaces registered)|snd_clarett .*: Red [^:]*: .*(FCP hwdep|no interfaces registered)" | tail -1)
 		[ -n "$reg" ] && break
 	done
 	sleep 1

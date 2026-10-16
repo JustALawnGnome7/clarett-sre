@@ -19,7 +19,7 @@ for line in sys.stdin:
 		en, ack, ack_us = t, None, None
 	elif "acknowledged after" in m:
 		ack, ack_us = t, m.split("acknowledged after ")[1].split()[0]
-	elif ": serial" in m:
+	elif "FCP hwdep" in m or "no interfaces registered" in m:	# the probe summary line
 		parts = [f"ack {ack_us or 'none'} us"]
 		if en is not None and ack is not None:
 			parts.append(f"enable->ack {ack - en:.1f} ms")

@@ -49,7 +49,7 @@ for i in $(seq 1 "$N"); do
 	up=no
 	for _ in $(seq 1 50); do pci_up && { up=yes; break; }; sleep 0.1; done
 	sleep 1
-	reg=$(journalctl -k -q --since "-15s" | grep -c "snd_clarett .*: serial")
+	reg=$(journalctl -k -q --since "-15s" | grep -c -E "snd_clarett .*(FCP hwdep|no interfaces registered)")
 	echo "-- cycle $i: found, then:${ev:- no bounce}; authorized=$pre before; authorize @$(ms "$t0" "$ta") ms rc $arc; PCIe $up; registered $reg" | tee -a "$LOG"
 	if [ $up = no ]; then
 		journalctl -k -q --since "-10s" | grep -E "thunderbolt|tunnel" | tail -5 | sed 's/^/   /' | tee -a "$LOG"

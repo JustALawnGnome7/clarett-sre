@@ -89,9 +89,20 @@ control in Focusrite Control, find the matching mailbox transaction in the trace
   decimal on every unit read, all different (the Claretts' line ends in a newline, the Red's does not).
   Serial VALUES are deliberately kept out of this public repo. **THE DRIVER USES BOTH (Oct 16 2026):** the probe line prints
   `App <n>, FPGA <n>` (+ `Front <n>` on a Red, model field `fw_front`) from the seeded appspace shadow,
-  and the serial is read at probe (FLASH_INFO -> SEGMENT_INFO by name `App_Env` -> FLASH_READ 64 B, parse
-  `SERIAL_NO =`) into `/sys/bus/pci/devices/<bdf>/serial` (0444, like USB's; absent if the read fails),
-  NEVER logged. The BAR0 placeholder reads (`0x010/0x014`, `0x8000`) and the longname's `fw app` are gone.
+  and the serial (FLASH_INFO -> SEGMENT_INFO by name `App_Env` -> FLASH_READ 64 B, parse `SERIAL_NO =`) is
+  `/sys/bus/pci/devices/<bdf>/serial` (0444, like USB's), NEVER logged. **It is read LAZILY, on the file's
+  first read, cached, one attempt (`-ENODATA` if it failed), and flash commands (`0x004xxx`) get a 2 s
+  response deadline (`CLARETT_FLASH_TIMEOUT_MS`)** — because the first version read it at probe, and on
+  the 3rd of 3 Red 8Line warm rebinds that FLASH_READ's response did not land within 100 ms: ack withheld,
+  seq reset, the card still registered (110 ms late), but fcp-server's next `INIT_2` also never landed and
+  it then read EVERY Red control as the poison byte `0xa5` (volumes -23131, enums 165, firmware
+  `0xa5a5a5a5`). A rebind cleared it. **That is the session-collapse signature (see the OPEN BUG entry),
+  caused by one lost response mid-session — the strongest evidence yet for that bug's lost-response
+  theory, and proof the seq-0 reset does NOT recover a mid-session loss.** Steady state the flash is fast
+  (`tools/bench/flash_latency.sh`, 200 reads of 64 B each: Red median 2.8 / max 4.7 ms, 8Pre 3.1 / 6.6 ms,
+  none over 100 ms), so the miss is tied to the moment just after attach; whether it was late or never sent
+  is unknown. With the lazy read, rebinds are back to baseline (8Pre ack -> registered 1.9-2.3 ms, Red
+  2.3-3.6 ms). The BAR0 placeholder reads (`0x010/0x014`, `0x8000`) and the longname's `fw app` are gone.
   Verified on the Red 8Line and 8Pre: both files correct. Two traps hit on the way: FLASH_INFO's reply is
   `{u32 total size, u32 segment count, u8[4]}` (the count is at +4; fcp_flash_dump's header comment had it
   at +0, now fixed), and the kernel's `isalnum()` follows Latin-1, so the erased `0xff` after the Red's
@@ -1872,6 +1883,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     the same second as a `badreads` bump. If so, collapse is not its own bug but another symptom of the
     platform fault. Find the onset with
     `journalctl -k --since "$start" | grep FCPr | perl -ne 'print if /seq=(\d+).*rseq=(\d+).*err=(\d+)/ && ($1 != $2 || $3)'`.
+  - **Oct 16 2026, laptop (no blackout), Red 8Line: REPRODUCED BY ONE LOST RESPONSE.** A FLASH_READ at probe
+    whose response never landed was followed by fcp-server reading every control as the driver's poison
+    byte (`0xa5`), and a rebind cleared it — this bug's signature, with a known single trigger. See the
+    serial entry under Hardware facts. The driver's seq-0 reset did not keep the session in step.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/provenance/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever

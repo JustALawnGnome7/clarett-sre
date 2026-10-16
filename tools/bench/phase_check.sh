@@ -15,7 +15,7 @@ dbg_off() {
 	echo 'format "stream-svc:" -p' > $DD
 }
 trap 'dbg_off; kill ${REC:-} 2>/dev/null' EXIT
-CH=$(journalctl -k -q | grep "snd_clarett $BDF: .*serial" | tail -1 | sed -n 's/.*PCM [0-9]*\/\([0-9]*\)ch.*/\1/p')
+CH=$(journalctl -k -q | grep "snd_clarett $BDF: .*FCP hwdep" | tail -1 | sed -n 's/.*PCM [0-9]*\/\([0-9]*\)ch.*/\1/p')
 [ -n "$CH" ] || { echo "no registration line for $BDF"; exit 1; }
 
 echo "== $(date) phase check card $CARD ($BDF, ${CH}ch)" | tee -a "$LOG"
