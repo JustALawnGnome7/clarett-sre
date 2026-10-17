@@ -1117,8 +1117,21 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     256. `skip/repeat B` with B == the ALSA buffer is an xrun; a non-multiple of the step is corruption.
     Drive both legs with `aplay`/`arecord` on `hw:N,0`, never PipeWire (it opens the capture side too).
   - **Retest list:** items 1, 3 and 4 are done (128 frames clean duplex at 64/60ch with RT clients on the
-    EliteBook); **2 and 6 done Oct 16 2026** (laptop). Still open: 5 (analogue round-trip latency,
-    measured). **Item 6:** `P64=1 duplex_stress.sh`, 60 s per rate, non-RT clients, a 1.33 ms period
+    EliteBook); **2, 5 and 6 done Oct 16 2026** (laptop) — the retest list is CLOSED. **Item 5, measured
+    round trip (8Pre, Analogue Out 1 cabled to Analogue In 1, `tools/bench/rt_latency.sh` + `rtlat.c`):**
+    linked duplex, a click on playback PCM 1 (analogue) and PCM 7 (digital loopback to ch 19), 8 clicks
+    per leg, every leg exact to the frame. A frame written at playback position K is captured at
+    **K + P + 32 frames** on the digital loopback at every rate and period (P = period: 32..1024 at
+    48 kHz, 128/512 at 96, 256/1024 at 192), and the analogue path adds **28 frames (0.58 ms) at 48 kHz,
+    24 (0.25 ms) at 96, 23 (0.12 ms) at 192** (ADC+DAC filters). The P is the driver's: playback START
+    anchors frame 0 one period on (`clarett_pcm_trigger()`, so period boundaries stay on events; it is in
+    the reported delay); the 32 is the engine (two fragments). **An app's round trip = its playback lead
+    + P + 32 + converters:** 48 kHz period 64 with a 2-period buffer = 252 frames = **5.25 ms**; period 32
+    with the 128-frame minimum buffer = 220 frames = **4.6 ms** — only a 32-frame period is under the
+    5 ms amp-modelling target. Anchoring playback off the event boundaries would save the P (a design
+    change, not proposed). **Side finding:** after a sample-rate change the ANALOGUE input reads exactly
+    zero for ~1 s, then ramps up over a few hundred ms (converter mute while re-locking); the digital
+    loopback is unaffected, so the ramp tests never saw it. **Item 6:** `P64=1 duplex_stress.sh`, 60 s per rate, non-RT clients, a 1.33 ms period
     (64/128/256 frames at 48/96/192 kHz, buffer 4 periods): **8Pre and Red 8Line sample-exact at all three
     rates, 0 xruns** (20.2 M ramp frames each), no badreads or device overruns. Holding 64 FRAMES at 192 kHz
     (333 us, `P64_FRAMES=1`) is the cadence-1 floor below: the 8Pre's servicer coalesced 2 periods
@@ -1128,8 +1141,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
   `periods=45000` exact. Capture alone at the same cadence measured 1401–1687 µs, so **the TX fill costs
-  nothing measurable.** That is ~2.7 ms round trip before converter latency — inside the <5 ms
-  amp-modeling target, on a host without the SMI freeze. **Cadence 1 (16 frames) is the HARDWARE floor,
+  nothing measurable.** ~~That is ~2.7 ms round trip before converter latency — inside the <5 ms
+  amp-modeling target~~ (derived, and wrong: MEASURED Oct 16 2026 at 5.25 ms with a 2-period buffer —
+  see retest item 5 above; the driver's one-period playback offset was not counted), on a host without
+  the SMI freeze. **Cadence 1 (16 frames) is the HARDWARE floor,
   not the usable one:** it runs, but the engine flags ~0.6 period overruns/s, the servicer coalesces 1–2
   periods per poll, and `CLARETT_TX_GUARD_FRAMES` (then 64; 16 since Oct 16 2026) was *four periods* wide
   there — so the TX guard, not the period, would have set playback latency anyway. Cadence sweep at 48 kHz (1/4/16/64 = 16/64/256/1024

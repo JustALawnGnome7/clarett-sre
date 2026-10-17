@@ -192,7 +192,10 @@ default described below was later SUPERSEDED by the per-stream `CLARETT_MAX_PERI
     4. ~~**Does the 128 pin survive real use?**~~ **ANSWERED NO (Sep 10 2026):** a JUCE app garbled at
        every buffer above 64 samples. Replaced by the `CLARETT_MAX_PERIODS` rule — see the ★★★ bullet at
        the top of this section.
-    5. **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
+    5. **DONE Oct 16 2026 (8Pre, laptop):** round trip = playback lead + one period + 32 frames +
+       converters (28 frames at 48 kHz); 5.25 ms at period 64 with a 2-period buffer, 4.6 ms at period
+       32 / buffer 128 (`tools/bench/rt_latency.sh`; full record in `CLAUDE.md`, retest list).
+       Original: **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
        impulse, count frames). NOTHING today measured plucked-string-to-speaker latency; the digital
        loopback cannot see the converters. This is the number the amp-modeling target is about.
     6. **DONE Oct 16 2026 (laptop):** 8Pre and Red 8Line, 60 s duplex at a 1.33 ms period (64/128/256
