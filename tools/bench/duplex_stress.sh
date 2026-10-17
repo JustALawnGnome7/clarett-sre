@@ -29,10 +29,11 @@ C2Pre)       CH=14 PB=4  R0=3 DST=13 EXP=13;;
 C4Pre)       CH=20 PB=8  R0=7 DST=19 EXP=19;;
 C8Pre)       CH=20 PB=20 R0=7 DST=19 EXP=19;;
 C8PreX)      CH=28 PB=28 R0=7 DST=27 EXP=27;;
-# 31 -> 31 survives every speed's S/MUX tail. The Red's playback ring is 2048 frames against capture's
-# 4096, so each side's default period differs (512 vs 1024) and two clients configuring in the same
-# instant can trip the duplex period lock; the churn gives both the same geometry.
-R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 CHURN_XA="--period-size=512 --buffer-size=2048";;
+# 31 -> 31 survives every speed's S/MUX tail. The churn runs each app's default geometry: the driver
+# gives both directions the Red's shorter (2048-frame playback) ring as the ceiling, so the defaults
+# agree and two clients configuring in the same instant cannot trip the duplex period lock.
+# CHURN_XA="--period-size=... --buffer-size=..." pins a geometry instead.
+R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31;;
 *) echo "unknown card id $ID"; exit 1;;
 esac
 RAMP=${RAMP:-$R0}

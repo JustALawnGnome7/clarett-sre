@@ -341,7 +341,9 @@ into `captures/`, never `/tmp`.
     logged `gapmax` 46-60 ms (worst 60.3 ms, i.e. WORSE than the runs that failed) and the device still
     raised 3 unacked periods, while `readmax` stayed at 48-60 us — the servicer was stalled between
     polls rather than caught inside a `readl`. **So on this board a Red needs `max_buffer=4096`; 2048
-    would have failed against the measured 60 ms tail anyway.**
+    would have failed against the measured 60 ms tail anyway.** (Since Oct 16 2026 the Red's capture
+    ceiling is 2048 frames, its playback ring — see the duplex-lock fix under the duplex stress entry — so
+    this absorption is no longer available on that board.)
     **Method note (my error, twice over):** I inferred "not the SMI" from the overrun *rate* being too
     high for the documented cadence, and "narrower streams are clean" from 2-second runs — far too short
     to sample a fault this intermittent. The driver already publishes `readmax`/`gapmax` telemetry that
@@ -1244,8 +1246,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     differ (aplay 512/2048, arecord 1024/4096). When both refine before either's hw_params lands, the
     second hw_params fails the now-pinned `lock_period` (`Unable to install hw params`; aplay asserts):
     7/10 clean with defaults, **10/10 with both at 512/2048**, and no hang or leftover thread either way.
-    A single duplex client (configures one direction, then the other) never hits it. Possible fix, not
-    chosen: cap the Red's capture buffer at the TX ring so both defaults agree.
+    A single duplex client (configures one direction, then the other) never hits it. ~~Possible fix, not
+    chosen: cap the Red's capture buffer at the TX ring so both defaults agree.~~ **FIXED Oct 16 2026
+    (snd-clarett):** `clarett_pcm_open()` gives both directions the shorter ring's ceiling (no change on
+    the Claretts, whose rings match), so the defaults agree. Red 8Line, `SHORT=1 duplex_stress.sh` with
+    the churn now on each app's defaults (its 512/2048 pin dropped; `CHURN_XA` still pins one): **10/10
+    churn cycles clean**, sustained 48/96/192 kHz sample-exact with 0 xruns, the 96k-into-48k open
+    narrowed and unbroken, no kernel warnings. Cost: the Red's largest capture buffer halves to 2048
+    frames (43 ms at 48 kHz).
     **★ SIDE FINDING — the clock keeps the OLD rate for ~20-30 ms after a change to a faster one.** The
     first stream after 48->96 or 96->192 kHz logs `late=1..3` in its first `stream-svc` window with
     `gapmax` equal to the OLD rate's period (21.3 ms at "96k", 10.7 ms at "192k") while each step is
