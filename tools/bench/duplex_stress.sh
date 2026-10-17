@@ -1,6 +1,10 @@
 #!/bin/bash
 # Simultaneous capture + playback stress, checked with the digital-loopback ramp. Run as your user:
 #   bash duplex_stress.sh <card>          (SHORT=1 for a ~3 min smoke run)
+#   P64=1 bash duplex_stress.sh <card>    (only the low-latency regression, parts B and C skipped: a
+#                                         1.33 ms period (64 frames at 48 kHz, 128 at 96, 256 at 192),
+#                                         buffer 4 periods, P64_S s each, default 60; P64_FRAMES=1 keeps
+#                                         64 frames at every rate, i.e. 333 us at 192 kHz)
 # Playback PCM $RAMP carries a streamed ramp at the full playback width, routed to the first loopback
 # capture destination; the full-width capture is checked live (duplex_ramp.py). Parts:
 #   A  sustained duplex: long legs at 48/96/192 kHz, plus a small-buffer leg
@@ -19,6 +23,7 @@ D=$(dirname "$(readlink -f "$0")")
 W=$(mktemp -d)
 LOG=${BENCH_LOG_DIR:-$PWD}/duplex_stress.log
 PY="python3 -I $D/duplex_ramp.py"
+[ -e /proc/asound/card$CARD/id ] || { echo "no card $CARD (cat /proc/asound/cards)"; exit 1; }
 ID=$(cat /proc/asound/card$CARD/id)
 SHORT=${SHORT:-0}
 
@@ -106,6 +111,18 @@ say "== $(date) duplex stress card $CARD $ID, ${CH}ch capture + ${PB}ch playback
 BASE=$(svc)
 [ "$BASE" = 0 ] || say "   baseline: $BASE clarett-svc thread(s) from other cards; checks compare against it"
 
+if [ "${P64:-0}" = 1 ]; then
+	say "-- A. low-latency duplex, buffer = 4 periods (non-RT clients)"
+	for R in 48000 96000 192000; do
+		P=64; [ "${P64_FRAMES:-0}" = 1 ] || P=$(( 64 * R / 48000 ))
+		leg $R ${P64_S:-60} 1 "--period-size=$P --buffer-size=$(( 4 * P ))" "$R Hz ${P64_S:-60} s, period $P / buffer $(( 4 * P ))"
+	done
+	[ $(svc) = "$BASE" ] || { say "!! clarett-svc thread left at the end"; FAILS=$((FAILS + 1)); }
+	say "-- kernel (snd_clarett / WARN / hung) since $T0:"
+	journalctl -k -o cat --since "$T0" | grep -E 'snd_clarett|WARNING|BUG|hung_task|blocked for' | sed 's/^/   /' | tee -a "$LOG" | head -40
+	say "== done: $FAILS failing leg(s)"
+	exit
+fi
 if [ "$SHORT" = 1 ]; then A="48000:30 96000:20 192000:20"; ASM=20; NB=10; else A="48000:300 96000:120 192000:120"; ASM=120; NB=30; fi
 say "-- A. sustained duplex"
 for a in $A; do leg ${a%:*} ${a#*:} 1 "" "${a%:*} Hz ${a#*:} s, default buffer"; done

@@ -180,7 +180,11 @@ default described below was later SUPERSEDED by the per-stream `CLARETT_MAX_PERI
        **duplex arm/close races did not recur** — simultaneous start and stop at four buffer sizes on a
        new model left no orphaned `clarett-svc` kthread and no `WARN_ON` splat.
        Still not covered: rates above 48 kHz, and a NON-realtime client.
-    2. **The `tx_guard` question** — does the synthetic short-lead client reproduce the 16/32 catastrophe
+    2. **DONE Oct 16 2026 (laptop, 8Pre): the default guard is now 16 frames.** Breaks = 0 in all 36 runs
+       of `tools/bench/tx_guard_lead.sh`; a short-lead client loses frames as silence in proportion to the
+       guard (16: ~0.1%, 32: half, 64: all), a full-buffer client is sample-exact at every guard. Full
+       record in `CLAUDE.md` (the `tx_guard` bullet). Original question: **The `tx_guard` question** — does
+       the synthetic short-lead client reproduce the 16/32 catastrophe
        there? If it does NOT, it is this host or that client and the floor stays at one fragment; if it
        DOES, the floor genuinely needs raising. Do not change the clamp on this box's evidence.
     3. **A realtime client.** Everything here ran at normal priority; a DAW runs SCHED_FIFO. Re-run the
@@ -191,7 +195,9 @@ default described below was later SUPERSEDED by the per-stream `CLARETT_MAX_PERI
     5. **Round-trip latency, measured not derived** — analogue loopback (output patched to input,
        impulse, count frames). NOTHING today measured plucked-string-to-speaker latency; the digital
        loopback cannot see the converters. This is the number the amp-modeling target is about.
-    6. **The 60 s cadence-4 duplex regression** (never re-run) and **rates other than 48 kHz** (all of
+    6. **DONE Oct 16 2026 (laptop):** 8Pre and Red 8Line, 60 s duplex at a 1.33 ms period (64/128/256
+       frames at 48/96/192 kHz), sample-exact, 0 xruns (`P64=1 tools/bench/duplex_stress.sh`). Original:
+       **The 60 s cadence-4 duplex regression** (never re-run) and **rates other than 48 kHz** (all of
        today was 48k).
   - **★ THE 8PreX/8Pre "PIPEWIRE PLAYS NOTHING" EPISODE WAS DEVICE EXCLUSIVITY, NOT A DRIVER BUG
     (Aug 27 2026, resolved Aug 31 by the operator).** `snd_pcm_new(..., 0, 1, 1, ...)` gives **one

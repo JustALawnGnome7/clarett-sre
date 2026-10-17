@@ -2,6 +2,7 @@
 # Streaming digital-loopback ramp, for runs too long to hold in a file.
 #   duplex_ramp.py gen <frames> <channels> <ramp_ch>   S32_LE ramp ((n+1)*256) on ramp_ch (1-based) -> stdout
 #   duplex_ramp.py check <channels> <ch> [expect_frames] S32_LE capture on stdin -> one result line
+#   duplex_ramp.py count <channels> <ch>               S32_LE capture on stdin -> breaks and gaps
 # The check follows channel ch: silence, then the ramp, then silence. It reports the first ramp value
 # (256 = no start loss), the run length, every step that is not +256 inside the run, and any non-zero
 # sample after the run ended. Steps wrap mod 2^32, so a ramp longer than 2^24 frames is fine.
@@ -67,7 +68,41 @@ def check(chans, ch, expect):
 	     + (" (" + " ".join(b for b in breaks if b) + ")" if nb else "") + f", {tail} non-zero after")
 	print(s)
 
+def count(chans, ch):
+	"""For a ramp interrupted on purpose (a client that underruns): count every step between two
+	non-zero samples that is not +256 (a skip or repeat: torn or misplaced audio) separately from the
+	runs of silence inside the ramp (underrun gaps, the client's own doing)."""
+	inp = sys.stdin.buffer
+	fb = 4 * chans
+	pend = b''
+	seen = breaks = gaps = 0
+	prev = None		# last non-zero sample
+	in_gap = False
+	while True:
+		buf = inp.read(fb * CHUNK)
+		if not buf:
+			break
+		buf = pend + buf
+		n = len(buf) // fb
+		pend = buf[n * fb:]
+		for v in array.array('I', buf[:n * fb])[ch - 1::chans]:
+			if not v:
+				if prev is not None:
+					in_gap = True
+				continue
+			seen += 1
+			if prev is not None:
+				if in_gap:
+					gaps += 1
+				elif (v - prev) & M != 256:
+					breaks += 1
+			in_gap = False
+			prev = v
+	print(f"ramp {seen} frames, breaks={breaks} gaps={gaps}")
+
 if sys.argv[1] == 'gen':
 	gen(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]))
+elif sys.argv[1] == 'count':
+	count(int(sys.argv[2]), int(sys.argv[3]))
 else:
 	check(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else None)

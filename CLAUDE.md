@@ -1092,8 +1092,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   - **PipeWire adapts to a lower ceiling by shrinking its ALSA period, not its graph quantum** (quantum
     stayed 1024 on 2Pre and 8Pre), and its unconstrained pick is not deterministic.
   - **`tx_guard` is not a latency term** (a write deadline, `delay` identical at 64/128/256). With an
-    ordinary client every guard from 16 to 96 is equally clean; the 16/32 "catastrophe" came from a
-    synthetic short-lead client and is unresolved (retest item 2). Default and clamp floor unchanged.
+    ordinary client every guard from 16 to 96 is equally clean. ~~the 16/32 "catastrophe" came from a
+    synthetic short-lead client and is unresolved (retest item 2). Default and clamp floor unchanged.~~
+    **★ RESOLVED Oct 16 2026 — DEFAULT LOWERED 64 -> 16 (one fragment; snd-clarett).** Laptop, 8Pre,
+    digital loopback, 48 kHz, `tools/bench/tx_guard_lead.sh` (3 reps x 20 s per cell, non-RT clients):
+    **breaks = 0 in all 36 runs.** aplay (full buffer) sample-exact at guard 16/32/64, period 32/128 and
+    64/256. `leadplay` (holds a 48-frame lead in 16-frame writes, period 32/128) lost frames as SILENCE,
+    set by the guard alone and identical across reps: guard 16 ~0.1% (34-50 gaps), 32 half (~29,970 gaps),
+    64 everything after its first 48 frames (copied once at START). At period 64 it underruns every period
+    (lead < period) whatever the guard. **Mechanism (`clarett_play_fill()`):** the fill starts at
+    `pcm_frames + guard` and writes silence past `appl_ptr`; a frame the app writes after its slot has come
+    within the guard of the last event's position is never copied, so the silence placed earlier plays.
+    Near the read position the fill otherwise rewrites frames with the data they already hold, so a
+    smaller guard cannot tear a normal client; the Sep 2 "catastrophe" was this deadline, seen through
+    that driver. The guard is a deadline (guard + up to one period ahead of the read): smaller is better.
+    `CLARETT_MIN_BUFFER_FRAMES` was `2 * guard`; now a plain 128. Re-verified on guard 16: 8Pre and Red
+    low-latency duplex at 48/96/192 kHz (next item), 8Pre `SHORT=1 duplex_stress.sh` 0 failing parts.
   - Servicer CPU is flat across buffer sizes (~11-12 %, dominated by MMIO polling), so don't argue
     against small periods on CPU grounds, despite `clarett_tx_fill` copying `ring - guard` every tick.
   - **★ THE DIGITAL-LOOPBACK RAMP — reuse it for any playback-glitch question.** Route a playback
@@ -1103,8 +1117,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     256. `skip/repeat B` with B == the ALSA buffer is an xrun; a non-multiple of the step is corruption.
     Drive both legs with `aplay`/`arecord` on `hw:N,0`, never PipeWire (it opens the capture side too).
   - **Retest list:** items 1, 3 and 4 are done (128 frames clean duplex at 64/60ch with RT clients on the
-    EliteBook). Still open: 2 (`tx_guard` short-lead client on a clean host), 5 (analogue round-trip
-    latency, measured), 6 (60 s cadence-4 duplex re-run; rates other than 48 kHz for these tests).
+    EliteBook); **2 and 6 done Oct 16 2026** (laptop). Still open: 5 (analogue round-trip latency,
+    measured). **Item 6:** `P64=1 duplex_stress.sh`, 60 s per rate, non-RT clients, a 1.33 ms period
+    (64/128/256 frames at 48/96/192 kHz, buffer 4 periods): **8Pre and Red 8Line sample-exact at all three
+    rates, 0 xruns** (20.2 M ramp frames each), no badreads or device overruns. Holding 64 FRAMES at 192 kHz
+    (333 us, `P64_FRAMES=1`) is the cadence-1 floor below: the 8Pre's servicer coalesced 2 periods
+    (`stepmax=0x8`), the device flagged 6 overruns in 60 s and non-RT aplay underran once — the client
+    falling behind at the floor, not corruption (0 breaks).
 - **★ LOW-LATENCY FLOOR = `dyn_period` cadence 4 (64-frame period, 1.33 ms), FULL DUPLEX (Aug 19 2026,
   2Pre).** 60 s of simultaneous 14ch capture + 4ch playback: `gapmax` 1369–1557 µs against 1333 nominal,
   `stepmax` exactly one period throughout (**no coalescing**), `late`/`overrun`/`badreads` all 0,
@@ -1112,8 +1131,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   nothing measurable.** That is ~2.7 ms round trip before converter latency — inside the <5 ms
   amp-modeling target, on a host without the SMI freeze. **Cadence 1 (16 frames) is the HARDWARE floor,
   not the usable one:** it runs, but the engine flags ~0.6 period overruns/s, the servicer coalesces 1–2
-  periods per poll, and `CLARETT_TX_GUARD_FRAMES` (64) is *four periods* wide there — so the TX guard, not
-  the period, would set playback latency anyway. Cadence sweep at 48 kHz (1/4/16/64 = 16/64/256/1024
+  periods per poll, and `CLARETT_TX_GUARD_FRAMES` (then 64; 16 since Oct 16 2026) was *four periods* wide
+  there — so the TX guard, not the period, would have set playback latency anyway. Cadence sweep at 48 kHz (1/4/16/64 = 16/64/256/1024
   frames) is in `CLARETT_CTR_OVERRUN`'s comment in `clarett.h`.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
@@ -1633,7 +1652,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   comments (opcode numbers, the FCP status codes, MUX_READ's 28-entry cap); `NOTIFY_EV_SYNC` kept as
   part of the event-bit set. KEPT: `enable_pcm`, `enable_midi`, `clock_source`, `hw_gain_follow`,
   `max_buffer`, `notify_ms`, `meter_poll_ms`, `monitor_poll`, `addr_ack_ms`, `ready_resp_ms`,
-  `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 open),
+  `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 closed Oct 16 2026: default 16),
   `phase_cycle` (~~remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix~~ REMOVED Oct 16
   2026, the polled fallback kept; see below). Also fixed
   `addr_ack_ms`'s description (0 now means no wait, not 3.22 ms). 2Pre on the part 4 build: rebind
