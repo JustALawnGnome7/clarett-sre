@@ -20,7 +20,7 @@ case $ID in
 C2Pre)        CH=14 PB=4  R0=3  DST=13 EXP=13 EXT=ADAT;;
 C4Pre)        CH=20 PB=8  R0=7  DST=19 EXP=19 EXT=ADAT;;
 C8Pre)        CH=20 PB=20 R0=7  DST=19 EXP=19 EXT=ADAT;;
-C8PreX)       CH=28 PB=28 R0=7  DST=27 EXP=27 EXT=ADAT;;
+C8PreX)       CH=28 PB=28 R0=7  DST=27 EXP=27 EXT="ADAT 1";;
 R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 EXT="ADAT 1";;
 *) echo "unknown card id $ID"; exit 1;;
 esac
@@ -31,6 +31,9 @@ PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readli
 val() { amixer -c "$CARD" cget name="$1" | sed -n 's/.*: values=//p' | head -1; }
 item() { local v; v=$(val "$1"); amixer -c "$CARD" cget name="$1" | sed -n "s/.*Item #$v '\(.*\)'$/\1/p"; }
 say() { echo "$*" | tee -a "$LOG"; }
+# amixer -q ignores an unknown item name, which leaves the clock on Internal and fakes a pass
+amixer -c "$CARD" cget name='Clock Source' | grep -q "Item #[0-9]* '$EXT'$" || {
+	echo "'$EXT' is not a Clock Source item on card $CARD:"; amixer -c "$CARD" cget name='Clock Source' | grep Item; exit 1; }
 
 : > "$W/restore"
 CLK0=$(val 'Clock Source')

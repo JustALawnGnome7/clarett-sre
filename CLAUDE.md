@@ -1405,7 +1405,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     a change while RUNNING did nothing). A sysfs write still waits for the next arm. **Hardware-verified
     (`tools/bench/clock_live.sh`):** 8Pre and Red 8Line, a 20 s loopback ramp with Clock Source switched to
     an absent external source at 5 s and back to Internal at 12 s: Sync Unlocked then Locked, **960,000
-    frames with 0 breaks** on both, both clients exit 0, nothing in the kernel log. The engine keeps
+    frames with 0 breaks** on both, both clients exit 0, nothing in the kernel log. **8PreX the same (Oct 16
+    2026):** ADAT 1 (nothing connected) -> Unlocked, Internal -> Locked, 960,000 frames 0 breaks, and Sync
+    followed both changes with PipeWire holding the card. (Its first run was a false pass: the 8PreX names
+    the source "ADAT 1", `amixer -q` ignores an unknown item, so the clock never left Internal; the script
+    now refuses an external source that is not a Clock Source item.) The engine keeps
     running through a re-clock; the loopback stays inside the device clock, so a glitch on an analogue or
     external signal during the change-over is not excluded. With PipeWire holding the Red RUNNING both
     ways, Sync followed both changes.
