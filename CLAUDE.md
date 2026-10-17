@@ -23,8 +23,8 @@ masqueraded as an attach-time gate). Gating the ack on the response actually lan
   2Pre's front-panel LEDs and switch its relays. **Attribution matrix CLOSED 3/3 (July 16, fresh DC
   power-cycle each): two gated runs arm clean, the levers-off control run walls (seed `-5`) — the
   landed-gated ack + pre-submit header zero are now the unconditional default cycle** (`gated_ack`
-  lever retired; `resp_trace` kept as telemetry). **PENDING:** re-audit the shadow/`GET_DATA`
-  refresh paths (written for a walled device). ~~The `meter_poll_ms` "heartbeat" hypothesis~~ — RESOLVED
+  lever retired; `resp_trace` kept as telemetry). ~~**PENDING:** re-audit the shadow/`GET_DATA`
+  refresh paths (written for a walled device).~~ DONE Oct 16 2026 (see the LOST-RESPONSE RECOVERY entry). ~~The `meter_poll_ms` "heartbeat" hypothesis~~ — RESOLVED
   Oct 10 2026: no heartbeat is needed (8PreX; see the Bennett-port step 4 entry).
 - **Data plane** (PCM DMA streaming) — **extensively traced and reverse-engineered**
   (boot→stream captures + guest-RAM dumps). The engine **plumbing is validated** — arms
@@ -1883,7 +1883,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   with fcp-server and the GUI's Levels window running, 4 lost `GET_METER`s across both units: each acked at
   the unit's next command, fcp-server logged nothing, both stayed Locked and working. Cost: at probe a
   response that never lands now adds one `ready_resp_ms` (20 ms) wait before the retransmission (no unit
-  loses its first command since the address-ack wait). **Likely relevant to the session-collapse bug
+  loses its first command since the address-ack wait).
+  **★ CALLER AUDIT, same day — CLOSES THE "RE-AUDIT PATHS WRITTEN FOR A WALLED DEVICE" ITEM.** Every
+  mailbox caller was read against the new `-ETIMEDOUT`/`-EIO`: none writes state on failure. Writes update
+  the shadow and persist only after SET_DATA and DATA_CMD both succeed; the meter cache is stamped only on
+  success; the follow/monitor paths skip on a failed region read; the hwdep returns the error to
+  fcp-server (persist/follow only after success); hwdep INIT never touches seq; the clock control, stream
+  handshake and persist worker only log. Two fixes came out of it: (1) a command never seen ACCEPTED is
+  now retired like an accepted-but-unlanded one (wait for a late answer, ack, lost seq + 1; else seq 0),
+  except straight after a retire found nothing, so a dead device does not pay two deadlines per command —
+  no unit has shown a late accept, so this path is untested; (2) the probe seed and STREAM_INFO read
+  `resp_buf` after dropping `mbox_lock`, racing the meter worker when `meter_poll_ms` is set; both now copy
+  the reply under the lock (`clarett_fcp_read()`, which also returns size and status), and nothing outside
+  the mailbox reads `resp_buf` any more. Verified: both units probe clean, fcp-server up with no `0xa5`
+  controls, warm rebinds x3 (Red ack 145-211 us, 8Pre 2.12-2.25 ms, attempt 1, registered 1.8-2.6 ms
+  later), 8Pre ramp 9/9 at 48/96/192 kHz.
+  **Likely relevant to the session-collapse bug
   below** (its zero-payload/refusal signature is this one), not yet tested on the ASRock.
 - **OPEN BUG — the session can COLLAPSE (July 23 2026, 2Pre).** Symptom: fcp-server refuses the device
   with **"Device does not support required INIT category"**. The mailbox still answers and still echoes
@@ -1918,9 +1933,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
   retired, `resp_trace` telemetry kept). The full bring-up answers `err=0` with real data and
-  alsamixer toggles physically move the 2Pre (LEDs + relays). TODO: re-audit everything written for
+  alsamixer toggles physically move the 2Pre (LEDs + relays). ~~TODO: re-audit everything written for
   a walled device (shadow-refresh paths, the `err=3`/notification-storm handling, meter-poll
-  hypothesis in `meter_poll_ms` desc). The "re-arming an armed device wedges `GET_DATA`" rule was
+  hypothesis in `meter_poll_ms` desc).~~ DONE Oct 16 2026: the caller audit is in the LOST-RESPONSE
+  RECOVERY entry; the notification storm was the phase-bit leak (fixed Oct 10, notify entry); the
+  `meter_poll_ms` description no longer carries the heartbeat hypothesis. The "re-arming an armed device wedges `GET_DATA`" rule was
   **DISPROVEN July 23** — re-armed twice with no power cycle, `GET_DATA` stayed correct; probe now always
   arms (see the bring-up entry below).
 - **★ MIDI TX FLOW CONTROL + ONE-PASS RX DRAIN — PORTED Oct 10 2026 from Bennett's `0af0398`
