@@ -1012,6 +1012,33 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     the device, and no driver state survives a reload. If it recurs, load with `dyndbg=+p` and compare the
     failing arm against the last good one; note whether it follows a platform freeze during an arm or
     teardown.
+    **★ RECURRED Oct 16 2026 — SAME HOST, 8PreX, current driver (srcversion `843F6EF1B0814354426FFE0`),
+    and this time CAPTURED.** The overnight collapse run (headless, 3 s 28ch capture + playback started
+    together every ~4 s, a 20 Hz meter reader) wedged **15 min in (~220 cycles), at 23:20:15**: every
+    stream from then on failed with EIO ~1 s after start, for the remaining 2 h 24 min, and the unit was
+    STILL wedged two days later with the module and fcp-server untouched. **Invisible at the default log
+    level:** a stream with zero period events trips none of the anomaly gates, so its `stopped` summary
+    is `dev_dbg` — the kernel log simply went quiet. Nothing distinctive before it: the minute leading up
+    showed only the ASRock's usual pattern (an all-ones blackout every ~14 s, a 42 ms read in every
+    stream); the last blackout was 31 s earlier and the last logged stream ended normally. **Failing vs
+    good arm, same unit and build, `dyndbg` on (logs kept off-repo on the ASRock):**
+    | | wedged | after a power cycle |
+    |---|---|---|
+    | handshake (SET_CLOCK + 3 sync queries) | all status 0, landed ~80 us | identical |
+    | arm registers (bases `ffe00000`/`ffe80800`, size `0x1c0`, ctrl 1/0) | identical | identical |
+    | ring pointers right after arm | `0x11` / `0x5` | `0x11` / `0x4` |
+    | after 1 s | **periods=0, ctr=0, ptr0=0x0 ptr1=0x0** | periods=47, `0x11` / `0x4` |
+    So the arm is accepted and the descriptors prefetched (that `0x11`/`0x4-5` is normal prefetch, not
+    stale), then the engine never raises a period and its pointers read back zero. **The control plane
+    stayed healthy throughout** — seq 27158, unbroken across two days of meter reads; every command
+    answered. **A power cycle of the unit alone, module loaded, cleared it** (with the Sep result that a
+    reload does not, the state is in the device). Laptop: hundreds of arm/stop cycles across Oct 16's
+    tests, never wedged — so the ASRock's stalls landing in an arm or teardown is the lead, unproven.
+    **Next, not done:** (1) driver: warn when a stream ends with zero periods; (2) on the ASRock, churn
+    with only `engine armed`/`stream-svc` debug on and STOP AT THE FIRST FAILED STREAM, to get the last
+    good and first bad arm side by side with any stall between; (3) next time it is wedged, try
+    `echo 1 > /sys/bus/pci/devices/<bdf>/reset` and dump the stream registers before power-cycling — a
+    working reset would let the driver recover by itself.
 - **★★ THE "EXCESSIVE POLLING CAUSED THE SKIPS" CONCLUSION DOES NOT REPRODUCE ON A FREEZE-FREE HOST
   (Sep 17 2026, 2Pre, ASUS ROG Zephyrus laptop / Intel, behind the HP TB3 dock).** The July 23 2026
   cluster that blamed control traffic for playback skips — `70afc2c` "rate-limit meter polling — the
@@ -1975,6 +2002,29 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     whose response never landed was followed by fcp-server reading every control as the driver's poison
     byte (`0xa5`), and a rebind cleared it — this bug's signature, with a known single trigger. See the
     serial entry under Hardware facts. The driver's seq-0 reset did not keep the session in step.
+  - **Oct 16 2026, ASRock, 8PreX, current driver (lost-response recovery + guard 16, srcversion
+    `843F6EF1B0814354426FFE0`): NOT REPRODUCED in a ~13 min run — LIKELY FIXED, overnight run pending.**
+    Headless (no PipeWire session), fcp-server running, a 20 Hz meter reader (`amixer -c 3 cget
+    iface=PCM,name="Level Meter"` in a loop — note the control is `iface=PCM`, a bare `name=` does not
+    find it) and 200 cycles of 3 s 28ch capture + playback started together, all as root (an SSH login
+    gets no `/dev/snd` access). **21 blackouts (`0x300 read returned ~0`) in the run; ZERO late or lost
+    mailbox responses, zero failed meter reads, no fcp-server errors, 0 poisoned controls.** So every
+    command during the blackouts got through and the new recovery was never exercised. **Likely cause of
+    the old collapses, by reading:** the old polled cycle spun on `0x100`, and an all-ones read during a
+    blackout carries the DONE bit — a false completion; today's cycle completes on the MSI phase bits and
+    only acts once the response is in the DMA buffer, so a blackout read cannot fake one. Unproven.
+    **Side findings from the same run:** (1) the ASRock's faults are now FAR more frequent than recorded:
+    `readmax` ~42 ms (one MMIO read stalled 42 ms) on nearly every 3 s stream, and the all-ones blackout
+    every 4-15 s (was ~44 s); (2) GNOME's login screen auto-suspends a headless box after ~20 min idle
+    (mask `sleep.target suspend.target hibernate.target hybrid-sleep.target` for long runs) — it
+    suspended (s2idle) mid-stream, and **the driver survived it**: that stream read the dead link
+    (`badreads=381`), its clients got EIO, it stopped cleanly at resume, and every stream after was
+    normal, card and fcp-server untouched. Deep sleep (S3) untested; the driver has no PM callbacks.
+  - **The overnight run (Oct 16-17) did NOT give a clean 9 h:** the 8PreX hit the DEVICE-SIDE ENGINE WEDGE
+    after ~15 min (see that entry), so streams failed for the remaining 2 h 24 min. The mailbox stayed
+    healthy for the whole 2 h 38 min (meter reads never failed, seq unbroken), so still no collapse, but
+    the bug cannot be closed on this run: only ~15 min of real churn. The late-response count over the
+    window was not taken. Rerun after the wedge is understood.
 - **Control plane WORKS (July 16 2026 — wall crossed, `spec/provenance/clarett-manifestation-wall.md` §8).**
   The response-landed-gated trailing ack + pre-submit header zero are the **unconditional default
   mailbox cycle** (attribution matrix closed 3/3: gated arms, ungated walls; `gated_ack` lever
