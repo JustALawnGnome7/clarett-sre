@@ -674,7 +674,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   - **Version 0.2.0 since Oct 19 2026** (was 0.1.1 from the public repo's first commit through every
     change up to the TX guard; bumped in dkms.conf and both specs, which `make rpm-*` checks agree).
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump; none tagged yet.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its

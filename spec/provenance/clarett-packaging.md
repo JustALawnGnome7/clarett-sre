@@ -181,5 +181,5 @@ were built, verified on hardware and across kernel upgrades, and every trap hit 
       idiom; the kernel's own `LICENSES/preferred/GPL-2.0` lists both spellings as valid.
   - **RESOLVED Oct 19 2026 — the specs carry a dated `%changelog`** (operator's call: a release date is
     not an RE observation date, so the specs are exempt from the no-dates rule). First entry 0.2.0-1,
-    with the version bump from 0.1.1; no version has been tagged. This also ends rpmbuild's
+    with the version bump from 0.1.1; tagged `v0.2.0` (annotated, on snd-clarett `075a53b`), the first tag. This also ends rpmbuild's
     `%source_date_epoch_from_changelog ... no entries` warning.
