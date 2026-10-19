@@ -671,8 +671,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **OPEN before a 0.1.0 tag:** the specs have no `%changelog`, because entries are dated and
-    `snd-clarett/` is under the no-dates rule. Decide whether a release date is exempt.
+  - **Version 0.2.0 since Oct 19 2026** (was 0.1.1 from the public repo's first commit through every
+    change up to the TX guard; bumped in dkms.conf and both specs, which `make rpm-*` checks agree).
+  - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump; none tagged yet.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -2109,7 +2111,8 @@ spec instead. Cross-confirm XML-derived facts against the live trace where
 possible — independent observation is the strongest provenance.
 
 **NO CALENDAR DATES ANYWHERE UNDER `snd-clarett/`** — not in code comments, not in
-`snd-clarett/README.md` or `snd-clarett/DEVELOPMENT.md`. That directory IS the
+`snd-clarett/README.md` or `snd-clarett/DEVELOPMENT.md`. (One exemption: the packaging specs'
+`%changelog` release dates, which date a release, not an observation.) That directory IS the
 **public-facing git submodule** (formerly `driver/`), and dated comments timestamp the RE
 work against the observation sessions, inviting a reader to correlate driver source with a discovery timeline.
 State the finding, the model, the method and the numbers; drop the date tag — write

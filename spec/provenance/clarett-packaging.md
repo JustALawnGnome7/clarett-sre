@@ -179,7 +179,7 @@ were built, verified on hardware and across kernel upgrades, and every trap hit 
       them in any way". Its sole job is Proprietary flagging and `EXPORT_SYMBOL_GPL` binding.
       Likewise the uapi header's `GPL-2.0` (rather than `GPL-2.0-only`) is deliberate kernel uapi
       idiom; the kernel's own `LICENSES/preferred/GPL-2.0` lists both spellings as valid.
-  - **OPEN before a 0.1.0 tag:** the specs carry **no `%changelog`**, deliberately — entries are
-    dated, and `snd-clarett/` is under the no-dates rule. Decide at first release whether a *release*
-    date is exempt (it is not an RE observation date) or whether the changelog lives outside
-    `snd-clarett/`. rpmbuild only warns (`%source_date_epoch_from_changelog ... no entries`).
+  - **RESOLVED Oct 19 2026 — the specs carry a dated `%changelog`** (operator's call: a release date is
+    not an RE observation date, so the specs are exempt from the no-dates rule). First entry 0.2.0-1,
+    with the version bump from 0.1.1; no version has been tagged. This also ends rpmbuild's
+    `%source_date_epoch_from_changelog ... no entries` warning.
