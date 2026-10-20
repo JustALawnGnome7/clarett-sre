@@ -1322,8 +1322,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     `gapmax` equal to the OLD rate's period (21.3 ms at "96k", 10.7 ms at "192k") while each step is
     still one period: the device runs the previous rate after SET_CLOCK while the late threshold already
     uses the new one. Same-rate repeats and changes to a slower rate are clean. No audio is lost (the
-    ramps are intact); a played stream is at the old rate for those first events. Fits Bennett's
-    ~25 ms SYNC_READ transition window (`fc67daf`). Telemetry only; not fixed.
+    ramps are intact); a played stream is at the old rate for those first events. (Once thought to
+    fit Bennett's "~25 ms SYNC_READ transition window" (`fc67daf`); that window was his poll interval,
+    see the clock-source entry: SYNC_READ bit 1 is a read-to-clear latch.) Telemetry only; not fixed.
     **★ TRAP that faked a failure: alsa-scarlett-gui CLEARS MONO ROUTES FROM A LINKED PAIR AT STARTUP.**
     The first full run lost the ramp 68 s in, at the second the GUI was launched. Its stereo-link
     state lives only in its own config (`~/.config/alsa-scarlett-gui/clarett-2pre.conf`: `PCM Out 3-4
@@ -1465,7 +1466,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     Verified: Internal (every stream arms with it), ADAT=0 (8Pre at 48/96/192 kHz), S/PDIF=3 (8Pre over RCA
     coax, 2Pre over TOSLINK). **REOPENED Oct 2 2026: the 0x006004 sync word is a bitfield (bit 0 lock, bit 1
     a read-to-clear "changed" latch) and fcp-server showed `!!word`, so an unlocked device with the latch
-    set read Locked — very likely the cause below. fcp-server now reports bit 0 on these cards, and with it
+    set read Locked — very likely the cause below. **Bit 1 refined Oct 20 2026 (2Pre, `tools/bench/sync_latch.sh`,
+    3/3 reps): it latches a LOSS of lock and is cleared by reading** — to an absent S/PDIF, 2 s unread
+    reads `2 0 0`; 30 ms polling shows the 2 on exactly one read; back to Internal reads 0 until lock at
+    ~85 ms, then 1, never 3 (gaining lock does not set it). That reconciles Bennett's `fc67daf` ("bit 1
+    alone for ~25 ms while the clock changes", 4Pre, ~23 ms polls): his window was his poll interval.
+    Same fix either way (report bit 0). fcp-server now reports bit 0 on these cards, and with it
     **ADAT 2 = 1 IS VERIFIED** (Red ADAT Out into one 8PreX port at a time: port 2 fed locks on 1 not 0, port
     1 fed the reverse, S/PDIF control unlocked throughout). WORDCLOCK = 2 VERIFIED Oct 9 2026 on the 8PreX AND the Red 8Line (BNC each way; the other sources
     unlocked, and the lock drops when the cable is pulled; results in the rate-aware plan). Same day, the Red's

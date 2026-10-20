@@ -123,6 +123,21 @@ the Red 8Line and the 4Pre:
 - 4Pre: the latch showed once (192k, 0.3 s) and not in the read-to-clear run: the driver's own
   stream-handshake read of 0x006004 follows SET_CLOCK, so if the event lands before it the latch is
   consumed there. That is the whole "varies by model" table below — sampling relative to the latch.
+- **Refined Oct 20 2026 (2Pre, `tools/bench/sync_latch.sh`, 3 reps, S/PDIF input empty, every rep
+  identical): the latch is set by LOSING lock, not by gaining it.**
+  | leg | reads |
+  |---|---|
+  | no change, 2 s, then 3 reads | `1 1 1` |
+  | Internal -> S/PDIF, 2 s unread, then 3 reads | `2 0 0` |
+  | Internal -> S/PDIF, polled every ~30 ms | `1, 2, 0 ...` or `2, 0 ...`: the 2 on exactly one read |
+  | S/PDIF -> Internal, 2 s unread | `1 1 1` |
+  | S/PDIF -> Internal, polled | `0` until ~85 ms, then `1` (never 3) |
+  This reconciles G. D. Bennett's `fc67daf` (clarett-sre branch `interrupt-driven-mailbox`, Sep 9, 4Pre:
+  "bit 1 set alone for ~25 ms while the clock changes", from ~23 ms polls going `1 -> 2 -> 0`, and
+  "Internal reads 0 until ~90 ms, then 1"). His data are reproduced exactly; the "~25 ms" is his poll
+  interval, since a read clears the bit (2 s unread still shows it). His Internal leg is what shows that
+  gaining lock leaves it clear. The Red's `3` on the first read after a stream start would then be the
+  arm's re-clock dropping the lock for a moment (inferred, not measured). Same fix either way: report bit 0.
 - **Consequence fixed:** fcp-server returned `!!word`, so 2 (unlocked + latch) showed as **Locked** —
   very likely the 8PreX "invalid source 7 read Locked in 2 of 3 trials" result. It now uses bit 0 on the
   Thunderbolt Clarett/Red cards (USB devices unchanged). Checked: Red on S/PDIF with no signal, 75 Sync
