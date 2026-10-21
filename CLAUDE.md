@@ -671,8 +671,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.2.0 since Oct 19 2026** (was 0.1.1 from the public repo's first commit through every
-    change up to the TX guard; bumped in dkms.conf and both specs, which `make rpm-*` checks agree).
+  - **Version 0.2.1 since Oct 21 2026** (system sleep support; snd-clarett `293be10`). 0.2.0 from Oct 19 2026;
+    0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
+    dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
     exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
@@ -2081,6 +2082,32 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   ~2 s is one per ~50 ms — exactly the 8Pre's "2 bytes every ~49.7 ms". No count=3 word was seen. **And the
   8Pre itself, the unit that lost the bytes, the same day on the fix: the same five loops byte-exact**
   (6000 B unpaced at 3121 B/s and paced at 1560 B/s, 1500 note pairs, 4 KB, 25 KB).
+- **★ SYSTEM SLEEP SUPPORTED (Oct 21 2026, snd-clarett; 2Pre only so far).** `clarett_suspend()` /
+  `clarett_resume()` (DEFINE_SIMPLE_DEV_PM_OPS): suspend marks the card D3hot (hwdep ioctls now wait under
+  `snd_power_ref_and_wait`), stops the work items, flushes a pending persist, parks MIDI TX, tears the engine
+  down (trigger SUSPEND = STOP; no INFO_RESUME, so apps re-prepare and the prepare re-arms), masks IRQs and
+  quiesces DMA. Resume only schedules a re-attach 1 s later (config-space presence check, `hw_init` with seq
+  0, re-seed, monitor enables, Clock Source, a wildcard relay so fcp-server re-reads everything); the card
+  stays D3hot until it finishes. **★★ THE TRAP: the driver must NOT `pci_save_state()` in suspend.** That
+  keeps the device in D0, and `pci_pm_suspend_noirq` then sets `skip_bus_pm` on the device AND ITS PARENT
+  BRIDGE (the unit's own Thunderbolt controller), which stays powered while the chain above powers down: the
+  laptop (Dock G4 -> 2Pre) froze on s2idle ENTRY every time (black screen, no timers, nothing in pstore).
+  Found by bisecting a debug build (a `pm_steps` mask: even callbacks doing nothing but the save froze;
+  dropping only the save woke). Left to the core the device goes to D3hot and keeps its state
+  (No_Soft_Reset; the mailbox even answered with the re-attach skipped). With no driver PM (the akmod 0.2.0
+  build) that code is never reached, which is why the old driver survived sleep. **Verified on the clean
+  build:** s2idle and deep (S3) via `tools/bench/sleep_test.sh` (systemctl suspend + RTC alarm), resumed in
+  place both ways, Sync Locked, meter read OK; and, on the equivalent debug build, an `arecord` capture
+  held across s2idle that re-prepared and ran to completion. Re-attach ~5 ms (`hw_init` ack ~3 ms).
+  **Untested:** the other four models, MIDI across a sleep, hibernation, a unit unplugged while asleep.
+  **Laptop traps hit on the way (not the driver):** this HP laptop (hybrid Intel + NVIDIA) also froze with
+  nothing attached at the GNOME login, and once after a CLEAN resume: the display stayed black, then
+  `i915 ... PSR aux error` and the lock screen's fprintd start right before it died. Booting with
+  `i915.enable_psr=0` cleared that. `rtcwake -m mem/freeze` writes the sleep state directly and skips
+  systemd's sleep hooks; the script uses `systemctl suspend`. Debug aids that worked: `pm_trace` (resume
+  only, overwrites the RTC, hash collides), EFI pstore (`efi_pstore.pstore_disable=0` at boot; Fedora
+  ships it off), a timer watchdog calling `handle_sysrq('w'/'l')` then `panic()`. A kernel with no
+  timers left (this freeze) defeats all of them: bisect instead.
 - **Surprise removal panicked the host (July 23 2026) — FIXED, hardware-confirmed.** Powering
   the unit off mid-stream: `snd_card_free()` frees the PCM devices (and `runtime->dma_area`) *before*
   `card->private_free`, where the stream servicer was stopped, so the servicer ticked into a freed
