@@ -1124,6 +1124,12 @@ RED_SPDIF_ALSA = {0x186: 1, 0x187: 2, 0x408: 1, 0x409: 2}
 RED_SPDIF_SOURCE_ENUM = [OD([("name", "Optical"), ("value", 1)]),
                          OD([("name", "RCA"),     ("value", 2)])]
 
+# Line reference level, one bit of a shared byte: the value is the masked bit, as fcp-server compares
+# it after applying the control's mask. Polarity hardware-measured (Red 8Line, inputs and outputs).
+def RED_LINE_REF_ENUM(bit):
+    return [OD([("name", "+24dBu"), ("value", 0)]),
+            OD([("name", "+18dBu"), ("value", 1 << bit)])]
+
 # Front-panel meter-bridge banks [XML <meter-source>]. The device values are the descriptor's, gaps
 # included (there is no 1 or 3). Never written in the capture; 0/2/6/8 are hardware-confirmed from the
 # front panel's button, which steps through those four only.
@@ -1156,10 +1162,10 @@ RED_8PRE_METER_SOURCE = [OD([("name", {2: "Analogue Outputs 3-10", 3: "Analogue 
 # capture of the model and its routing tables are synthesised (synth_red_bands()).
 RED_MODELS = {
     "red-8line": dict(name="Red 8Line", init="red_8line", in_pins=RED_IN_PINS, out_pins=RED_OUT_PINS,
-                      nout=14, npre=2, capture=(60, 52, 32), loopback=(0x608, 0x609),
+                      nout=14, npre=2, nline=8, capture=(60, 52, 32), loopback=(0x608, 0x609),
                       meter_source=RED_METER_SOURCE),
     "red-16line": dict(name="Red 16Line", init=None, in_pins=RED_16LINE_IN_PINS,
-                       out_pins=RED_16LINE_OUT_PINS, nout=22, npre=2, capture=(64, 60, 40),
+                       out_pins=RED_16LINE_OUT_PINS, nout=22, npre=2, nline=16, capture=(64, 60, 40),
                        loopback=(0x610, 0x611), meter_source=RED_16LINE_METER_SOURCE),
     "red-4pre": dict(name="Red 4Pre", init=None, in_pins=RED_4PRE_IN_PINS, out_pins=RED_4PRE_OUT_PINS,
                      nout=14, npre=4, capture=(60, 52, 32), loopback=(0x60a, 0x60b),
@@ -1325,6 +1331,7 @@ def build_red(slug):
     spec = RED_MODELS[slug]
     nout = spec["nout"]
     npre = spec["npre"]   # [XML]: preamps on inputs 1-2 (Line models) or 1-4 / 1-8 (Pre models)
+    nline = spec.get("nline", 0)   # Line models: inputs/outputs with a reference-level switch [XML]
 
     # ---- devmap ----
     # notify-device is the DATA_CMD{activate} that COMMITS a write, taken from each control's
@@ -1425,6 +1432,23 @@ def build_red(slug):
         m[f"grpMuteDim{g}"] = member(124 + 2 * g, "bool", nd=2, nc=NOTIFY_RED_OUTPUT,
                                      note=f"{nm} knob group mute (bit 0) / dim (bit 1) @ "
                                           f"{124 + 2*g}; commit activate 2")
+
+    # Line reference level [XML line-input-ref / line-output-ref]: one bit per line input (272+,
+    # input i = bit i%8 of 272 + i//8) and per line output (274+, Line Output k likewise), commit
+    # activate 21. Hardware-measured on a Red 8Line: 0 = +24 dBu, 1 = +18 dBu at 0 dBFS, on both
+    # sides -- the front panel shows input 1 change with its bit, and Line Output 1 looped into an Inst
+    # input dropped 5.99 dB with its bit set, Line Output 2 unmoved. Bits are per channel, so one
+    # member per channel (a global control is keyed by its member, as for mute/dim above).
+    # Inputs re-read on INPUT_OTHER, outputs on OUTPUT: the descriptor's categories for those
+    # sections; neither is confirmed to be raised by a front-panel change.
+    for i in range(nline):
+        m[f"lineInRef{i}"] = member(272 + i // 8, "uint8", nd=21, nc=NOTIFY_RED_INPUT_OTHER,
+                                    note=f"line input {i+1} reference = bit {i % 8} of @ "
+                                         f"{272 + i // 8}; 0 = +24 dBu, 1 = +18 dBu; activate 21")
+    for k in range(nline):
+        m[f"lineOutRef{k}"] = member(274 + k // 8, "uint8", nd=21, nc=NOTIFY_RED_OUTPUT,
+                                     note=f"Line Output {k+1} reference = bit {k % 8} of @ "
+                                          f"{274 + k // 8}; 0 = +24 dBu, 1 = +18 dBu; activate 21")
 
     phys_in = []
     for i in range(npre):
@@ -1592,13 +1616,17 @@ def build_red(slug):
         "(clarett_model.notify_word); an older driver relays a wildcard, which still refreshes every "
         "notifiable control. Meter Source carries global and output, its category being unknown. "
         "hwGainEnable and the S/PDIF connectors stay at 0: host-owned.",
-        ("line-input-ref (offset 272, one bit per input, commit activate 21) is not exposed: it "
-         "applies to all eight inputs but its audible effect has not been established."
-         if slug == "red-8line" else
-         "line-input-ref (offsets 272-273, one bit per input, commit activate 21) and line-output-ref "
-         "(274-275) are not exposed: they cover all sixteen inputs and outputs, but their audible "
-         "effect has not been established."
-         if slug == "red-16line" else
+        (f"Reference level: one enum per line input (Line In 1-{nline} Reference Capture Enum) and "
+         f"per Line Output (Line Out {RED_N_GROUPED + 1}-{RED_N_GROUPED + nline} Reference Playback "
+         f"Enum, numbered by output index like the other output controls), +24dBu / +18dBu, each one "
+         f"bit of 272{'-273' if nline > 8 else ''} / 274{'-275' if nline > 8 else ''} [XML], commit "
+         f"activate 21. Measured on a Red 8Line: 0 = +24 dBu, 1 = +18 dBu, on inputs (front-panel "
+         f"display) and outputs (a 5.99 dB drop at the jack). "
+         + ("The same layout is assumed here, unmeasured. " if slug != "red-8line" else "")
+         + "Switching an output thumps on that output only. Not exposed: line-ref-linked @ 290 "
+         "(activate 26), whose effect is untested. Notification categories (input-other / output) "
+         "are the descriptor's sections; a front-panel change has not been seen to raise them."
+         if nline else
          f"The {spec['name']} descriptor has no line-input-ref / line-output-ref fields (the Line "
          "models' input/output reference-level bits), so there is nothing to expose."),
         "The mixer matrix needs nothing from this map and comes up on its own: fcp-server reads "
@@ -1706,6 +1734,18 @@ def build_red(slug):
                                   ("values", RED_SPDIF_SOURCE_ENUM),
                                   ("mirror", ["spdifSourceOutput"])])),
     ])
+    # Reference level, per line input and Line Output. Not "... Level Capture Enum": alsa-scarlett-gui
+    # matches that suffix with strstr() and would draw these as the Mic/Line/Inst selector. Outputs
+    # are numbered like every other output control here (output index, so Line Output 1 of the 8Line
+    # is "Line Out 7"), not by the jack label.
+    for i in range(nline):
+        a["global-controls"][f"lineInRef{i}"] = OD([
+            ("name", f"Line In {i+1} Reference Capture Enum"), ("type", "enum"),
+            ("values", RED_LINE_REF_ENUM(i % 8)), ("mask", 1 << (i % 8))])
+    for k in range(nline):
+        a["global-controls"][f"lineOutRef{k}"] = OD([
+            ("name", f"Line Out {RED_N_GROUPED + k + 1} Reference Playback Enum"), ("type", "enum"),
+            ("values", RED_LINE_REF_ENUM(k % 8)), ("mask", 1 << (k % 8))])
     if alsa_sources:
         a["sources"] = alsa_sources
         a["sinks"] = alsa_sinks

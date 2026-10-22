@@ -43424,6 +43424,390 @@ state.red-16line {
 		}
 	}
 	control.1287 {
+		iface MIXER
+		name 'Line In 1 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1288 {
+		iface MIXER
+		name 'Line In 2 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1289 {
+		iface MIXER
+		name 'Line In 3 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1290 {
+		iface MIXER
+		name 'Line In 4 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1291 {
+		iface MIXER
+		name 'Line In 5 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1292 {
+		iface MIXER
+		name 'Line In 6 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1293 {
+		iface MIXER
+		name 'Line In 7 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1294 {
+		iface MIXER
+		name 'Line In 8 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1295 {
+		iface MIXER
+		name 'Line In 9 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1296 {
+		iface MIXER
+		name 'Line In 10 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1297 {
+		iface MIXER
+		name 'Line In 11 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1298 {
+		iface MIXER
+		name 'Line In 12 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1299 {
+		iface MIXER
+		name 'Line In 13 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1300 {
+		iface MIXER
+		name 'Line In 14 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1301 {
+		iface MIXER
+		name 'Line In 15 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1302 {
+		iface MIXER
+		name 'Line In 16 Reference Capture Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1303 {
+		iface MIXER
+		name 'Line Out 7 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1304 {
+		iface MIXER
+		name 'Line Out 8 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1305 {
+		iface MIXER
+		name 'Line Out 9 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1306 {
+		iface MIXER
+		name 'Line Out 10 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1307 {
+		iface MIXER
+		name 'Line Out 11 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1308 {
+		iface MIXER
+		name 'Line Out 12 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1309 {
+		iface MIXER
+		name 'Line Out 13 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1310 {
+		iface MIXER
+		name 'Line Out 14 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1311 {
+		iface MIXER
+		name 'Line Out 15 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1312 {
+		iface MIXER
+		name 'Line Out 16 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1313 {
+		iface MIXER
+		name 'Line Out 17 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1314 {
+		iface MIXER
+		name 'Line Out 18 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1315 {
+		iface MIXER
+		name 'Line Out 19 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1316 {
+		iface MIXER
+		name 'Line Out 20 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1317 {
+		iface MIXER
+		name 'Line Out 21 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1318 {
+		iface MIXER
+		name 'Line Out 22 Reference Playback Enum'
+		value +24dBu
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 +24dBu
+			item.1 +18dBu
+		}
+	}
+	control.1319 {
 		iface PCM
 		name 'Level Meter'
 		value.0 0
@@ -43561,7 +43945,7 @@ state.red-16line {
 			range '0 - 4095'
 		}
 	}
-	control.1288 {
+	control.1320 {
 		iface PCM
 		name 'Level Meter'
 		index 1
