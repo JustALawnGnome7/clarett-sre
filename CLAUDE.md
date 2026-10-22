@@ -161,8 +161,10 @@ response is acknowledged and the session continues; see the LOST-RESPONSE RECOVE
 
 **The Sep 2 raw captures were lost to a host crash (both lived in `/tmp`) — but a full replacement
 exists: `captures/red_8line.log` (Sep 4 2026, 44 MB, 516k lines, 16074 FCP transactions, 5526 of them
-non-meter), a complete vendor session covering bring-up AND streaming.** Write every Red trace straight
-into `captures/`, never `/tmp`.
+non-meter), a complete vendor session covering bring-up AND streaming.** **Capture location (operator's
+rule, Oct 22 2026):** a NEW device's first traces go straight into `captures/` (never `/tmp`, which is
+how the Sep 2 ones were lost) and are committed; routine follow-up captures of a device already captured
+(single-control experiments) go to `/tmp` and are not committed.
 
 - **`GET_7.1` geometry = `playback=64 capture=60`.** `snd_clarett` bound on the shared PCI id, read it,
   and refused to register. That is the pair a `struct clarett_model` entry needs, and it closes the
@@ -277,8 +279,12 @@ into `captures/`, never `/tmp`.
     0x6002/4/5 status replies) taken clear -> red -> cleared differed in NO config byte and no status
     reply; meter words only tracked unrelated playback, and their upper 16 bits read zero throughout.
     The descriptor has no clip field either. So host software can neither see nor clear it; a GUI
-    clip-hold would have to be synthesised from the meters. Untested: a meter read DURING clipping,
-    and whether Focusrite Control has a clear command (needs a VM trace).
+    clip-hold would have to be synthesised from the meters. Untested: a meter read DURING clipping.
+    ~~Whether Focusrite Control has a clear command~~ **SETTLED Oct 22 2026 (a routine VM trace of RedNet
+    Control 2, not kept): it does not.** RedNet Control's clip clear sends nothing to the
+    device (only reads follow it) and the front-panel LED stays lit (user); only the panel button clears
+    it. RedNet Control's clip indicator, Clip Level / Clip Hold Time and Automatically Clear Clip are all
+    computed from the meters, which is what a GUI clip-hold here would do too.
   - **★★ DANTE WORKS END TO END (Oct 2 2026, laptop host, no Dante Controller).** Rig: a gigabit PoE
     switch with the Red, an Audinate AVIO-DAI2 (2-ch analogue-in adapter) and the host's wired port.
     - **Network:** nothing on that switch serves DHCP, so every device sits on IPv4 link-local
