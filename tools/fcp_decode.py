@@ -21,9 +21,10 @@ Usage:
   ./tools/fcp_decode.py capture.txt --classify  # is this capture a fader move or a routing change?
   ./tools/fcp_decode.py attach.log --emit-init > driver/clarett_init_2pre.h  # 2Pre bring-up (default; --init-model 8prex/4pre for others)
 
-The 8192-byte appspace persist write-back (a run of SET_DATA into config offset >=200) fires on
-every control change and is collapsed to a single summary line by default; pass --show-appspace to
-see the individual chunks.
+The 8192-byte appspace persist write-back (a run of bulk SET_DATA chunks: 1016 bytes each, then 64)
+fires on every control change and is collapsed to a single summary line by default; pass
+--show-appspace to see the individual chunks. A single control write (1-2 bytes) is never collapsed,
+whatever its offset: the Red's controls live above offset 200 too.
 """
 import argparse
 import os
@@ -44,7 +45,7 @@ CAUSE_REGS  = {0x100: "vec0", 0x200: "vec1", 0x300: "vec2", 0x400: "vec3"}
 INFO_BASE   = 0x8000           # read-only firmware-info header (0x8000..0x801f)
 EXEC_FLAG   = 0x80000000
 DONE_BIT    = 0x20000000       # mailbox-done cause bit (seen in cause regs)
-APPSPACE_BASE = 0xc8           # config offset 200: persistent-store write-back region (spec §12)
+APPSPACE_MIN_CHUNK = 64       # smallest persist write-back chunk (8 x 1016 + 64 = 8192 bytes)
 IRQ_BLOCK   = (0x100, 0x5ff)   # interrupt cause/summary register block (inclusive)
 NOTIFY_BITS = ((0x00200000, "dim-mute"), (0x00400000, "monitor"))  # control-plane §11 async events
 
@@ -197,12 +198,14 @@ class Txn:
         return off, ln
 
     def is_appspace(self):
-        """One chunk of the full-config persist write-back (transport spec §8): a SET_DATA
-        into the persistent-store region (offset >= 200). Fires on every control change."""
+        """One chunk of the full-config persist write-back (transport spec §8), which fires on
+        every control change. Told apart by SIZE: the vendor writes the 8192-byte appspace in
+        1016-byte chunks plus one of 64, while a control write is 1-2 bytes. (Offset >= 200 was
+        the old test; it held on the Claretts but hid the Red's controls at 236-290.)"""
         if self.opcode != 0x800001:
             return False
         ol = self.data_offset_len()
-        return ol is not None and ol[0] >= APPSPACE_BASE
+        return ol is not None and ol[1] >= APPSPACE_MIN_CHUNK
 
     def mix_coeffs(self):
         """For SET_MIX/GET_MIX, return (mix_num, [u16 coeff, ...]) or None."""
@@ -541,7 +544,7 @@ def annotate_detail(t):
                 return f"off {off} len {ln} -> DMA"
             val = fmt_bytes(t.data[8:min(t.size, 8 + 12)])
             tail = " ..." if t.size > 8 + 12 else ""
-            note = "  [appspace persist]" if off >= APPSPACE_BASE else ""
+            note = "  [appspace persist]" if t.is_appspace() else ""
             return f"off {off} len {ln} val=[{val}{tail}]{note}"
     if op == 0x800002 and t.size >= 4 and all(b is not None for b in t.data[:4]):
         act = t.data[0] | t.data[1] << 8 | t.data[2] << 16 | t.data[3] << 24
