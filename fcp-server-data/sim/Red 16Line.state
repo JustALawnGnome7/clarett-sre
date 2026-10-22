@@ -43808,6 +43808,16 @@ state.red-16line {
 		}
 	}
 	control.1319 {
+		iface MIXER
+		name 'Link I/O Reference Levels Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.1320 {
 		iface PCM
 		name 'Level Meter'
 		value.0 0
@@ -43945,7 +43955,7 @@ state.red-16line {
 			range '0 - 4095'
 		}
 	}
-	control.1320 {
+	control.1321 {
 		iface PCM
 		name 'Level Meter'
 		index 1

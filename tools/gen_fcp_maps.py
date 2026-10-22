@@ -1439,16 +1439,28 @@ def build_red(slug):
     # sides -- the front panel shows input 1 change with its bit, and Line Output 1 looped into an Inst
     # input dropped 5.99 dB with its bit set, Line Output 2 unmoved. Bits are per channel, so one
     # member per channel (a global control is keyed by its member, as for mute/dim above).
-    # Inputs re-read on INPUT_OTHER, outputs on OUTPUT: the descriptor's categories for those
-    # sections; neither is confirmed to be raised by a front-panel change.
+    # Re-read on GLOBAL as well as their sections' INPUT_OTHER / OUTPUT: with the link below on, a
+    # write to one changes its partner IN THE DEVICE, which raises one GLOBAL event (hardware-measured:
+    # 0x1000000 per linked change, none with the link off); without GLOBAL, fcp-server keeps showing
+    # the partner's old value. A front-panel change has not been seen to raise either section bit.
     for i in range(nline):
-        m[f"lineInRef{i}"] = member(272 + i // 8, "uint8", nd=21, nc=NOTIFY_RED_INPUT_OTHER,
+        m[f"lineInRef{i}"] = member(272 + i // 8, "uint8", nd=21,
+                                    nc=NOTIFY_RED_INPUT_OTHER | NOTIFY_RED_GLOBAL,
                                     note=f"line input {i+1} reference = bit {i % 8} of @ "
                                          f"{272 + i // 8}; 0 = +24 dBu, 1 = +18 dBu; activate 21")
     for k in range(nline):
-        m[f"lineOutRef{k}"] = member(274 + k // 8, "uint8", nd=21, nc=NOTIFY_RED_OUTPUT,
+        m[f"lineOutRef{k}"] = member(274 + k // 8, "uint8", nd=21,
+                                     nc=NOTIFY_RED_OUTPUT | NOTIFY_RED_GLOBAL,
                                      note=f"Line Output {k+1} reference = bit {k % 8} of @ "
                                           f"{274 + k // 8}; 0 = +24 dBu, 1 = +18 dBu; activate 21")
+    # "Link I/O Reference Levels" [XML line-ref-linked, RedNet Control's Setup tab]: bit 0 of 290,
+    # commit activate 26. Hardware-measured: while set, the DEVICE ties Line In N to Line Output N in
+    # both directions (setting or clearing either moves the other; other channels unmoved), and
+    # turning it on copies nothing across. RedNet Control also writes both partners itself
+    # (output, then input), which the device makes unnecessary.
+    if nline:
+        m["lineRefLink"] = member(290, "uint8", nd=26, nc=NOTIFY_RED_GLOBAL,
+                                  note="link I/O reference levels = bit 0 of @ 290; activate 26")
 
     phys_in = []
     for i in range(npre):
@@ -1623,9 +1635,11 @@ def build_red(slug):
          f"activate 21. Measured on a Red 8Line: 0 = +24 dBu, 1 = +18 dBu, on inputs (front-panel "
          f"display) and outputs (a 5.99 dB drop at the jack). "
          + ("The same layout is assumed here, unmeasured. " if slug != "red-8line" else "")
-         + "Switching an output thumps on that output only. Not exposed: line-ref-linked @ 290 "
-         "(activate 26), whose effect is untested. Notification categories (input-other / output) "
-         "are the descriptor's sections; a front-panel change has not been seen to raise them."
+         + "Switching an output thumps on that output only. Link I/O Reference Levels Switch is "
+         "line-ref-linked @ 290 bit 0 (activate 26): while on, the device ties Line In N to Line "
+         "Output N both ways (measured on the 8Line; turning it on copies no level across), raising "
+         "one global notification per linked change, so every reference control is re-read on "
+         "global as well as its section's input-other / output."
          if nline else
          f"The {spec['name']} descriptor has no line-input-ref / line-output-ref fields (the Line "
          "models' input/output reference-level bits), so there is nothing to expose."),
@@ -1746,6 +1760,9 @@ def build_red(slug):
         a["global-controls"][f"lineOutRef{k}"] = OD([
             ("name", f"Line Out {RED_N_GROUPED + k + 1} Reference Playback Enum"), ("type", "enum"),
             ("values", RED_LINE_REF_ENUM(k % 8)), ("mask", 1 << (k % 8))])
+    if nline:
+        a["global-controls"]["lineRefLink"] = OD([
+            ("name", "Link I/O Reference Levels Switch"), ("type", "bool"), ("mask", 1)])
     if alsa_sources:
         a["sources"] = alsa_sources
         a["sinks"] = alsa_sinks
