@@ -1,8 +1,10 @@
 #!/bin/bash
 # Switch a libvirt VM between the stock QEMU and the trace-enabled build (tools/qemu-trace/build.sh).
-#   sudo bash tools/qemu-trace/vm_trace.sh on  [domain]   # default windows11-vm
+#   sudo bash tools/qemu-trace/vm_trace.sh on  [domain]
 #   sudo bash tools/qemu-trace/vm_trace.sh off [domain]
 #   sudo bash tools/qemu-trace/vm_trace.sh show [domain]
+# The VM is the domain argument, else $VM_DOMAIN (keep it through sudo: sudo VM_DOMAIN=... or sudo -E);
+# there is no built-in default.
 # "on" points <emulator> at $PREFIX/bin/qemu-system-x86_64 and adds, in a <qemu:commandline> block:
 #   -trace enable=vfio_region_read -trace enable=vfio_region_write   BAR accesses (log backend, so they
 #                                                                     land in /var/log/libvirt/qemu/<domain>.log)
@@ -15,7 +17,7 @@
 #   '{"execute":"qom-get","arguments":{"path":"/machine/peripheral/ua-clarett","property":"x-no-mmap"}}'
 set -eu
 CMD=${1:?usage: $0 on|off|show [domain]}
-DOM=${2:-windows11-vm}
+DOM=${2:-${VM_DOMAIN:?name the libvirt VM: a second argument or VM_DOMAIN=<domain>}}
 PREFIX=${PREFIX:-/opt/qemu-trace}
 TRACE_QEMU=$PREFIX/bin/qemu-system-x86_64
 SYS_QEMU=/usr/bin/qemu-system-x86_64

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Hot-plug a Red/Clarett unit into a RUNNING libvirt VM, or take it back.
-#   bash vm_red.sh attach [card-id] [domain]    default R8Line windows11-vm
+#   bash vm_red.sh attach [card-id] [domain]    card-id default R8Line (a Clarett: C8PreX, C8Pre, ...)
 #   bash vm_red.sh detach [card-id] [domain]
+# The VM is the domain argument, else $VM_DOMAIN; there is no built-in default.
 # Live only, never in the persistent domain: Windows does not boot with a Red 8Line attached, but takes
 # it fine once it is up. managed='yes' makes libvirt unbind snd_clarett and bind vfio-pci on attach, and
 # rebind snd_clarett on detach. The unit's PCI address is looked up each time (it changes on a replug);
@@ -10,7 +11,7 @@
 set -eu
 CMD=${1:?usage: $0 attach|detach [card-id] [domain]}
 ID=${2:-R8Line}
-DOM=${3:-windows11-vm}
+DOM=${3:-${VM_DOMAIN:?name the libvirt VM: a third argument or VM_DOMAIN=<domain>}}
 V="virsh -c qemu:///system"
 XML=$(mktemp --suffix=.xml); trap 'rm -f "$XML"' EXIT
 hostdev() {	# bdf
