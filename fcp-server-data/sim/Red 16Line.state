@@ -42561,7 +42561,7 @@ state.red-16line {
 	}
 	control.1209 {
 		iface MIXER
-		name 'Line 2 Playback Volume'
+		name 'Line 3 Playback Volume'
 		value 0
 		comment {
 			access 'read write'
@@ -42574,19 +42574,6 @@ state.red-16line {
 	}
 	control.1210 {
 		iface MIXER
-		name 'Line 3 Playback Volume'
-		value 0
-		comment {
-			access 'read write'
-			type INTEGER
-			count 1
-			range '-112 - 0'
-			dbmin -11200
-			dbmax 0
-		}
-	}
-	control.1211 {
-		iface MIXER
 		name 'Line 3 Mute Playback Switch'
 		value false
 		comment {
@@ -42595,7 +42582,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1212 {
+	control.1211 {
 		iface MIXER
 		name 'Line 3 Dim Playback Switch'
 		value false
@@ -42605,20 +42592,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1213 {
-		iface MIXER
-		name 'Line 4 Playback Volume'
-		value 0
-		comment {
-			access 'read write'
-			type INTEGER
-			count 1
-			range '-112 - 0'
-			dbmin -11200
-			dbmax 0
-		}
-	}
-	control.1214 {
+	control.1212 {
 		iface MIXER
 		name 'Line 5 Playback Volume'
 		value 0
@@ -42631,7 +42605,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1215 {
+	control.1213 {
 		iface MIXER
 		name 'Line 5 Mute Playback Switch'
 		value false
@@ -42641,7 +42615,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1216 {
+	control.1214 {
 		iface MIXER
 		name 'Line 5 Dim Playback Switch'
 		value false
@@ -42651,20 +42625,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1217 {
-		iface MIXER
-		name 'Line 6 Playback Volume'
-		value 0
-		comment {
-			access 'read write'
-			type INTEGER
-			count 1
-			range '-112 - 0'
-			dbmin -11200
-			dbmax 0
-		}
-	}
-	control.1218 {
+	control.1215 {
 		iface MIXER
 		name 'Line 7 Playback Volume'
 		value 0
@@ -42677,7 +42638,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1219 {
+	control.1216 {
 		iface MIXER
 		name 'Line 7 Mute Playback Switch'
 		value false
@@ -42687,7 +42648,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1220 {
+	control.1217 {
 		iface MIXER
 		name 'Line 7 Dim Playback Switch'
 		value false
@@ -42697,7 +42658,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1221 {
+	control.1218 {
 		iface MIXER
 		name 'Line Out 7 Volume Control Playback Enum'
 		value false
@@ -42707,7 +42668,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1222 {
+	control.1219 {
 		iface MIXER
 		name 'Line 8 Playback Volume'
 		value 0
@@ -42720,7 +42681,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1223 {
+	control.1220 {
 		iface MIXER
 		name 'Line 8 Mute Playback Switch'
 		value false
@@ -42730,7 +42691,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1224 {
+	control.1221 {
 		iface MIXER
 		name 'Line 8 Dim Playback Switch'
 		value false
@@ -42740,7 +42701,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1225 {
+	control.1222 {
 		iface MIXER
 		name 'Line Out 8 Volume Control Playback Enum'
 		value false
@@ -42750,7 +42711,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1226 {
+	control.1223 {
 		iface MIXER
 		name 'Line 9 Playback Volume'
 		value 0
@@ -42763,7 +42724,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1227 {
+	control.1224 {
 		iface MIXER
 		name 'Line 9 Mute Playback Switch'
 		value false
@@ -42773,7 +42734,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1228 {
+	control.1225 {
 		iface MIXER
 		name 'Line 9 Dim Playback Switch'
 		value false
@@ -42783,7 +42744,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1229 {
+	control.1226 {
 		iface MIXER
 		name 'Line Out 9 Volume Control Playback Enum'
 		value false
@@ -42793,7 +42754,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1230 {
+	control.1227 {
 		iface MIXER
 		name 'Line 10 Playback Volume'
 		value 0
@@ -42806,7 +42767,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1231 {
+	control.1228 {
 		iface MIXER
 		name 'Line 10 Mute Playback Switch'
 		value false
@@ -42816,7 +42777,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1232 {
+	control.1229 {
 		iface MIXER
 		name 'Line 10 Dim Playback Switch'
 		value false
@@ -42826,7 +42787,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1233 {
+	control.1230 {
 		iface MIXER
 		name 'Line Out 10 Volume Control Playback Enum'
 		value false
@@ -42836,7 +42797,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1234 {
+	control.1231 {
 		iface MIXER
 		name 'Line 11 Playback Volume'
 		value 0
@@ -42849,7 +42810,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1235 {
+	control.1232 {
 		iface MIXER
 		name 'Line 11 Mute Playback Switch'
 		value false
@@ -42859,7 +42820,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1236 {
+	control.1233 {
 		iface MIXER
 		name 'Line 11 Dim Playback Switch'
 		value false
@@ -42869,7 +42830,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1237 {
+	control.1234 {
 		iface MIXER
 		name 'Line Out 11 Volume Control Playback Enum'
 		value false
@@ -42879,7 +42840,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1238 {
+	control.1235 {
 		iface MIXER
 		name 'Line 12 Playback Volume'
 		value 0
@@ -42892,7 +42853,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1239 {
+	control.1236 {
 		iface MIXER
 		name 'Line 12 Mute Playback Switch'
 		value false
@@ -42902,7 +42863,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1240 {
+	control.1237 {
 		iface MIXER
 		name 'Line 12 Dim Playback Switch'
 		value false
@@ -42912,7 +42873,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1241 {
+	control.1238 {
 		iface MIXER
 		name 'Line Out 12 Volume Control Playback Enum'
 		value false
@@ -42922,7 +42883,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1242 {
+	control.1239 {
 		iface MIXER
 		name 'Line 13 Playback Volume'
 		value 0
@@ -42935,7 +42896,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1243 {
+	control.1240 {
 		iface MIXER
 		name 'Line 13 Mute Playback Switch'
 		value false
@@ -42945,7 +42906,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1244 {
+	control.1241 {
 		iface MIXER
 		name 'Line 13 Dim Playback Switch'
 		value false
@@ -42955,7 +42916,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1245 {
+	control.1242 {
 		iface MIXER
 		name 'Line Out 13 Volume Control Playback Enum'
 		value false
@@ -42965,7 +42926,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1246 {
+	control.1243 {
 		iface MIXER
 		name 'Line 14 Playback Volume'
 		value 0
@@ -42978,7 +42939,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1247 {
+	control.1244 {
 		iface MIXER
 		name 'Line 14 Mute Playback Switch'
 		value false
@@ -42988,7 +42949,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1248 {
+	control.1245 {
 		iface MIXER
 		name 'Line 14 Dim Playback Switch'
 		value false
@@ -42998,7 +42959,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1249 {
+	control.1246 {
 		iface MIXER
 		name 'Line Out 14 Volume Control Playback Enum'
 		value false
@@ -43008,7 +42969,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1250 {
+	control.1247 {
 		iface MIXER
 		name 'Line 15 Playback Volume'
 		value 0
@@ -43021,7 +42982,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1251 {
+	control.1248 {
 		iface MIXER
 		name 'Line 15 Mute Playback Switch'
 		value false
@@ -43031,7 +42992,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1252 {
+	control.1249 {
 		iface MIXER
 		name 'Line 15 Dim Playback Switch'
 		value false
@@ -43041,7 +43002,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1253 {
+	control.1250 {
 		iface MIXER
 		name 'Line Out 15 Volume Control Playback Enum'
 		value false
@@ -43051,7 +43012,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1254 {
+	control.1251 {
 		iface MIXER
 		name 'Line 16 Playback Volume'
 		value 0
@@ -43064,7 +43025,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1255 {
+	control.1252 {
 		iface MIXER
 		name 'Line 16 Mute Playback Switch'
 		value false
@@ -43074,7 +43035,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1256 {
+	control.1253 {
 		iface MIXER
 		name 'Line 16 Dim Playback Switch'
 		value false
@@ -43084,7 +43045,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1257 {
+	control.1254 {
 		iface MIXER
 		name 'Line Out 16 Volume Control Playback Enum'
 		value false
@@ -43094,7 +43055,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1258 {
+	control.1255 {
 		iface MIXER
 		name 'Line 17 Playback Volume'
 		value 0
@@ -43107,7 +43068,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1259 {
+	control.1256 {
 		iface MIXER
 		name 'Line 17 Mute Playback Switch'
 		value false
@@ -43117,7 +43078,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1260 {
+	control.1257 {
 		iface MIXER
 		name 'Line 17 Dim Playback Switch'
 		value false
@@ -43127,7 +43088,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1261 {
+	control.1258 {
 		iface MIXER
 		name 'Line Out 17 Volume Control Playback Enum'
 		value false
@@ -43137,7 +43098,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1262 {
+	control.1259 {
 		iface MIXER
 		name 'Line 18 Playback Volume'
 		value 0
@@ -43150,7 +43111,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1263 {
+	control.1260 {
 		iface MIXER
 		name 'Line 18 Mute Playback Switch'
 		value false
@@ -43160,7 +43121,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1264 {
+	control.1261 {
 		iface MIXER
 		name 'Line 18 Dim Playback Switch'
 		value false
@@ -43170,7 +43131,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1265 {
+	control.1262 {
 		iface MIXER
 		name 'Line Out 18 Volume Control Playback Enum'
 		value false
@@ -43180,7 +43141,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1266 {
+	control.1263 {
 		iface MIXER
 		name 'Line 19 Playback Volume'
 		value 0
@@ -43193,7 +43154,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1267 {
+	control.1264 {
 		iface MIXER
 		name 'Line 19 Mute Playback Switch'
 		value false
@@ -43203,7 +43164,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1268 {
+	control.1265 {
 		iface MIXER
 		name 'Line 19 Dim Playback Switch'
 		value false
@@ -43213,7 +43174,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1269 {
+	control.1266 {
 		iface MIXER
 		name 'Line Out 19 Volume Control Playback Enum'
 		value false
@@ -43223,7 +43184,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1270 {
+	control.1267 {
 		iface MIXER
 		name 'Line 20 Playback Volume'
 		value 0
@@ -43236,7 +43197,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1271 {
+	control.1268 {
 		iface MIXER
 		name 'Line 20 Mute Playback Switch'
 		value false
@@ -43246,7 +43207,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1272 {
+	control.1269 {
 		iface MIXER
 		name 'Line 20 Dim Playback Switch'
 		value false
@@ -43256,7 +43217,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1273 {
+	control.1270 {
 		iface MIXER
 		name 'Line Out 20 Volume Control Playback Enum'
 		value false
@@ -43266,7 +43227,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1274 {
+	control.1271 {
 		iface MIXER
 		name 'Line 21 Playback Volume'
 		value 0
@@ -43279,7 +43240,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1275 {
+	control.1272 {
 		iface MIXER
 		name 'Line 21 Mute Playback Switch'
 		value false
@@ -43289,7 +43250,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1276 {
+	control.1273 {
 		iface MIXER
 		name 'Line 21 Dim Playback Switch'
 		value false
@@ -43299,7 +43260,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1277 {
+	control.1274 {
 		iface MIXER
 		name 'Line Out 21 Volume Control Playback Enum'
 		value false
@@ -43309,7 +43270,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1278 {
+	control.1275 {
 		iface MIXER
 		name 'Line 22 Playback Volume'
 		value 0
@@ -43322,7 +43283,7 @@ state.red-16line {
 			dbmax 0
 		}
 	}
-	control.1279 {
+	control.1276 {
 		iface MIXER
 		name 'Line 22 Mute Playback Switch'
 		value false
@@ -43332,7 +43293,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1280 {
+	control.1277 {
 		iface MIXER
 		name 'Line 22 Dim Playback Switch'
 		value false
@@ -43342,7 +43303,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1281 {
+	control.1278 {
 		iface MIXER
 		name 'Line Out 22 Volume Control Playback Enum'
 		value false
@@ -43352,7 +43313,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1282 {
+	control.1279 {
 		iface CARD
 		name 'Firmware Version'
 		value 1
@@ -43363,7 +43324,7 @@ state.red-16line {
 			range '0 - 65535'
 		}
 	}
-	control.1283 {
+	control.1280 {
 		iface MIXER
 		name 'Mute Playback Switch'
 		value false
@@ -43373,7 +43334,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1284 {
+	control.1281 {
 		iface MIXER
 		name 'Dim Playback Switch'
 		value false
@@ -43383,7 +43344,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1285 {
+	control.1282 {
 		iface MIXER
 		name 'Meter Source Enum'
 		value 'Analogue Inputs 1-8'
@@ -43411,7 +43372,7 @@ state.red-16line {
 			item.17 'Dante Outputs 25-32'
 		}
 	}
-	control.1286 {
+	control.1283 {
 		iface MIXER
 		name 'S/PDIF Source Capture Enum'
 		value Optical
@@ -43423,7 +43384,7 @@ state.red-16line {
 			item.1 RCA
 		}
 	}
-	control.1287 {
+	control.1284 {
 		iface MIXER
 		name 'Line In 1 Reference Capture Enum'
 		value +24dBu
@@ -43435,7 +43396,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1288 {
+	control.1285 {
 		iface MIXER
 		name 'Line In 2 Reference Capture Enum'
 		value +24dBu
@@ -43447,7 +43408,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1289 {
+	control.1286 {
 		iface MIXER
 		name 'Line In 3 Reference Capture Enum'
 		value +24dBu
@@ -43459,7 +43420,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1290 {
+	control.1287 {
 		iface MIXER
 		name 'Line In 4 Reference Capture Enum'
 		value +24dBu
@@ -43471,7 +43432,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1291 {
+	control.1288 {
 		iface MIXER
 		name 'Line In 5 Reference Capture Enum'
 		value +24dBu
@@ -43483,7 +43444,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1292 {
+	control.1289 {
 		iface MIXER
 		name 'Line In 6 Reference Capture Enum'
 		value +24dBu
@@ -43495,7 +43456,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1293 {
+	control.1290 {
 		iface MIXER
 		name 'Line In 7 Reference Capture Enum'
 		value +24dBu
@@ -43507,7 +43468,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1294 {
+	control.1291 {
 		iface MIXER
 		name 'Line In 8 Reference Capture Enum'
 		value +24dBu
@@ -43519,7 +43480,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1295 {
+	control.1292 {
 		iface MIXER
 		name 'Line In 9 Reference Capture Enum'
 		value +24dBu
@@ -43531,7 +43492,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1296 {
+	control.1293 {
 		iface MIXER
 		name 'Line In 10 Reference Capture Enum'
 		value +24dBu
@@ -43543,7 +43504,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1297 {
+	control.1294 {
 		iface MIXER
 		name 'Line In 11 Reference Capture Enum'
 		value +24dBu
@@ -43555,7 +43516,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1298 {
+	control.1295 {
 		iface MIXER
 		name 'Line In 12 Reference Capture Enum'
 		value +24dBu
@@ -43567,7 +43528,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1299 {
+	control.1296 {
 		iface MIXER
 		name 'Line In 13 Reference Capture Enum'
 		value +24dBu
@@ -43579,7 +43540,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1300 {
+	control.1297 {
 		iface MIXER
 		name 'Line In 14 Reference Capture Enum'
 		value +24dBu
@@ -43591,7 +43552,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1301 {
+	control.1298 {
 		iface MIXER
 		name 'Line In 15 Reference Capture Enum'
 		value +24dBu
@@ -43603,7 +43564,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1302 {
+	control.1299 {
 		iface MIXER
 		name 'Line In 16 Reference Capture Enum'
 		value +24dBu
@@ -43615,7 +43576,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1303 {
+	control.1300 {
 		iface MIXER
 		name 'Line Out 7 Reference Playback Enum'
 		value +24dBu
@@ -43627,7 +43588,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1304 {
+	control.1301 {
 		iface MIXER
 		name 'Line Out 8 Reference Playback Enum'
 		value +24dBu
@@ -43639,7 +43600,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1305 {
+	control.1302 {
 		iface MIXER
 		name 'Line Out 9 Reference Playback Enum'
 		value +24dBu
@@ -43651,7 +43612,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1306 {
+	control.1303 {
 		iface MIXER
 		name 'Line Out 10 Reference Playback Enum'
 		value +24dBu
@@ -43663,7 +43624,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1307 {
+	control.1304 {
 		iface MIXER
 		name 'Line Out 11 Reference Playback Enum'
 		value +24dBu
@@ -43675,7 +43636,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1308 {
+	control.1305 {
 		iface MIXER
 		name 'Line Out 12 Reference Playback Enum'
 		value +24dBu
@@ -43687,7 +43648,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1309 {
+	control.1306 {
 		iface MIXER
 		name 'Line Out 13 Reference Playback Enum'
 		value +24dBu
@@ -43699,7 +43660,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1310 {
+	control.1307 {
 		iface MIXER
 		name 'Line Out 14 Reference Playback Enum'
 		value +24dBu
@@ -43711,7 +43672,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1311 {
+	control.1308 {
 		iface MIXER
 		name 'Line Out 15 Reference Playback Enum'
 		value +24dBu
@@ -43723,7 +43684,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1312 {
+	control.1309 {
 		iface MIXER
 		name 'Line Out 16 Reference Playback Enum'
 		value +24dBu
@@ -43735,7 +43696,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1313 {
+	control.1310 {
 		iface MIXER
 		name 'Line Out 17 Reference Playback Enum'
 		value +24dBu
@@ -43747,7 +43708,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1314 {
+	control.1311 {
 		iface MIXER
 		name 'Line Out 18 Reference Playback Enum'
 		value +24dBu
@@ -43759,7 +43720,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1315 {
+	control.1312 {
 		iface MIXER
 		name 'Line Out 19 Reference Playback Enum'
 		value +24dBu
@@ -43771,7 +43732,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1316 {
+	control.1313 {
 		iface MIXER
 		name 'Line Out 20 Reference Playback Enum'
 		value +24dBu
@@ -43783,7 +43744,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1317 {
+	control.1314 {
 		iface MIXER
 		name 'Line Out 21 Reference Playback Enum'
 		value +24dBu
@@ -43795,7 +43756,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1318 {
+	control.1315 {
 		iface MIXER
 		name 'Line Out 22 Reference Playback Enum'
 		value +24dBu
@@ -43807,7 +43768,7 @@ state.red-16line {
 			item.1 +18dBu
 		}
 	}
-	control.1319 {
+	control.1316 {
 		iface MIXER
 		name 'Link I/O Reference Levels Switch'
 		value false
@@ -43817,7 +43778,7 @@ state.red-16line {
 			count 1
 		}
 	}
-	control.1320 {
+	control.1317 {
 		iface PCM
 		name 'Level Meter'
 		value.0 0
@@ -43955,7 +43916,7 @@ state.red-16line {
 			range '0 - 4095'
 		}
 	}
-	control.1321 {
+	control.1318 {
 		iface PCM
 		name 'Level Meter'
 		index 1

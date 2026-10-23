@@ -1482,17 +1482,18 @@ def build_red(slug):
     phys_out = []
     for n in range(nout):
         if n < RED_N_GROUPED:
-            # Every output of a knob group gets a fader bound to the group gain, so each keeps its
-            # own level meter; the two move together (fcp-server re-reads every control sharing the
-            # written one's notify-client after a write, and both carry OUTPUT). Mute and dim exist once per group, so they sit on the group's first output
-            # only (the GUI spans them across both columns), and the Monitor group has none here at
-            # all: the global Mute/Dim buttons are the same bits of @124, and the GUI draws them
-            # under the Monitor faders.
+            # A knob group is one stereo pair with one gain, so its fader, like its mute and dim,
+            # sits on the group's first output only. alsa-scarlett-gui spans each across both
+            # columns and meters the second output on the same knob, as an inner arc. The Monitor
+            # group has no mute/dim here at all: the global Mute/Dim buttons are the same bits of
+            # @124, and the GUI draws them under the Monitor fader.
             # No SW/HW toggle: the outputs' own gains (24..34) are pinned at 0 dB by the device --
             # a -40 dB write to output 1 reads straight back as 0, with its hardware-control byte
             # at 0 (hardware-measured) -- so the group gain is the only level these outputs have.
             g = n // 2
-            ctrls = OD([("level", OD(index=0, member=f"grpGain{g}"))])
+            ctrls = OD()
+            if n % 2 == 0:
+                ctrls["level"] = OD(index=0, member=f"grpGain{g}")
             if n % 2 == 0 and g > 0:
                 ctrls["mute"] = OD(index=0, member=f"grpMuteDim{g}")  # index = BIT in the byte
                 ctrls["dim"]  = OD(index=1, member=f"grpMuteDim{g}")
