@@ -1,7 +1,9 @@
 #!/bin/bash
 # System sleep and resume, with or without a card. Run as root:  sudo bash sleep_test.sh <card|none> [mode] [secs]
 #   mode: s2idle (suspend to idle) or deep (S3), set in /sys/power/mem_sleep for the run and restored after;
-#   default deep. secs: how long to sleep (default 20). Sleep goes through `systemctl suspend`, so the hooks
+#   default deep. Or hibernate (`systemctl hibernate`, so the image goes to the disk swap and the host powers
+#   off): needs a disk swap and resume= on the kernel command line; if the firmware ignores the RTC alarm in
+#   that state, wake it with the power button. secs: how long to sleep (default 20). Sleep goes through `systemctl suspend`, so the hooks
 #   systemd runs (nvidia-suspend/-resume on a host with NVIDIA's driver) run too; writing the kernel's sleep
 #   state directly, as `rtcwake -m mem` does, skips them, and on such a host the desktop comes back frozen.
 #   An RTC alarm (`rtcwake -m no`) wakes the host. "none" runs the same sleep with no card checks: the
@@ -32,7 +34,13 @@ state() {
 	say "  fcp-srv:  $(systemctl is-active fcp-server@$CARD.service)"
 }
 
-grep -qw "$MODE" /sys/power/mem_sleep || { echo "mode '$MODE' not offered: $(cat /sys/power/mem_sleep)"; exit 1; }
+if [ "$MODE" = hibernate ]; then
+	grep -qw disk /sys/power/state || { echo "hibernation not offered: $(cat /sys/power/state)"; exit 1; }
+	EXIT_MARK='PM: hibernation: hibernation exit'
+else
+	grep -qw "$MODE" /sys/power/mem_sleep || { echo "mode '$MODE' not offered: $(cat /sys/power/mem_sleep)"; exit 1; }
+	EXIT_MARK='PM: suspend exit'
+fi
 : > "$LOG"
 if [ "$CARD" = none ]; then
 	say "no card (baseline), mode $MODE, ${SECS}s, $(date -Is)"
@@ -46,21 +54,21 @@ else
 fi
 sync
 OLD_SLEEP=$(sed -n 's/.*\[\(.*\)\].*/\1/p' /sys/power/mem_sleep)
-echo "$MODE" > /sys/power/mem_sleep
+[ "$MODE" = hibernate ] || echo "$MODE" > /sys/power/mem_sleep
 T0=$(date '+%Y-%m-%d %H:%M:%S')
 rtcwake -m no -s "$SECS" >/dev/null || { echo "$OLD_SLEEP" > /sys/power/mem_sleep; say "rtcwake failed"; exit 1; }
-systemctl suspend
+if [ "$MODE" = hibernate ]; then systemctl hibernate; else systemctl suspend; fi
 # systemctl returns once the job is queued; wait for the kernel to report the resume.
 for _ in $(seq $((SECS + 120))); do
-	journalctl -k --since "$T0" | grep -q 'PM: suspend exit' && break
+	journalctl -k --since "$T0" | grep -q "$EXIT_MARK" && break
 	sleep 1
 done
 echo "$OLD_SLEEP" > /sys/power/mem_sleep
-journalctl -k --since "$T0" | grep -q 'PM: suspend exit' || say "NO RESUME logged within $((SECS + 120)) s"
+journalctl -k --since "$T0" | grep -q "$EXIT_MARK" || say "NO RESUME logged within $((SECS + 120)) s"
 sleep 5
 if [ "$CARD" = none ]; then
 	say "resumed"
-	journalctl --since "$T0" -o short-precise --no-pager | grep -E "PM: (suspend|resume)|ACPI: PM|nvidia" | tee -a "$LOG"
+	journalctl --since "$T0" -o short-precise --no-pager | grep -E "PM: (suspend|resume|hibernation|Image)|ACPI: PM|nvidia" | tee -a "$LOG"
 	exit 0
 fi
 say "after (5 s):"
@@ -76,5 +84,5 @@ else
 	say "  device:   resumed in place"
 fi
 say "kernel and fcp-server log across the sleep:"
-journalctl --since "$T0" -o short-precise --no-pager | grep -E "snd_clarett|thunderbolt|fcp-server|PM: (suspend|resume)|ACPI: PM" \
+journalctl --since "$T0" -o short-precise --no-pager | grep -E "snd_clarett|thunderbolt|fcp-server|PM: (suspend|resume|hibernation|Image)|ACPI: PM" \
 	| grep -v 'GET_METER' | tee -a "$LOG"
