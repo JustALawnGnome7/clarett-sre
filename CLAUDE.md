@@ -2110,7 +2110,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   held across s2idle that re-prepared and ran to completion. Re-attach ~5 ms (`hw_init` ack ~3 ms).
   ~~**Untested:** the other four models, MIDI across a sleep~~, hibernation, a unit unplugged while asleep. **Hibernation deferred (Oct 23 2026, operator's call):** the
   laptop has only zram swap and no `resume=`, so it needs a btrfs swapfile, `resume=`/`resume_offset` and the dracut
-  `resume` module first; then a no-Thunderbolt baseline, then the chained Red. `sleep_test.sh` has a `hibernate` mode.
+  `resume` module first; then a no-Thunderbolt baseline, then the chained Red. `sleep_test.sh` has a `hibernate` mode. **Reboot/power-off with Thunderbolt units attached is untested too
+  (noted Oct 23 2026 at the operator's request):** it runs `clarett_shutdown()`, not `clarett_remove()`, so the 0.2.3
+  removal fix does not cover it. Plan: reboot and poweroff with the dock -> Red -> 8PreX chain bound, idle, streaming,
+  and just after a settings change; confirm no hang from `journalctl -b -1`.
   **Oct 22-23 2026, laptop, Dock G4, 0.2.1 akmod (`sleep_test.sh`):**
   - **Every model alone on the dock passes s2idle AND deep** (resumed in place, Sync Locked, meter read OK):
     2Pre, 4Pre, 8Pre, 8PreX, Red 8Line (the Red's deep run with a 60ch `arecord` held across, RUNNING after).
