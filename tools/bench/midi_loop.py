@@ -101,6 +101,8 @@ def main():
     ap.add_argument("--count", type=int, default=1500, help="notes: note on/off pairs")
     ap.add_argument("--rate", type=float, default=0, help="bytes/s, 0 = unpaced")
     ap.add_argument("--show", type=int, default=20, help="loss events to list")
+    ap.add_argument("--dump", metavar="FILE",
+                    help="save what was received: one line per read, '<ms since start> <hex>'")
     a = ap.parse_args()
 
     data = build(a.mode, a.bytes if a.mode == "sysex" else a.count)
@@ -127,6 +129,10 @@ def main():
     os.close(fd)
 
     rx = b"".join(b for _, b in chunks)
+    if a.dump:
+        with open(a.dump, "w") as f:
+            for t, b in chunks:
+                f.write(f"{(t - t0) * 1000:.1f} {b.hex()}\n")
     t_last = chunks[-1][0] if chunks else t0
     print(f"{path} mode={a.mode} rate={'unpaced' if not a.rate else f'{a.rate:g} B/s'}")
     print(f"sent {len(data)} B (writer done {t_wrote - t0:.3f} s), "

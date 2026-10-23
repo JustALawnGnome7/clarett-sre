@@ -677,11 +677,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.2.1 since Oct 21 2026** (system sleep support; snd-clarett `293be10`). 0.2.0 from Oct 19 2026;
+  - **Version 0.2.2 since Oct 23 2026** (MIDI input after system sleep; snd-clarett `736a99d`). 0.2.1 from Oct 21
+    2026 (system sleep support; `293be10`). 0.2.0 from Oct 19 2026;
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -2088,7 +2089,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   ~2 s is one per ~50 ms — exactly the 8Pre's "2 bytes every ~49.7 ms". No count=3 word was seen. **And the
   8Pre itself, the unit that lost the bytes, the same day on the fix: the same five loops byte-exact**
   (6000 B unpaced at 3121 B/s and paced at 1560 B/s, 1500 note pairs, 4 KB, 25 KB).
-- **★ SYSTEM SLEEP SUPPORTED (Oct 21 2026, snd-clarett; 2Pre only so far).** `clarett_suspend()` /
+- **★ SYSTEM SLEEP SUPPORTED (Oct 21 2026, snd-clarett; ALL FIVE MODELS PASS ALONE Oct 23; a unit chained
+  behind a Red FREEZES the host on resume, open).** `clarett_suspend()` /
   `clarett_resume()` (DEFINE_SIMPLE_DEV_PM_OPS): suspend marks the card D3hot (hwdep ioctls now wait under
   `snd_power_ref_and_wait`), stops the work items, flushes a pending persist, parks MIDI TX, tears the engine
   down (trigger SUSPEND = STOP; no INFO_RESUME, so apps re-prepare and the prepare re-arms), masks IRQs and
@@ -2105,7 +2107,34 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   build:** s2idle and deep (S3) via `tools/bench/sleep_test.sh` (systemctl suspend + RTC alarm), resumed in
   place both ways, Sync Locked, meter read OK; and, on the equivalent debug build, an `arecord` capture
   held across s2idle that re-prepared and ran to completion. Re-attach ~5 ms (`hw_init` ack ~3 ms).
-  **Untested:** the other four models, MIDI across a sleep, hibernation, a unit unplugged while asleep.
+  ~~**Untested:** the other four models, MIDI across a sleep~~, hibernation, a unit unplugged while asleep.
+  **Oct 22-23 2026, laptop, Dock G4, 0.2.1 akmod (`sleep_test.sh`):**
+  - **Every model alone on the dock passes s2idle AND deep** (resumed in place, Sync Locked, meter read OK):
+    2Pre, 4Pre, 8Pre, 8PreX, Red 8Line (the Red's deep run with a 60ch `arecord` held across, RUNNING after).
+  - **★ OPEN — a unit chained BEHIND THE RED (dock -> Red 8Line -> 8PreX) freezes the laptop**, 3 of 3 runs
+    with snd_clarett bound to the Red, whether or not the 8PreX was bound (power-cycle needed). With NEITHER
+    unit bound the laptop wakes, but the chain does not survive either way: thunderbolt logs the dock's port to
+    the Red `failed to reach state TB_PORT_UP ... lost during suspend, disconnecting`, the whole chain is
+    removed, the Red is re-found ~19 s later, and the 8PreX is re-found and "authorized" with NO PCIe tunnel
+    (fixed by power-cycling it). So: (1) losing the chain is Thunderbolt level (host driver, the Red's Alpine
+    Ridge firmware, the dock, or TB1 behind TB3 — not pinned down); (2) our binding to the Red turns it into a
+    freeze. **pm_trace (Oct 23): resume HAD started** and stopped early (hash matched i2c_designware.1 / hpet /
+    tty27, no PCI or Thunderbolt device, no driver file:line), so the freeze is on RESUME — **correcting the Oct 22
+    "froze on ENTRY"**: journald is frozen during sleep, so suspend/resume kernel lines only reach the journal
+    after wake, and a boot ending at `PM: suspend entry` says nothing about where it died. Next: a build whose
+    suspend/resume do nothing (the PCI core still takes the Red to D3hot) — if it still freezes, the cause is D3hot
+    + the lost chain (kernel/hardware, report upstream, maybe a workaround here); if not, bisect our suspend steps
+    (engine stop, IRQ mask, DMA quiesce).
+  - **★ MIDI ACROSS A SLEEP: a stale-byte burst, FIXED in 0.2.2 (snd-clarett `256802d`).**
+    8PreX alone, a 5-pin cable Out -> In, `midi_loop.py --dump` (new option: records every read with its time)
+    streaming 120,000 B at 1560 B/s across s2idle. On 0.2.1, twice: the stream carried on IN ORDER with nothing
+    lost, but at the wake ~220 STALE bytes (old counter values, i.e. old contents of the unit's RX FIFO memory)
+    were injected in one burst within 2 ms — far faster than the wire (3125 B/s) could carry, so they came from
+    the device's buffer, not the cable. `clarett_hw_init()` re-enables the IRQs, and the first MIDI RX interrupt
+    delivered them. Fix: `midi_rx_discard`, set at suspend, makes the ISR drain without delivering until the
+    re-attach finishes; `clarett_midi_resume()` drains once more under the lock, clears it, then restarts TX
+    (`clarett_midi_drain()` is the shared loop). On the fixed build: s2idle AND deep **BYTE-EXACT** (120,002 B,
+    no gaps). A fresh port after the sleep was byte-exact on 0.2.1 too: only bytes in transit were affected.
   **Laptop traps hit on the way (not the driver):** this HP laptop (hybrid Intel + NVIDIA) also froze with
   nothing attached at the GNOME login, and once after a CLEAN resume: the display stayed black, then
   `i915 ... PSR aux error` and the lock screen's fprintd start right before it died. Booting with
