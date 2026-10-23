@@ -677,12 +677,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.2.2 since Oct 23 2026** (MIDI input after system sleep; snd-clarett `736a99d`). 0.2.1 from Oct 21
+  - **Version 0.2.3 since Oct 23 2026** (removal no longer waits for open handles: the chained-Red resume freeze;
+    snd-clarett `162e980`, fix `1057971`). 0.2.2 earlier the same day (MIDI input after system sleep; `736a99d`). 0.2.1 from Oct 21
     2026 (system sleep support; `293be10`). 0.2.0 from Oct 19 2026;
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -2090,7 +2091,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   8Pre itself, the unit that lost the bytes, the same day on the fix: the same five loops byte-exact**
   (6000 B unpaced at 3121 B/s and paced at 1560 B/s, 1500 note pairs, 4 KB, 25 KB).
 - **★ SYSTEM SLEEP SUPPORTED (Oct 21 2026, snd-clarett; ALL FIVE MODELS PASS ALONE Oct 23; a unit chained
-  behind a Red FREEZES the host on resume, open).** `clarett_suspend()` /
+  behind a Red FREEZES the host on resume: ROOT-CAUSED Oct 23 as a remove-vs-frozen-userspace deadlock, FIXED the same day in 0.2.3).** `clarett_suspend()` /
   `clarett_resume()` (DEFINE_SIMPLE_DEV_PM_OPS): suspend marks the card D3hot (hwdep ioctls now wait under
   `snd_power_ref_and_wait`), stops the work items, flushes a pending persist, parks MIDI TX, tears the engine
   down (trigger SUSPEND = STOP; no INFO_RESUME, so apps re-prepare and the prepare re-arms), masks IRQs and
@@ -2121,10 +2122,44 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     freeze. **pm_trace (Oct 23): resume HAD started** and stopped early (hash matched i2c_designware.1 / hpet /
     tty27, no PCI or Thunderbolt device, no driver file:line), so the freeze is on RESUME — **correcting the Oct 22
     "froze on ENTRY"**: journald is frozen during sleep, so suspend/resume kernel lines only reach the journal
-    after wake, and a boot ending at `PM: suspend entry` says nothing about where it died. Next: a build whose
-    suspend/resume do nothing (the PCI core still takes the Red to D3hot) — if it still freezes, the cause is D3hot
-    + the lost chain (kernel/hardware, report upstream, maybe a workaround here); if not, bisect our suspend steps
-    (engine stop, IRQ mask, DMA quiesce).
+    after wake, and a boot ending at `PM: suspend entry` says nothing about where it died. **Do-nothing test (Oct 23,
+    a scratch build, never committed, `pm_steps` mask; 0 = both callbacks return at once): STILL FROZE** (s2idle,
+    Red bound, 8PreX behind it). So none of our suspend steps causes it. What bound-with-PM-ops still changes
+    against unbound is the PCI core: with driver PM callbacks it saves state and takes the Red to D3hot (and lets its
+    bridges power down), while for an unbound device or a driver without PM ops it saves state and leaves it in D0.
+    **`pm_steps=32` (the callback calls `pci_save_state()`, so the core leaves the Red in D0, as unbound): STILL
+    FROZE** (srcversion checked in the log; a first attempt had loaded plain 0.2.2, where the unknown parameter is
+    ignored). So the Red's D-state is not it either. Left between bound and unbound: an unbind also frees the MSI
+    vectors and handlers and clears bus mastering; even full 0.2.2 keeps MSI enabled. **`pm_steps=112`
+    (16 bus master off + 64 free IRQs/MSI + 32 stay in D0 = the unbound device state): STILL FROZE.** So nothing
+    the driver leaves on the Red at suspend matters. Untested split: every freeze had the RED bound; the one wake had
+    NOTHING bound; "Red unbound, 8PreX (behind the Red's chain port `06:04.0`) bound" never ran. Bound devices hold
+    their bridges runtime-active (the whole chain read `active` with both bound); an all-unbound chain may idle down
+    before the sleep. **Red unbound by sysfs, 8PreX bound (0.2.2): STILL FROZE** — so the Red need not be bound: ANY snd_clarett-bound
+    unit on the Red's chain freezes it; only "nothing bound" has woken. (Unbinding did not let the chain idle: every
+    bridge stayed `active`, the endpoints' `power/control` is `on`.) **Red on `pci-stub` (claims, does nothing), 8PreX
+    unbound: WOKE** (chain lost and rebuilt as usual). **★★ ROOT CAUSE (Oct 23): 0.2.2, both bound, but fcp-server AND
+    the `alsa-state` daemon (`alsactl`, which holds every card's controlC) stopped, `fuser` empty: WOKE**, chain lost,
+    both units removed and re-probed 20 s later. So the freeze is a RESUME DEADLOCK: the lost chain is hot-removed
+    while userspace is still frozen, `clarett_remove()` -> `snd_card_free()` waits for every open handle to close,
+    and the holders (fcp-server's hwdep, alsactl's controlC) cannot run until resume finishes. Explains every run:
+    alone-on-dock never removes; pci-stub/unbound have nothing to wait for; `pm_steps` never mattered; a power-off
+    at idle is fine because userspace is awake to close. **★ FIXED Oct 23, RELEASED IN 0.2.3 (snd-clarett `1057971`,
+    srcversion `8AAAFCE04E4104EE5D75870`):** remove disconnects, runs a new `clarett_hw_teardown()` (everything
+    that touches the device or its devres: settings flush, engine stop, IRQ mask, MSI free, DMA quiesce) and then
+    `snd_card_free_when_closed()`; `clarett_card_free()` keeps only software cleanup. A `hw_gone` flag (set under
+    pcm_lock, then mbox/hwdep locks drained) makes the register accessors no-ops (reads ~0), and the mailbox, meter
+    control, meter ioctls and the playback-close TX-ring clear refuse after it. **First build OOPSED** at the late
+    free: the ALSA PCM buffers were `SNDRV_DMA_TYPE_DEV` on the PCI device, freed after the device was gone
+    (`dma_free_contiguous` fault in fcp-server's exit) — now `SNDRV_DMA_TYPE_VMALLOC` (the device never DMAs them;
+    the driver copies to its own rings). **Verified on the second build, laptop, dock -> Red 8Line -> 8PreX, fcp-server
+    + alsactl holding both cards:** s2idle and deep both wake, chain lost and both units hot-removed during resume,
+    the Red re-probed ~20 s later; a 60ch `arecord` on the Red with the Red powered off exits `-EBADFD`, servicer
+    stops cleanly; a sysfs unbind with fcp-server holding the card returns at once; no oops/WARN, no D-state, all
+    five checks. **Left (Thunderbolt, not the driver):** after a sleep the 8PreX behind the Red is re-found but its
+    PCIe link never comes up (`06:04.0 pciehp: Slot(4): No link`) until it is power-cycled — same as with nothing
+    bound; an upstream-report item. The pmtest patch is kept as
+    `~/clarett-bench/pmtest_patch.py` (applied to a copy of snd-clarett), since /tmp dies with every forced power-off.
   - **★ MIDI ACROSS A SLEEP: a stale-byte burst, FIXED in 0.2.2 (snd-clarett `256802d`).**
     8PreX alone, a 5-pin cable Out -> In, `midi_loop.py --dump` (new option: records every read with its time)
     streaming 120,000 B at 1560 B/s across s2idle. On 0.2.1, twice: the stream carried on IN ORDER with nothing
