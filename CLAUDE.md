@@ -556,9 +556,11 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
 snd-clarett/                          GIT SUBMODULE -> github.com/JustALawnGnome7/snd-clarett (PUBLIC; fresh
                                       history, the dated RE trail stays here). Out-of-tree module
                                       `snd-clarett` (hwdep transport + PCM + MIDI). Was `driver/`.
-  clarett.h, clarett_main.c (PCI probe + data-plane engine), clarett_mailbox.c (FCP transport),
-  clarett_hwdep.c (the FCP hwdep ABI — the only control surface), clarett_pcm.c (capture PCM,
-  enable_pcm=1), Makefile, README.md
+  clarett.h, clarett_main.c (PCI probe, removal, attach, IRQs), clarett_models.c (model table +
+  detection), clarett_engine.c (data-plane engine + stream servicer), clarett_follow.c (persist,
+  notify relay, knob follow), clarett_pm.c (system sleep), clarett_mailbox.c (FCP transport),
+  clarett_hwdep.c (the FCP hwdep ABI — the only control surface), clarett_pcm.c (capture +
+  playback PCM, Clock Source), clarett_midi.c, Makefile, README.md, DEVELOPMENT.md
   dkms.conf                           THE version (PACKAGE_VERSION) — the Makefile parses it out and
                                       compiles it in as MODULE_VERSION. Bump it here and nowhere else.
   packaging/*.spec                    Fedora RPM: snd-clarett-kmod.spec (kmodtool -> akmod + per-kernel
@@ -677,13 +679,25 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.2.3 since Oct 23 2026** (removal no longer waits for open handles: the chained-Red resume freeze;
+  - **Version 0.3.0 since Nov 4 2026** (snd-clarett `96bc47f`, tag `v0.3.0`): the kernel-style pass
+    plus the refactor:
+    - **Files:** clarett_main.c split into models/engine/follow/pm; long functions split into helpers;
+      comments trimmed 21%.
+    - **Lifetimes:** the meter buffers are freed with the card, not devres.
+    - **Module parameters cut to `index`, `id`, `enable`, `max_buffer`.** The standard per-card arrays
+      take the lowest free slot, released when the card is freed, so hot-plug cannot exhaust them.
+      Clock Source lives in the card and alsactl's saved state restores it on every card add.
+      Everything else became a constant or was removed.
+    - **Per-command FCPr telemetry** is now `dev_dbg` (`format "FCPr"`).
+    - **Tested:** Phase 5 matrix passed on all five models that day (phase_check, loopback_order,
+      SHORT=1 duplex_stress, MIDI x3 on every Clarett, s2idle).
+  - Version 0.2.3 from Oct 23 2026 (removal no longer waits for open handles: the chained-Red resume freeze;
     snd-clarett `162e980`, fix `1057971`). 0.2.2 earlier the same day (MIDI input after system sleep; `736a99d`). 0.2.1 from Oct 21
     2026 (system sleep support; `293be10`). 0.2.0 from Oct 19 2026;
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -939,7 +953,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   Still `info` unconditionally: `stream-badread[n]`, and the probe `dev_err` when the device never
   becomes ready. Everything else already sat behind an opt-in param (`stream_probe`,
   `error_probe`, `seed_dump`, `resp_trace`, `tx_trace`, `rekick`, `arm_pre`, `tx_tone`). **Since Oct 13
-  2026 only `resp_trace` and `tx_trace` remain of those** (Bennett port step 5 part 4).
+  2026 only `resp_trace` and `tx_trace` remain of those** (Bennett port step 5 part 4); **since 0.3.0
+  (Nov 4 2026) neither: the FCPr lines are dev_dbg, and tx_trace is gone.**
   - **`stream-svc:` telemetry is now anomaly-gated, not unconditional** (`clarett_svc_log`). The 2-second
     window line prints at `info` only when that window had `late`, an `overrun`, a `badread`, or a
     `rekick`; otherwise `dev_dbg`. Same rule for the per-stream `stream-svc: stopped` summary, which now
@@ -1713,7 +1728,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   probe tuning: `settle_ms`, `ready_retry_ms`. REMOVED dead model fields: `n_analogue`/`analogue`
   (+ the preamp tables), `in_prefix`, `mode_label`, `has_spdif_source`. Unreferenced defines folded into
   comments (opcode numbers, the FCP status codes, MUX_READ's 28-entry cap); `NOTIFY_EV_SYNC` kept as
-  part of the event-bit set. KEPT: `enable_pcm`, `enable_midi`, `clock_source`, `hw_gain_follow`,
+  part of the event-bit set. **(0.3.0, Nov 4 2026: of the list below only `max_buffer` remains, beside
+  the new `index`/`id`/`enable`; the rest are constants or gone.)** KEPT: `enable_pcm`, `enable_midi`, `clock_source`, `hw_gain_follow`,
   `max_buffer`, `notify_ms`, `meter_poll_ms`, `monitor_poll`, `addr_ack_ms`, `ready_resp_ms`,
   `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 closed Oct 16 2026: default 16),
   `phase_cycle` (~~remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix~~ REMOVED Oct 16
