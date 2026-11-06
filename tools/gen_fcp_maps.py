@@ -1778,6 +1778,195 @@ check_red_bands("red-8line")
 for _slug in RED_MODELS:
     build_red(_slug)
 
+
+# =====================================================================================================
+# Clarett 8Pre USB (1235:8208) under the kernel's `fcp` driver instead of scarlett2.
+#
+# A USB model, so fcp-server keys its maps on the USB product id (fcp-devmap-8208.json /
+# fcp-alsa-map-8208.json) with no snd-clarett involvement. Like the Thunderbolt line it does not answer
+# DEVMAP_INFO (0x80000c: FCP error 7), so fcp-server needs the devmap from a file too.
+#
+# Offsets, widths and activates are [XML] (vendor-reference/Devices/Clarett 8Pre USB.xml) and agree
+# with the public scarlett2 driver's config set for this model (mixer_scarlett2.c,
+# scarlett2_config_set_clarett): dim/mute 0x31, line-out volume 0x34 (s16), mute 0x5c, SW/HW 0x66,
+# master volume 0x76, level 0x7c, standalone 0x8d, air 0x95, S/PDIF source 0x9e. Output gains are
+# signed dB at 1 dB/step (0 = unity, -127 = floor), as on the Scarlett 4th gen, so no inversion.
+#
+# Routing and meters: the router table order is scarlett2's mux_assignment for this model, per speed
+# band, and GET_METER returns one value per entry in that order (scarlett2 meter_map: the 18 PCM
+# entries, then the 38 after them), so a destination's peak-index is its position in its band's table:
+# the same rule the Thunderbolt line obeys.
+#   band 0 (44.1/48):   PCM 18, analogue 10, S/PDIF 2, ADAT 8, mixer inputs 18
+#   band 1 (88.2/96):   PCM 14, analogue 10, S/PDIF 2, ADAT 4, mixer inputs 18
+#   band 2 (176.4/192): PCM 12, analogue 10, S/PDIF 2 (no ADAT out; no mixer at quad speed)
+# Pins [XML]: analogue 0x080, S/PDIF 0x180, ADAT 0x200, mix 0x300, PCM 0x600, the same on both sides.
+USB8_PID = "8208"
+USB8_IN_PIN, USB8_SPDIF_PIN, USB8_ADAT_PIN, USB8_MIX_PIN, USB8_PCM_PIN = 0x080, 0x180, 0x200, 0x300, 0x600
+USB8_NOTIFY_DIM_MUTE = 0x00200000     # [XML <notifications>]
+USB8_NOTIFY_MONITOR  = 0x00400000
+USB8_BANDS = [                        # (kind, count) in table order, per band
+    [("pcm", 18), ("ana", 10), ("spdif", 2), ("adat", 8), ("mix", 18)],
+    [("pcm", 14), ("ana", 10), ("spdif", 2), ("adat", 4), ("mix", 18)],
+    [("pcm", 12), ("ana", 10), ("spdif", 2)],
+]
+USB8_OUT_NAMES = ["Monitor 1", "Monitor 2", "Line 3", "Line 4", "Line 5", "Line 6",
+                  "Headphones 1 L", "Headphones 1 R", "Headphones 2 L", "Headphones 2 R"]
+
+
+def _usb8_dest(kind, i):
+    """(router pin, device name, alsa sink name, mixer-input-index or None) of destination i of kind."""
+    if kind == "pcm":
+        return USB8_PCM_PIN + i, f"PCM {i+1:02d}", f"PCM {i+1:02d}", None
+    if kind == "ana":
+        return USB8_IN_PIN + i, USB8_OUT_NAMES[i], f"Analogue Output {i+1:02d}", None
+    if kind == "spdif":
+        return USB8_SPDIF_PIN + i, f"S/PDIF Output {i+1}", f"S/PDIF Output {i+1}", None
+    if kind == "adat":
+        return USB8_ADAT_PIN + i, f"ADAT Output {i+1}", f"ADAT Output {i+1}", None
+    return USB8_MIX_PIN + i, f"Mixer Input {i+1:02d}", f"Mixer Input {i+1:02d}", i
+
+
+def build_clarett_usb_8pre():
+    nd_notes = "commit activate per scarlett2_config_set_clarett / the XML command attribute"
+    m = OD()
+    m["versionStageRelease"] = member(12, "uint32", nd=0, nc=0,
+                                      note="App firmware version @ 12 (the XML's <version offset-bytes=\"12\">)")
+    m["muteSwitch"] = member(49, "bool", nd=2, nc=USB8_NOTIFY_DIM_MUTE, note="monitor mute @ 49; activate 2")
+    m["dimSwitch"] = member(50, "bool", nd=2, nc=USB8_NOTIFY_DIM_MUTE, note="monitor dim @ 50; activate 2")
+    m["masterVolume"] = member(118, "int16", nd=0, nc=USB8_NOTIFY_MONITOR,
+                               note="front-panel monitor knob @ 118, signed dB; read-only")
+    m["outputVolume"] = member(52, "int16", shape=10, nd=1, nc=0,
+                               note="per-output gain @ 52 + 2*i, signed dB -127..0; activate 1")
+    # Not "outputMute": fcp-server creates controls for a member of that name on its own, outside the
+    # physical outputs, so the hw-follow below would not apply to them.
+    m["lineOutMute"] = member(92, "bool", shape=10, nd=1, nc=0,
+                              note="per-output mute @ 92 + i; activate 1 (scarlett2 MUTE_SWITCH; not in the XML)")
+    m["hwEnable"] = member(102, "uint8", shape=10, nd=3, nc=0,
+                           note="per-output SW/HW @ 102 + i, 0 = SW, 1 = HW (the knob); activate 3")
+    m["mode"] = member(124, "uint8", shape=2, nd=7, nc=0,
+                       note="Line/Inst @ 124 + i, inputs 1-2 only; 0 = Line, 1 = Inst; activate 7")
+    m["air"] = member(149, "bool", shape=8, nd=8, nc=0, note="per-input air @ 149 + i; activate 8")
+    m["standalone"] = member(141, "bool", nd=6, nc=0, note="standalone @ 141; activate 6 (scarlett2)")
+    m["spdifSource"] = member(158, "uint8", nd=4, nc=0,
+                              note="S/PDIF input connector @ 158, 0 None / 1 Optical / 2 RCA; activate 4. "
+                                   "The XML also names an output field @ 140; scarlett2 writes only this one")
+
+    phys_in = []
+    for i in range(8):
+        c = OD()
+        c["air"] = OD(index=i, member="air")
+        if i < 2:
+            c["level"] = OD(index=i, member="mode")
+        phys_in.append(OD(name=f"Analogue {i+1}", controls=c))
+    phys_out = [OD(name=USB8_OUT_NAMES[n], controls=OD([
+                    ("level", OD(index=n, member="outputVolume")),
+                    ("mute", OD(index=n, member="lineOutMute")),
+                    ("hw-gain", OD(index=n, member="hwEnable"))]))
+                for n in range(10)]
+
+    # sources: every source the hardware has [XML]
+    dev_sources, alsa_sources = [], []
+    srcs = ([(USB8_IN_PIN + i, f"Analogue {i+1}") for i in range(8)] +
+            [(USB8_SPDIF_PIN + i, f"S/PDIF {i+1}") for i in range(2)] +
+            [(USB8_ADAT_PIN + i, f"ADAT {i+1}") for i in range(8)] +
+            [(USB8_MIX_PIN + i, f"Mix {chr(ord('A') + i)}") for i in range(10)] +
+            [(USB8_PCM_PIN + i, f"PCM {i+1}") for i in range(20)])
+    for pin, nm in srcs:
+        dev_sources.append(OD([("name", nm), ("router-pin", str(pin))]))
+        alsa_sources.append(OD([("device_name", nm), ("alsa_name", nm)]))
+
+    # destinations, in band-0 table order, with their slot in each band's table
+    slot = [{}, {}, {}]
+    for b, layout in enumerate(USB8_BANDS):
+        k = 0
+        for kind, n in layout:
+            for i in range(n):
+                slot[b][(kind, i)] = k
+                k += 1
+    dev_dests, alsa_sinks = [], []
+    for kind, n in USB8_BANDS[0]:
+        for i in range(n):
+            pin, nm, alsa_nm, mix_idx = _usb8_dest(kind, i)
+            e = OD([("name", nm), ("router-pin", str(pin)), ("peak-index", slot[0][(kind, i)]),
+                    ("_peak-index-provenance", "mux_assignment")])
+            for b, key in ((1, "peak-index-m"), (2, "peak-index-h")):
+                if (kind, i) in slot[b]:
+                    e[key] = slot[b][(kind, i)]
+            if mix_idx is not None:
+                e["mixer-input-index"] = mix_idx
+            dev_dests.append(e)
+            alsa_sinks.append(OD([("device_name", nm), ("alsa_name", alsa_nm)]))
+
+    d = OD()
+    d["_note"] = ("Device map for the Clarett 8Pre USB (1235:8208) driven by fcp-server through the kernel's "
+                  "fcp driver. This model does not answer DEVMAP_INFO (0x80000c, FCP error 7), so it cannot "
+                  "describe itself: this file is its description, loaded by fcp_devmap_read_from_file() by "
+                  "USB product id. Paired with fcp-alsa-map-8208.json.")
+    d["_provenance"] = ("Offsets, widths and commit activates from Focusrite's published device descriptor for "
+                        "this model, cross-checked against the in-kernel scarlett2 driver's config set "
+                        "(scarlett2_config_set_clarett) and router layout (clarett_8pre_info mux_assignment and "
+                        "meter_map). Clean-room: no vendor device map or driver was used.")
+    d["_limitations"] = [
+        "peak-index is the destination's position in scarlett2's mux_assignment table for the speed band "
+        "(GET_METER returns one value per table entry, in table order); peak-index-m / -h are the same at "
+        "double and quad speed, where ADAT and PCM entries drop out and the rest shift down. Per-rate meters "
+        "need an fcp-server that follows the sample rate; otherwise the 48 kHz layout is used at every rate.",
+        "At quad speed the mixer and ADAT outputs are absent from the router table.",
+        "masterVolume (the front-panel knob) is read-only; outputs set to HW follow the knob in the device.",
+        "notify-client: dim/mute 0x200000 and monitor 0x400000, the descriptor's notification bits.",
+        "router-pin is a DECIMAL string because fcp-server parses it with atoi().",
+    ]
+    d["structs"] = OD(APP_SPACE=OD(members=m))
+    d["device-specification"] = OD([("physical-inputs", phys_in), ("physical-outputs", phys_out),
+                                    ("sources", dev_sources), ("destinations", dev_dests)])
+    # fcp-server's global controls need this enum; eMSG_FLASH_CTRL is the persist activate, 6 on this
+    # model (the XML's flash-command, scarlett2's SCARLETT2_USB_CONFIG_SAVE).
+    d["enums"] = OD([("eDEV_FCP_USER_MESSAGE_TYPE", OD(enumerators=OD([("eMSG_FLASH_CTRL", 6)])))])
+    with open(f"{OUTDIR}/fcp-devmap-{USB8_PID}.json", "w") as f:
+        json.dump(d, f, indent=2); f.write("\n")
+
+    # ALSA names are scarlett2's for this model, so the GUI and saved states carry over between drivers.
+    a = OD()
+    a["_note"] = ("ALSA control map for the Clarett 8Pre USB (1235:8208) under the kernel's fcp driver, paired "
+                  "with fcp-devmap-8208.json. Control names follow the scarlett2 driver's for this model.")
+    a["input-controls"] = OD([
+        ("air", OD(name="Line In %d Air Capture Switch", type="bool")),
+        ("level", OD(name="Line In %d Level Capture Enum", type="enum", values=["Line", "Inst"])),
+    ])
+    # An output set to HW is driven by the front-panel knob inside the device, which never copies the
+    # knob into that output's own volume/mute. "hw-follow" (fcp-server) shows the knob's volume and
+    # the master mute on those outputs instead, refuses writes there, and copies them into the
+    # output's own settings when it switches between SW and HW -- what scarlett2 does for this model.
+    follow = lambda src: OD([("switch", "hw-gain"), ("source", src)])
+    a["output-controls"] = OD([
+        ("level", OD([("name", "Line %02d Playback Volume"), ("type", "int"), ("min", -127), ("max", 0),
+                      ("db-min", -127), ("db-max", 0), ("hw-follow", follow("masterVolume"))])),
+        ("mute", OD([("name", "Line %02d Mute Playback Switch"), ("type", "bool"),
+                     ("hw-follow", follow("muteSwitch"))])),
+        ("hw-gain", OD(name="Line Out %02d Volume Control Playback Enum", type="enum", values=["SW", "HW"])),
+    ])
+    a["output-link"] = []
+    a["global-controls"] = OD([
+        ("versionStageRelease", OD([("name", "Firmware Version"), ("interface", "card"),
+                                    ("access", "readonly"), ("type", "int")])),
+        ("muteSwitch", OD(name="Mute Playback Switch", type="bool")),
+        ("dimSwitch", OD(name="Dim Playback Switch", type="bool")),
+        ("masterVolume", OD([("name", "Master HW Playback Volume"), ("type", "int"), ("access", "readonly"),
+                             ("min", -127), ("max", 0), ("db-min", -127), ("db-max", 0)])),
+        ("standalone", OD(name="Standalone Switch", type="bool")),
+        ("spdifSource", OD(name="S/PDIF Source Capture Enum", type="enum",
+                           values=["None", "Optical", "RCA"])),
+    ])
+    a["sources"] = alsa_sources
+    a["sinks"] = alsa_sinks
+    with open(f"{OUTDIR}/fcp-alsa-map-{USB8_PID}.json", "w") as f:
+        json.dump(a, f, indent=2); f.write("\n")
+    print(f"clarett-8pre-usb ({USB8_PID}): 8 air, 2 level, 10 outputs, {len(dev_sources)} sources, "
+          f"{len(dev_dests)} destinations")
+
+
+build_clarett_usb_8pre()
+
 # Interface-simulation previews of the models not yet run on hardware: alsa-scarlett-gui renders
 # one with no device attached (alsa-scarlett-gui "fcp-server-data/sim/Red 8Pre.state"). Written
 # here, from the maps just generated, so a map change and its preview land together. Named after
