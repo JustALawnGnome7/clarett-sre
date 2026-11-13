@@ -517,9 +517,22 @@ provokes them instead, by pushing the event rate up rather than waiting for a sl
 
 **26 device-flagged overruns and `0x100` showed nothing but bits 31 and 29.** So the summary does
 not carry a per-stream error bit for this class; the overrun is reported where it always was, in the
-block's own cause word (`0x300` bit30). What remains open is narrower: whether bits 4/5 are two more
-of the stop class for engines these models do not have, or an error class we have not provoked
-(a descriptor or FIFO fault, say) — the overrun is simply the only stream error producible on demand.
+block's own cause word (`0x300` bit30).
+
+**A second class is ruled out too: they do not report the HOST failing to refresh a stream ring.**
+Starving `clarett_play_fill()` for 2 s mid-stream, with the engine demonstrably replaying the TX ring
+~47 times (one capture break per 2048-frame lap, `gaps=0`), left `0x100` and `0x200` at zero — in the
+shipped configuration AND with the TX ring IRQ-marked so the playback block was live and reporting
+(`blk0=0x80000070`, bit30 of `0x100` alongside it). The device has no ownership or valid bit in its
+descriptors, so staleness is not a condition it can detect at all; full record in
+`clarett-data-plane.md`, final subsection.
+
+What remains open is narrower still: whether bits 4/5 are two more of the stop class for engines
+these models do not have, or a FETCH-level error — the engine's own FIFO running dry because DMA was
+too slow, which is detectable, unlike stale bytes. The latter would fit "enabled but never seen" on
+a PCIe Gen1 x1 link whose worst case (8PreX, 28 in + 28 out, S32 at 192 kHz) is ~344 Mb/s against
+~2 Gb/s, i.e. a starvation error on a bus that never starves. Provoking that needs the link throttled,
+which this rig cannot do.
 
 **Side finding, and a real one: at the cadence floor the device flags FAR fewer overruns than it used
 to, because the period is now acked from the interrupt.** The record for the poll loop was ~0.6

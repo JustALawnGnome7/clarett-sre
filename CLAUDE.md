@@ -1235,8 +1235,16 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   hypothesis is answered NO for the overrun class:** no vendor capture contains a single period
   overrun, so `tools/bench/cause_probe.sh` provokes them by raising the event rate (16-frame period
   at 48/96/192 kHz, capture and duplex) — **26 device-flagged overruns, and `0x100` showed nothing
-  but bits 31 and 29**. Block-local errors stay in the block (`0x300` bit30). Still open and
-  narrower: two more of the stop class for engines these models lack, or an unprovoked error class.
+  but bits 31 and 29**. Block-local errors stay in the block (`0x300` bit30). **A second class is
+  ruled out: they do not report the HOST failing to refresh a ring** — starving `clarett_play_fill()`
+  for 2 s, with the engine demonstrably replaying the TX ring ~47 times (one capture break per
+  2048-frame lap, `gaps=0`), left `0x100` and `0x200` at ZERO, both as shipped and with the TX ring
+  IRQ-marked so the playback block was live and reporting (`blk0=0x80000070`). The device has no
+  ownership bit in its descriptors, so staleness is undetectable to it — which is exactly why the TX
+  guard and the servicer's RT priority are the whole of the protection
+  (`spec/provenance/clarett-data-plane.md`, final subsection). Still open and narrower: two more of
+  the stop class for engines these models lack, or a FETCH-level error (the engine's own FIFO running
+  dry), which would fit a bus that never starves and which this rig cannot provoke.
   The driver now ORs every `0x100` value the servicer reads into `cause=` in the `stream-svc`
   summary and reports an unknown bit at `info` (`stream-cause:`), so the next one to fire announces
   itself. **Side finding: interrupt-driven acking removed most device overruns at the floor** — the

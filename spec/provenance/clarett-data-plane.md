@@ -1155,3 +1155,53 @@ stream (14ch) and the only model whose capture loopback pair sits at position 4.
 **Lesson:** when a change alters *how often* something runs, the test is a client whose timing
 depends on that rate. Everything that measures correctness of the audio path passed while playback
 was being silently discarded.
+
+### The device cannot see a stale TX ring, which is why the driver must prevent it (Nov 13 2026) `[HW — Red 8Line]`
+
+`clarett_engine_run()`'s comment on the servicer's real-time priority — "if userspace preempts the
+servicer, the TX fill falls behind and the engine plays stale audio with no XRUN" — turns out to be
+literally true of the hardware, not just of ALSA's bookkeeping. **The device raises nothing at all.**
+
+The mechanism was predictable from the vendor's own ring dump (§14): a descriptor is a bare 64-bit
+address with bit0 = wrap and bit1 = IRQ, and the vendor sets NOTHING else. With no ownership or
+valid bit there is no protocol by which the engine could know whether the bytes at its read position
+were refreshed — "these are a lap old" is a host-side fact only.
+
+Measured with a scratch build (never committed) whose `starve_tx_ms` lever stops
+`clarett_play_fill()` mid-run, 2 s into a 12 s loopback-ramp stream:
+
+| unit | leg | breaks | gaps | `0x100` at starve end | `0x200` | run summary |
+|---|---|---|---|---|---|---|
+| Red 8Line | as shipped | **48** | 0 | `0x00000000` | `0x00000000` | `cause=0x80000000 blk0=0x00000000` |
+| Red 8Line | IRQ-marked | **48** | 0 | `0x00000000` | `0x00000000` | `cause=0xc0000000 blk0=0x80000070` |
+| 8PreX | as shipped | 0 | **24** | `0x00000000` | `0x00000000` | `cause=0x80000000 blk0=0x00000000` |
+| 8PreX | IRQ-marked | 0 | **24** | `0x00000000` | `0x80000080` | `cause=0xc0000000 blk0=0x800000c0` |
+
+**The provocation is confirmed quantitatively on both models, and the count is PREDICTED by the ring
+geometry.** The Red's TX ring is 2048 frames (256 descriptors x 8, its halved fragment) = 42.67 ms at
+48 kHz, so a 2 s starve is 46.9 laps — and the capture shows 48 discontinuities, one per lap. The
+8PreX's fragment stays at 16 frames (28 x 4 x 16 = 1792 B, under CLARETT_TX_FRAG_MAX_BYTES), so its
+ring is 4096 frames = 85.3 ms, 23.4 laps — and it shows **24**. `ptr0` kept advancing and wrapping
+throughout on both.
+
+**Why one shows breaks and the other gaps, which is the same event:** `clarett_play_fill()` copies
+only as far as the app has written and fills the rest of the runway with silence, and `aplay` ran
+with a 2048-frame ALSA buffer. On the Red, ring == buffer, so the whole runway is ramp and a replayed
+lap reads as backwards jumps (breaks). On the 8PreX the ring is twice the buffer, so half the runway
+is silence padding and each replayed lap carries one silence run (gaps). Ring-versus-buffer size, not
+a difference in the engine.
+
+**The IRQ-marked legs are what make it conclusive.** With the TX ring marked, the playback block was
+live and reporting normally (event bit plus an advancing counter — `blk0=0x80000070` on the Red,
+`0x800000c0` on the 8PreX, with bit30 of `0x100` alongside) — so it demonstrably COULD have raised
+something, and across every replayed lap it raised nothing. No error bit appeared in `0x200` either
+(bit30 there would be the overrun analogue). Two models, two ring geometries, one answer.
+
+Side note from the 8PreX run: it reported bit30 as an unknown bit, because `IRQ0_CAUSE_KNOWN` still
+excluded it. bit30's meaning is established, so the mask now includes it — the shipped driver cannot
+raise it anyway, and a build that marks TX should not be told its own doing is unknown.
+
+Consequences worth carrying: the TX guard (`CLARETT_TX_GUARD_FRAMES`) and `sched_set_fifo_low()` on
+the servicer are the whole of the protection, and the regression that `tx_guard_lead.sh` caught in
+the interrupt work is the same failure arriving by a different route. Nothing in the telemetry can
+flag it; a short-lead client is the only probe.
