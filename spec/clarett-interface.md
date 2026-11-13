@@ -136,8 +136,9 @@ A single command proceeds as:
    to `0x8020`, and rings the doorbell (`0x408 = 1`).
 2. The device processes the command, writes its `error` status, and — for a GET —
    DMAs the response into the host buffer.
-3. Host polls the vector-0 cause register `0x100` for the DONE bit
-   (`0x20000000`), then acknowledges the completion (`0x408 = 2`).
+3. The device signals progress in the vector-0 notification cause register `0x400`: bit 0
+   when it has accepted the request, bit 1 when its response DMA has landed. The host waits
+   for both, then acknowledges the completion (`0x408 = 2`).
 
 **Ordering requirement.** The completion acknowledgement (`0x408 = 2`) must not be
 issued before the device's response DMA has landed. The host enforces this by
@@ -145,16 +146,29 @@ zeroing the response header before submit and waiting until the device has writt
 it before acknowledging. Acknowledging early is a protocol violation: the device
 responds by refusing the session (returning a blanket error from the first
 command), which cannot be recovered without a fresh bring-up. Because the response
-DMA completes asynchronously with respect to the DONE signal, the DONE bit alone
-is not a sufficient condition to acknowledge.
+DMA completes asynchronously with respect to the acceptance signal, acceptance alone
+is not a sufficient condition to acknowledge; bit 1 of `0x400`, or the response header
+in the buffer, is.
 
 ### 2.5 Completion signalling
 
-MSI vector 0 carries mailbox completion; the host polls its cause register `0x100`
-for DONE rather than taking the completion in the interrupt handler, to keep the
-acknowledgement ordered after the response DMA (§2.4). MSI vector 0 also carries
-asynchronous device notifications (config-change events), distinguished from
-mailbox completion by the cause bits; the driver services those on a workqueue.
+MSI vector 0 carries mailbox completion, and the host takes it in the interrupt handler:
+the handler reads `0x400` and hands the command its two phase bits (§2.4), so the
+acknowledgement is still ordered after the response DMA. Two ordering requirements come
+with that. The handler must be the only reader of `0x400`, which is read-to-clear, or a
+second reader takes bits the command needs; and while a command is in flight the handler
+must read `0x100` before `0x400`, because `0x100`'s DONE bit (`0x20000000`) reflects
+"`0x400` has bits pending" — reading `0x400` first clears what DONE reports, and the
+command then never completes.
+
+Polling `0x100` for DONE also works, and was how this was first implemented, but it
+cannot see bit 1: it reports that the device finished the command, not that the response
+has landed, so an implementation that polls must still wait on the response buffer before
+acknowledging.
+
+MSI vector 0 also carries asynchronous device notifications (config-change events),
+distinguished from the phase bits by which `0x400` bits are set; the driver services
+those on a workqueue.
 
 ---
 

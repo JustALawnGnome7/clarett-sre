@@ -27,8 +27,8 @@ echo 'format "FCP op=" -p' > $DD
 k=$(journalctl -k -q --after-cursor "$cur" | grep "snd_clarett $BDF: ")
 l=$(grep "FCP op=.*phase=" <<<"$k")
 {
-	echo "-- 1. $(grep -c . <<<"$l") commands in 3 s; by opcode / done / phase:"
-	grep -oE "op=0x[0-9a-f]+|done=[01]|phase=0x[0-9a-f]+" <<<"$l" | paste - - - | sort | uniq -c | sed 's/^/   /'
+	echo "-- 1. $(grep -c . <<<"$l") commands in 3 s; by opcode / accepted / phase:"
+	grep -oE "op=0x[0-9a-f]+|accepted=[01]|phase=0x[0-9a-f]+" <<<"$l" | paste - - - | sort | uniq -c | sed 's/^/   /'
 	echo "   never-landed: $(grep -c "never landed" <<<"$k")   timeouts/errors: $(grep -cE -- "-110|timed out" <<<"$k")"
 } | tee -a "$LOG"
 

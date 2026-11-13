@@ -13,8 +13,8 @@ cursor() { journalctl -k -n0 --show-cursor | sed -n 's/^-- cursor: //p'; }
 trap 'echo "format \"FCP op=\" -p" > $DD' EXIT
 summ() {	# $1 = journal text
 	l=$(grep "FCP op=.*phase=" <<<"$1")
-	echo "   $(grep -c . <<<"$l") commands; by opcode / done / phase:"
-	grep -oE "op=0x[0-9a-f]+|done=[01]|phase=0x[0-9a-f]+" <<<"$l" | paste - - - | sort | uniq -c | sed 's/^/     /'
+	echo "   $(grep -c . <<<"$l") commands; by opcode / accepted / phase:"
+	grep -oE "op=0x[0-9a-f]+|accepted=[01]|phase=0x[0-9a-f]+" <<<"$l" | paste - - - | sort | uniq -c | sed 's/^/     /'
 	echo "   never-landed: $(grep -c "never landed" <<<"$1")   timeouts/errors: $(grep -cE -- "-110|timed out" <<<"$1")"
 }
 

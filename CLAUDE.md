@@ -483,8 +483,11 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   flag | opcode), `size|seq`@+4 (size low16, seq high16, seq increments),
   `error`@+8, pad@+12, `data[]`@+0x10. Matches scarlett2 header layout.
 - **Doorbell @ `0x408`**: write `1` = submit, `2` = ack/clear prior completion.
-- **Completion**: poll IRQ cause reg `0x100` for DONE bit `0x20000000`. Cause regs
-  `0x100/0x200/0x300/0x400` = one block per MSI vector (read-to-clear).
+- **Completion**: the `0x400` command-phase bits, delivered on MSI vec0 — bit0 = request
+  accepted, bit1 = response DMA landed. Cause regs `0x100/0x200/0x300/0x400` = one block per
+  MSI vector (read-to-clear). `0x100`'s DONE bit `0x20000000` reflects "`0x400` has bits
+  pending", so the ISR reads `0x100` first while a command is in flight; the old cycle polled
+  it for DONE instead (removed Nov 13 2026, see the MSI-mandatory entry).
 - **GET responses arrive via DMA, NOT the BAR.** Device DMAs results into a host
   buffer whose bus address is programmed at `0x410` (low32) / `0x414` (high32).
   → MMIO traces can't see GET payloads; the driver allocates its own buffer.
@@ -1733,7 +1736,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `max_buffer`, `notify_ms`, `meter_poll_ms`, `monitor_poll`, `addr_ack_ms`, `ready_resp_ms`,
   `ready_timeout_ms`, `resp_trace`, `resp_timeout_ms`, `tx_trace`, `tx_guard` (retest item 2 closed Oct 16 2026: default 16),
   `phase_cycle` (~~remove with the DONE cycle once the 4Pre/8Pre run the step 4 matrix~~ REMOVED Oct 16
-  2026, the polled fallback kept; see below). Also fixed
+  2026; ~~the polled fallback kept~~ the fallback itself is gone since Nov 13 2026, see below). Also fixed
   `addr_ack_ms`'s description (0 now means no wait, not 3.22 ms). 2Pre on the part 4 build: rebind
   ack 2.0-2.1 ms attempt 1; loopback 9/9 at 48/96/192 kHz; 4 commands to arm, simultaneous starts
   3/3; period -> buffer 16/128, 64/256, 256/1024, 1024/4096 (unchanged); no warnings. **4Pre (Oct 14):
@@ -1744,13 +1747,31 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   are gone. The ISR still reads `0x100` before `0x400` while a command is in flight (the 4a trap). KEPT,
   operator's call: the polled DONE + sweep + buffer-poll cycle as the fallback when MSI allocation or
   `request_irq` fails, which the driver survives; no unit has ever needed it (always 4/4 vectors), so it
-  is untested on hardware. Regression on the new build: 8Pre ramp 9/9 and Red 8/8 at 48/96/192 kHz,
-  8Pre 4 commands to arm in 1.3-1.4 ms and simultaneous starts 3/3, warm rebinds 8Pre ack 2.08-2.14 ms
-  and Red 63-115 us, attempt 1 every time, no warnings.
+  is untested on hardware. Regression on the `phase_cycle`-removal build: 8Pre ramp 9/9 and Red 8/8
+  at 48/96/192 kHz, 8Pre 4 commands to arm in 1.3-1.4 ms and simultaneous starts 3/3, warm rebinds
+  8Pre ack 2.08-2.14 ms and Red 63-115 us, attempt 1 every time, no warnings.
+  **★ THAT FALLBACK IS GONE TOO (Nov 13 2026, operator's call): MSI IS NOW
+  MANDATORY.** `clarett_enable_msi()`/`clarett_setup_irq()` fail the probe instead of warning, the
+  mailbox refuses commands while `irq_ready` is clear (which also covers the window in
+  `clarett_hw_teardown()` after the handlers are freed), and `clarett_mbox_wait_polled()`,
+  `CLARETT_MBOX_TIMEOUT_MS`, `IRQ_DONE_BIT` and the transaction's `polls`/`first_cause`/`done_us`
+  fields are deleted. The per-command trace field `done=` became `accepted=` (bench parsers
+  `phase_check.sh`/`idle_write.sh` updated to match). Rationale: one completion cycle, and the
+  untested one was the only reason the mailbox still had a polling path at all. 141 lines out of
+  `clarett_mailbox.c`. **Hardware-tested on the Red 8Line (Nov 13 2026, laptop, srcversion
+  `3767D0A3B9DEA0C5709F400`): PASS.** `phase_check.sh`: 59 of 59 GET_METER `accepted=1 phase=0x3`,
+  **0 never-landed, 0 timeouts**; two 25 s 60ch captures 2344/2344 periods with `late=0 overrun=0
+  badreads=0` and `stepmax` exactly one period (512 frames); the knob relayed 168 x `0x800000`
+  (output) and the GUI followed, hands-off relayed only the Red's idle `0x40000000` temperature event
+  (~1 per 5 s) and nothing else; probe clean (no MSI warning, no STREAM_INFO mismatch) and **the new
+  zero-period warning stayed quiet** on every healthy stream.
 - **Async notifications implemented** (MSI **vec0** / cause `0x400`): the ISR detects
   the §11 dim-mute/monitor mask, a workqueue re-reads the monitor region and
-  `snd_ctl_notify()`s the monitor controls. **Mailbox completion is still polled**
-  (the ISR deliberately leaves the `0x100` cause to the poll to avoid a race).
+  `snd_ctl_notify()`s the monitor controls. ~~**Mailbox completion is still polled**
+  (the ISR deliberately leaves the `0x100` cause to the poll to avoid a race).~~ **SUPERSEDED Oct 10
+  2026 (step 4b): the vec0 ISR IS the mailbox completion path** — it reads `0x100` first while a
+  command is in flight, then completes the command on the `0x400` phase bits. The race the old note
+  feared is handled by that ordering, not by leaving `0x100` alone.
   - **The relay is gated off while streaming (`stream_on`), so the monitor knob used to freeze for the
     duration of any stream — FIXED July 24 2026, hardware-confirmed.** The gate is necessary: vec0 also
     fires per audio period and `0x400` reads its idle `0x3` each time, and the relay is a *wildcard*

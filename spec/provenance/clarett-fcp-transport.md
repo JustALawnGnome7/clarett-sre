@@ -177,7 +177,9 @@ The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRME
 2. fill `0x8020`(cmd) → `0x8024`(size|seq) → `0x8028`,`0x802c`(0) → `0x8030+`(data)
 3. `write 0x408 = 0x1` (doorbell/submit)
 4. poll cause regs `0x100`/`0x200`/`0x300`/`0x400` (and `0x500`) until the mailbox-done bit
-   (`0x20000000` @ `0x100`) clears → completion.
+   (`0x20000000` @ `0x100`) clears → completion. **Superseded as a driver recipe (Oct 10 2026,
+   and the polled path removed Nov 13 2026): the driver completes a command on the `0x400`
+   phase bits in the vec0 ISR — bit0 accepted, bit1 response landed. See the addendum below.**
 
 ### Opcodes observed at init (device-specific numbering, as predicted)
 `0x5000` (×46, 2-byte payload — bulk config/routing push), `0x6000`/`0x6001`/`0x6002`,
@@ -350,7 +352,10 @@ invisible to `vfio_region_*` (KVM irqfd), but the ISR's register read is not —
   MSI vector 0** for *all* control-plane events (mailbox-done and notifications alike); vectors 1–3
   never increment. So the cause-register index is **not** the MSI vector index — they are independent.
   A driver hooks **vec0**, and there reads the *notification* cause `0x400` (leaving the mailbox cause
-  `0x100` to the poll, else the read-to-clear races it).
+  `0x100` to the poll, else the read-to-clear races it). **The parenthesis is superseded — see the
+  addendum below:** `0x400` carries the mailbox phase bits as well as the notification bits, so the
+  ISR owns it and takes the completion too. The race is avoided by ORDER (read `0x100` first while a
+  command is in flight), not by leaving `0x100` to a poll.
 - After the notification the host **re-syncs**: `GET_DATA{0x18,0x5c}` (monitor region) then `GET_MUX`
   per band. A driver should mirror this: vec0 IRQ → read `0x400` → if notify bits set, re-read config.
 - **Idle is silent** — no periodic polling; the earlier `GET_METER` stream was purely the GUI meter
@@ -445,3 +450,27 @@ the answer, so it needs a chunking patch to read any table longer than 28 entrie
   a length-prefix, use a descriptor ring, or split request/response windows — the trace decides.
 - `[S2]` items should also be cross-checked against the *current* `scarlett2`/`fcp` source, since
   field names/values evolve (see memory `focusrite-fcp-vs-scarlett2`).
+
+## Addendum (Nov 13 2026): completion is interrupt-driven, and the polled cycle is gone
+
+The per-command cycle recorded in §4/§6 above — poll `0x100` for DONE, sweep the cause blocks, then
+wait on the response buffer — was the driver's only cycle until Oct 10 2026, when the port of
+Geoffrey D. Bennett's interrupt-driven mailbox made `0x400`'s two low bits the completion signal
+(bit0 = request accepted, bit1 = response DMA landed), delivered on vec0 and recorded per command by
+the ISR. Both cycles then coexisted behind `phase_cycle`; the lever went on Oct 16 2026 and the
+polled code on **Nov 13 2026**, with MSI now mandatory (probe fails without it).
+
+What the §6 observations got right and wrong, for the record:
+
+- **Right, and still load-bearing:** only vec0 ever fires for control-plane events, so the
+  cause-register index is independent of the MSI vector index; the device re-asserts an unsatisfied
+  notification; idle is silent.
+- **Wrong:** reading `0x400` in the ISR was taken to be *instead of* taking the completion there,
+  because `0x400 = 0x3` on every Mute/Dim press looked like notification bits. Bits 0 and 1 are the
+  command phase; `0x3` appeared on a front-panel press only because a command was in flight at the
+  time. The real monitor/dim-mute bits are 21 and 22 (the vendor descriptors' masks), which is why
+  the old `NOTIFY_MONITOR_MASK = 0x3 | 0x00200000` both missed bit22 and relayed the phase bits as
+  if they were events.
+- **The ordering trap**, found on the first interrupt-driven build: `0x100`'s DONE bit reflects
+  "`0x400` has bits pending", so an ISR that reads `0x400` before `0x100` clears what DONE reports
+  and every command times out. Read `0x100` first while a command is in flight.

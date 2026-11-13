@@ -398,6 +398,11 @@ notifications); the cause-register index is independent of the MSI vector index.
 **re-syncs state**: `GET_DATA{offset=24, len=92}` to re-read this monitor region (§9), followed by
 `GET_MUX` per sample-rate band. Driver implication: hook **vec0**, read `0x400` there (not `0x100` —
 that is the mailbox poll's), and if a notification bit is set re-read the monitor config (offset 24).
+**Half superseded (Oct 10 2026; the polled path removed Nov 13 2026):** the ISR does own `0x400`, but
+that register carries the mailbox command phase in bits 0-1 as well, so the ISR takes the completion
+too and there is no mailbox poll to leave `0x100` to — it reads `0x100` FIRST while a command is in
+flight (its DONE bit reflects "`0x400` has bits pending"). The notification bits are 21/22, not the
+`0x3` this section reads as notification; see the addendum to `clarett-fcp-transport.md`.
 **The control plane is event-driven — no polling occurs when idle** (the continuous `GET_METER`
 traffic is only the GUI's meter view).
 

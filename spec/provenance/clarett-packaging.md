@@ -139,13 +139,13 @@ were built, verified on hardware and across kernel upgrades, and every trap hit 
       `akmods` carries the same `(kernel-devel-matched if kernel-core)` rich dep that `dkms` does**, so
       its install transaction needs the same read-before-yes.
   - **★★ SECURE BOOT WORKS VIA THE AKMOD ROUTE — VERIFIED (Aug 27 2026, EliteBook 640 G11).** MOK
-    enrolment done and the module loads with Secure Boot enforcing, which is itself the proof the
+    enrollment done and the module loads with Secure Boot enforcing, which is itself the proof the
     signature is trusted: `module.sig_enforce` is set under Secure Boot, so an untrusted module is
     *rejected*, not merely taint-flagged.
     - **akmods signing needs NO configuration and never did.** `kmodgenca` runs at the first
       `akmods.service` run and writes the pair to `/etc/pki/akmods/{private/private_key.priv,
       certs/public_key.der}`; the signer string is literally its
-      `KEYNAME="${cert_hostname:0:44}_$(date +%s)_$(uuidgen | awk -F- '{print $1}')"`. Enrol with
+      `KEYNAME="${cert_hostname:0:44}_$(date +%s)_$(uuidgen | awk -F- '{print $1}')"`. Enroll with
       `sudo mokutil --import /etc/pki/akmods/certs/public_key.der`, reboot, MOK Management →
       Enroll MOK (**physical console only, one boot only, QWERTY keyboard regardless of layout**).
     - **`public_key.der` is a SYMLINK to `<KEYNAME>.der`, not the key** (`kmodgenca` `update_key_symlinks`),

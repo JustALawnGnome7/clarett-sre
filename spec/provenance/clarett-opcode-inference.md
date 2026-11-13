@@ -312,3 +312,84 @@ first; corrected.
 **Appspace @80 on the Claretts (@202 on a Red) is the descriptor's `<nickname>`**: a saved, renamable
 name, not identity. Its default is `<model>-<serial as 8 hex digits>` on every unit read but the 8Pre,
 whose suffix is `00000001`.
+
+### Nov 10 2026: how the vendor stack identifies a unit (`captures/red_8line.log`)
+
+Question: how could the driver tell the Red twins apart (4Pre/8Line, 8Pre/16Line: same stream
+geometry) without the unit's Thunderbolt controller, which a VM with the endpoint passed through
+cannot see? The driver uses that controller today (Alpine Ridge = a Line model). The capture is
+itself that case: the Red was passed through to the Windows guest, so the vendor stack had no
+controller to look at either. The trace shows every request and every BAR read, but not the
+replies, which the device DMAs into host memory.
+
+**The registers cannot do it.** Every BAR register the vendor driver reads before its first command
+(`0x004 = 0x80`, `0x008 = 0x2000`, `0x8000`-`0x801c`, the dummy serial) reads the same on all four
+Claretts and the Red, in every capture that has them. `0x000` differs, but only by family.
+
+**The vendor kernel driver runs one generic sequence on every model, and `0x800005` comes first.**
+Opening commands, compared across the 2Pre, 4Pre, 8Pre, 8PreX and Red captures:
+
+1. `0x800005 {0, 8}`, then `STREAM_INFO` bands 0-2, `INIT_2` (twice on the Red), `0x006002`
+   (the Red adds `0x006004` and `0x006005` here), then `0x006000`.
+2. One `0x005000` per clock source: ids 3/5/6 on the 2Pre, 4Pre and 8Pre, 3/5/7/8/4 on the 8PreX,
+   3/5/7/8/4/0x0a/9 on the Red. The count matches each model's clock-source list, so it is read from
+   the device (`0x006000` is the clock-source table: {name id, clock value} pairs, the 2Pre's S/PDIF
+   value 4 where the 4Pre's is 3, as §9 read).
+3. `0x006001`, then `0x800005 {0, 12}` again (third word 0 on the 4Pre, §9; undecoded), then
+   `0x007000`.
+4. `0x007002` carrying the playback width from `STREAM_INFO` (`0x04`/`0x08`/`0x14`/`0x1c`/`0x40`),
+   one `0x005000` per channel; the same for capture with `0x007003`.
+
+Everything from step 2 on is driven by the device's own replies, and the `0x005000` strings are a
+fixed table per family (§9: ids 1-2 read `Clarett8Pre` on a 4Pre and a 2Pre alike). So the only
+per-model reply the kernel driver asks for is `0x800005`.
+
+**RedNet Control's service asks again once it starts** (from seq 288, interleaved with the kernel
+driver): `INIT_1` for categories 1-8, the capability reads, the flash segment list
+(`0x004000`/`0x004001`), then `0x800005 {0, 8}` twice, then `GET_DATA` at appspace 16 (the FPGA
+`type` word: 1 on every Clarett, 4 on the Red 8Line), 8 (App version), 12 (FPGA version) and 20
+(front-panel version), and only then the bulk appspace read.
+
+**No vendor file maps a number to a model.** None of the device descriptors carries an id, and
+`Classes.xml` only groups descriptor names into classes (Clarett, Clarett USB, Red). The mapping lives
+in the vendor software.
+
+**What the Red descriptors do show: each twin pair splits on Pre vs Line.** The twins have identical
+`<appspace>` (8508 bytes, app at 316) and `<routing>` sizes. Their `<firmware>` blocks differ:
+
+| | App image | FPGA image(s), selected by `<type offset-bytes="16">` | Front panel |
+|---|---|---|---|
+| Red 4Pre, 8Pre | `RedApp.tca` (1049) | `fp001054_tb_top.bit` (657) or `RedPreFPGA.bit` (1020); "one of the FPGA segments will be removed at runtime" | `Red4Pre…`/`Red8PreFrontPanel.bin` |
+| Red 8Line, 16Line | `RedLineApp.tca` (1077) | `RedLineFPGA.bit` (1020) | `Red8Line…`/`Red16LineFrontPanel.bin` |
+
+So a Pre and a Line run different App and FPGA images, and the `type` word chooses a Pre's FPGA image.
+It is therefore a hardware-type value that the Pre models have at least two of, and it may well
+differ from the Line models' (4 on the 8Line). The App version is no use as an identity (it moves with
+updates); the `type` word could be.
+
+**Conclusion.** `0x800005` is the vendor stack's identity source: it is the first thing both the
+kernel driver and RedNet Control ask, it is the only per-model query in the kernel driver's
+bring-up, and its second word already differs on all five units read. The appspace `type` word at 16
+is the second candidate, at least for Pre vs Line, which is exactly what separates the twins. Neither
+needs the Thunderbolt controller. **Still needed:** a `0x800005 {0,8}` reply and appspace @16 from a
+Red 4Pre, 8Pre or 16Line (`tools/fcp_cmd`, `tools/bench/unit_ident.sh`). If they separate the
+twins, the driver keys on `0x800005` and keeps the controller check as a logged cross-check.
+
+**The `type` word at appspace 16, examined (Nov 10 2026).** What the record holds: 1 on all four
+Claretts, 4 on the Red 8Line (one unit each; the raw `unit_ident.sh` logs were not kept). No capture
+writes offsets 16-19, so it is a firmware-supplied value. `<type offset-bytes="16">` appears only in
+the four Red descriptors (both XML sets), always inside an `FPGA_Upgrade` segment. The Red 4Pre and
+8Pre list two FPGA images ("one of the FPGA segments will be removed at runtime"): `fp001054_tb_top.bit`,
+frozen at version 657 in both sets, and a second line (`Red4PreFPGA.bit` 951 in the 2023 set,
+`RedPreFPGA.bit` 1020 in RedNet Control 2). The Line models list one. So `type` tells the updater which
+FPGA build a unit's hardware takes: in effect a board revision, with at least two among the Red Pres.
+
+**The vendor app reads it only after it has chosen the descriptor.** Focusrite Control reads appspace
+8 and 12 on every Clarett and nothing at 16 or 20; RedNet Control reads 16, 8, 12 and 20 on the Red.
+Those are exactly the `<version>`/`<type>` fields each descriptor's `<firmware>` block declares, and
+in both the reads follow `0x800005`. So the app knows the model before it reads `type`, and uses
+`type` only to pick an FPGA image within it. That makes `0x800005` the identity source, and leaves
+`type` as an indirect hint for the twins at best: it separates a Pre from a Line only if no Red Pre
+revision shares the Line models' value, which the descriptors do not say. Reading it on a Red Pre
+(`unit_ident.sh`) answers that; the firmware bundle's `.bit` headers might too (design name and FPGA
+part per image), but the bundle is not on the laptop host.
