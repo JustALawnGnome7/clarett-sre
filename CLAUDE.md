@@ -1119,6 +1119,34 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     (cause-register ownership) are real races and stay whatever the SMI did; `4ecfd6d` (debounce that
     never fired) is a real bug fix; `70afc2c` (meter cache) and `7fb4840`/`03ec348` (notify coalescing,
     trimmed notify-client mask) are cheap and correct as efficiency, with wrong skip attributions.
+  - **★★ REOPENED Nov 13 2026 BY A MEASUREMENT ON THE ASROCK, AND IT MAY REVERSE THE VERDICT —
+    OPEN, A/B OWED.** The operator reports desktop playback (PipeWire) on that box is markedly
+    smoother on 0.4.0. The bench run (Red 8Line, 60ch, `loopback_order.sh` + `SHORT=1
+    duplex_stress.sh`, srcversion `6E78318567C1058503E01F3`) shows something that needs explaining:
+    **`gapmax` is at NOMINAL (~10.9 ms against 10.67) in roughly every window, with ONE window at
+    44.7 ms (`readmax=42056us`)** — against the Sep 4 record on the SAME host, unit and width of a
+    **≥42 ms gap in 153 of 153 windows** (median 42.6, max 52.7). So the stall went from every
+    window to about one in forty, and `readmax` from ~42 ms routinely to 32-49 us except that once.
+    **Two readings, not yet distinguished.** (a) The host changed (BIOS, power settings, firmware) —
+    in which case the driver gets no credit, which is the criterion set BEFORE the run. (b) **The
+    stall rate tracks the MMIO READ RATE**: the poll loop did ~20k reads/s, the interrupt-driven
+    servicer ~94/s, and if heavy MMIO provokes or lengthens the firmware stall this is exactly what
+    would be seen — which would credit the change AND contradict the July 31 "polling disproven as
+    the freeze trigger" conclusion for this fault.
+    **The A/B that settles it, on that box:** build the poll-loop code in a worktree
+    (`git -C snd-clarett worktree add /tmp/pollbuild 44ddc6d~3`), then for each build free the card
+    (PipeWire profile off, stop fcp-server and alsa-state), reload, run a 30 s 60ch capture with
+    `format "stream-svc:" +p`, and compare `gapmax`. Old build still clean today -> the host changed;
+    old build back to ≥42 ms in every window -> reading (b), and a real result.
+    **NOT established either way; do not record the improvement as the driver's until this runs.**
+    **Two results from that run that are NOT news:** the 192 kHz duplex leg and 3 of 10 churn cycles
+    failed, with ramp breaks of exactly `0x80100` = 2048 frames = ONE TX ring lap. The Red's playback
+    ring is 2048 frames, which at 192 kHz is 10.7 ms against a 42 ms stall, so the engine laps it
+    four times over; this board always needed `max_buffer=4096` for the Red and the Oct 16
+    duplex-lock fix capped it at 2048, removing that absorption. 48 and 96 kHz passed everything.
+    **Rig notes for that box:** an SSH login needs root for `/dev/snd`, and PipeWire holds BOTH PCM
+    nodes, so the card must be taken with `pactl set-card-profile ... off` AS THE USER — a root
+    shell cannot reach the user's PipeWire, so the bench scripts' own `pactl` calls silently no-op.
 - **★ FIXED Oct 9 2026 IN THE DRIVER — THE CLARETT CAPTURE STREAM PUT THE LOOPBACK PAIR MID-STREAM, TWO
   CHANNELS AWAY FROM THE ROUTER'S NAMES.** The device sends capture in router-pin order, loopback pair
   after the fixed inputs and before ADAT (2Pre at position 4, 4Pre/8Pre/8PreX at 10) — so S/MUX only ever
@@ -1247,7 +1275,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   dry), which would fit a bus that never starves and which this rig cannot provoke.
   The driver now ORs every `0x100` value the servicer reads into `cause=` in the `stream-svc`
   summary and reports an unknown bit at `info` (`stream-cause:`), so the next one to fire announces
-  itself. **Side finding: interrupt-driven acking removed most device overruns at the floor** — the
+  itself. **★ FIRST RUN ON THE ASROCK FOUND A BUG IN THAT TELEMETRY (Nov 13 2026):
+  `stream-cause: 0x100=0xffffffff has unknown bits 0x0ffffff0`** — an all-ones read is a FAILED PCIe
+  transaction (that host's dead-link/blackout read), not a cause word, and the accumulator had no
+  guard although the `0x300` sample two lines below rejects exactly that. It filled `cause=` with
+  nonsense AND latched `cause_told`, so a genuine unknown bit later in the same stream would have
+  gone unreported. Fixed: skip the accumulate and the report on `0xffffffff`, keeping the read
+  timing. **Side observation from the same window: `0x100` read all-ones while the `0x300` sample
+  stayed valid (`badreads=0`), so the stall and the blackout are not one event.** **Side finding: interrupt-driven acking removed most device overruns at the floor** — the
   poll loop's record was ~0.6/s at a 16-frame period, now 0-1 in 20 s at 48 kHz, rising with the
   event rate (1/3/6/16 above). Full record: `spec/provenance/clarett-fcp-transport.md`, final
   addendum.
