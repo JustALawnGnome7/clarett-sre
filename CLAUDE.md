@@ -1138,7 +1138,36 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     (PipeWire profile off, stop fcp-server and alsa-state), reload, run a 30 s 60ch capture with
     `format "stream-svc:" +p`, and compare `gapmax`. Old build still clean today -> the host changed;
     old build back to ≥42 ms in every window -> reading (b), and a real result.
-    **NOT established either way; do not record the improvement as the driver's until this runs.**
+    **★★ A/B RUN THE SAME DAY — READING (b) IS SUPPORTED: THE STALL TRACKS THE SERVICER'S MMIO READ
+    RATE.** Same host, same Red 8Line, 60ch, 60 s per leg, back to back, modules reloaded in turn:
+    | build | windows | `gapmax` | windows >=42 ms | `readmax` |
+    |---|---|---|---|---|
+    | poll loop `3767D0A3B9DEA0C5709F400` | 31 | 52.7 ms | **3** | 42.0 ms |
+    | interrupt-driven `6E78318567C1058503E01F3` | 30 | **10.9 ms** (nominal) | **0** | <0.05 ms |
+    The poll loop was caught INSIDE a `readl` when it happened (`readmax` == `gapmax`); the new
+    servicer's slowest read all run was tens of microseconds. And the new build reads often enough
+    for this to be a fair test — ~94 reads/s is one every 10.7 ms, so a 42 ms stall window could
+    hardly be missed; it was not hit because it did not occur. **CPU on the same box, same A/B:
+    11.37 % / 9.83 % against 2.77 % / 4.57 % at 512/64-frame periods** (the laptop gave 11.27/11.67
+    against 4.00/5.53, so the CPU result replicates on a second host).
+    **Statistical caveat, stated plainly: 3 versus 0 is thin** — at the poll loop's rate the chance
+    of zero in 30 windows is ~5 %. A 300 s leg each (~15 against 0) is owed before this is treated as
+    settled.
+    **AND THE REVISION IS NARROWER THAN "POLLING CAUSES THE SKIPS".** The July cluster blamed
+    CONTROL-plane traffic — meter polls and notification relays, tens to ~100 commands/s — and the
+    Sep 17 measurement above properly disproved that. What this A/B implicates is the DATA plane's
+    own ~20k reads/s storm from the stream servicer. Both can be true; the Sep 17 finding stands as
+    written. **And the July 31 "mailbox polling disproven as the trigger" A/B set `meter_poll_ms=0
+    monitor_poll=0` — control-plane traffic — while the servicer kept polling `0x300` at ~6.6 kHz in
+    BOTH arms**, so the storm was never the variable there either. What changes is the blanket claim
+    that no driver-side lever exists: at 20k reads/s there demonstrably is one.
+    **★ UNRESOLVED TENSION, do not paper over it:** July 31's hwlat detector touches no device and
+    still caught ~39.7 ms outer latencies on an idle machine on the same cadence, which says the SMI
+    needs no MMIO traffic at all. That and this A/B cannot both be fully right. **Decisive test on
+    that box: run hwlat idle, then while streaming under each build.** hwlat sees 42 ms under the
+    poll loop and not under the interrupt-driven one -> the SMI itself is rate-driven; it sees the
+    same under both -> something other than the SMI explains the `gapmax` difference and this needs
+    re-reading. The memory [[clarett-playback-skipping]] carries the same caveat.
     **Two results from that run that are NOT news:** the 192 kHz duplex leg and 3 of 10 churn cycles
     failed, with ramp breaks of exactly `0x80100` = 2048 frames = ONE TX ring lap. The Red's playback
     ring is 2048 frames, which at 192 kHz is 10.7 ms against a 42 ms stall, so the engine laps it
