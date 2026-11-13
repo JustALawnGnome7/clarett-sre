@@ -682,7 +682,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.3.0 since Nov 4 2026** (snd-clarett `96bc47f`, tag `v0.3.0`): the kernel-style pass
+  - **Version 0.4.0 since Nov 13 2026** (snd-clarett `44ddc6d`, tag `v0.4.0`): the data plane's
+    period events come from the interrupt (the device raises one per period on MSI vec0, so the
+    servicer no longer polls; the playback refill keeps its own cadence), MSI is mandatory and the
+    polled mailbox cycle is gone, and a stream whose engine raises no period warns. Servicer CPU on
+    a 60-channel capture 4.0 % of a core against 11.3 % polling. **Tested on the Red 8Line, 8PreX,
+    8Pre and 4Pre; NOT the 2Pre**, which had no bench time that day — run `irq_rate.sh`,
+    `loopback_order.sh` and `tx_guard_lead.sh` on it when it is next attached.
+  - **Version 0.3.0 from Nov 4 2026** (snd-clarett `96bc47f`, tag `v0.3.0`): the kernel-style pass
     plus the refactor:
     - **Files:** clarett_main.c split into models/engine/follow/pm; long functions split into helpers;
       comments trimmed 21%.
@@ -700,7 +707,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -1272,6 +1279,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   on record, taken on other hosts, reproduces here; and note the poll loop is FLAT across period
   sizes while the new one SCALES with the period rate, which is the signature of the polling (not
   the per-event work) having been what cost the CPU.
+  **★ MODEL MATRIX: Red 8Line, 8PreX, 8Pre AND 4Pre all pass** — interrupts per period event
+  1.011/1.009/1.010/1.006 at a 512-frame period and 1.001 at 64, vec1-3 zero on every one, ramps
+  sample-exact at 48/96/192 kHz, and `leadplay` at a 32-frame period 719968/720000 (gaps=1) on the
+  Red and a clean **720000/720000 gaps=0** on all three Claretts (consistent with the Red's halved
+  TX fragment). Two product lines, two Thunderbolt controllers, one answer. **Still to run: the
+  2Pre** (`irq_rate.sh`, then `loopback_order.sh` and `tx_guard_lead.sh`, which need no root) —
+  narrowest stream (14ch) and the only model whose capture loopback pair sits at position 4.
   Removing the last timer needs the refill to run
   from the client's write (`.ack`), which is atomic context and cannot take `pcm_lock`: separate
   change. **Lesson: when a change alters how OFTEN something runs, the test is a client whose timing

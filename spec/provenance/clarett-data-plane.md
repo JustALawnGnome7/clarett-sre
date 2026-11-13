@@ -1133,6 +1133,25 @@ through UNEXPANDED (zsh tilde-expands assignments, not arguments), so the first 
 lost every figure to `tee` errors. Both new scripts now expand a leading `~` themselves and fall back
 to the cwd if the directory is unwritable; `sudo` also drops an exported `BENCH_LOG_DIR` outright.
 
+**★ MODEL MATRIX (Nov 13 2026) — so none of this rests on one model or one family.** Per unit:
+`irq_rate.sh` interrupts per device period event at 512- and 64-frame periods, the ramp, and the
+short-lead client at a 32-frame period.
+
+| model | ch | per event @512 | @64 | vec1-3 | ramp | `leadplay` @32 |
+|---|---|---|---|---|---|---|
+| Red 8Line | 60 | 1.011 | 1.001 | 0 | 8/8 | 719968/720000, breaks=0 gaps=1 |
+| Clarett 8PreX | 28 | 1.009 | 1.001 | 0 | 9/9 | **720000/720000, breaks=0 gaps=0** |
+| Clarett 8Pre | 20 | 1.010 | 1.001 | 0 | 9/9 | **720000/720000, breaks=0 gaps=0** |
+| Clarett 4Pre | 20 | 1.006 | 1.001 | 0 | 9/9 | **720000/720000, breaks=0 gaps=0** |
+
+Both product lines and both Thunderbolt controllers (the Red's JHL6540, the Claretts' DSL2210) give
+the same answer, with the idle baseline at 0.0/s once fcp-server is stopped. Every ramp leg was
+sample-exact at 48/96/192 kHz with the S/MUX-removed tails silent. Note that all three Claretts are
+CLEAN on the short-lead client while the Red leaves one gap, which fits its halved TX fragment (64
+channels at 16 frames exceeds the engine's per-descriptor read cap, so its fill geometry differs);
+worth remembering rather than acting on. **Not yet run on this build: the 2Pre** — the narrowest
+stream (14ch) and the only model whose capture loopback pair sits at position 4.
+
 **Lesson:** when a change alters *how often* something runs, the test is a client whose timing
 depends on that rate. Everything that measures correctness of the audio path passed while playback
 was being silently discarded.
