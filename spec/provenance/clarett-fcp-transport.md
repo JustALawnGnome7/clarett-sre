@@ -474,3 +474,85 @@ What the §6 observations got right and wrong, for the record:
 - **The ordering trap**, found on the first interrupt-driven build: `0x100`'s DONE bit reflects
   "`0x400` has bits pending", so an ISR that reads `0x400` before `0x100` clears what DONE reports
   and every command times out. Read `0x100` first while a command is in flight.
+
+## Addendum (Nov 13 2026): `0x100` is a SUMMARY register, bit per cause block — and bits 4/5 are not overrun errors
+
+§8's table calls `0x100` an interrupt cause register like the others. It is not: it is a **summary**
+of the other four, and the §8 entry's "`0x100` = mailbox-done" is one bit of it. Derived by
+histogramming every `0x100` read in every capture here — **~150k reads over all five models**, boot,
+streaming, MIDI, preamp toggles and mute/dim — in which only **five distinct values** ever appear:
+`0x00000000`, `0x20000000`, `0x80000000`, `0xa0000000`, `0x0000000f`, plus `0x10000000` in the one
+MIDI capture.
+
+| bit | block | evidence |
+|---|---|---|
+| 31 | `0x300`, stream block 1 (capture) | Agrees with `0x300`'s own bit31 in **45905 of 45910** vendor sweeps (`red_8line.log`). All 5 exceptions are bit31 CLEAR here with `0x300` set — the event landing between the two reads, since `0x100` is read first. Zero in the impossible direction. |
+| 30 | `0x200`, stream block 0 (playback) | **CONFIRMED, see below.** Never observed in any capture, for the same reason `0x200` never carries a nonzero value there: nothing marks a TX descriptor. |
+| 29 | `0x400`, mailbox phase + device events | The "DONE" bit. It reflects "`0x400` has bits pending", which is why the vec0 ISR must read `0x100` FIRST while a command is in flight (see the addendum above). |
+| 28 | `0x500`, MIDI RX | Seen in exactly one capture, `2pre_midi_rx.log`: **70 reads, 70 MIDI acks** (`0x504` writes) in that trace, one for one, and in no other capture. |
+
+`REG_IRQ0_ENABLE` (`0x104`) is written once with `0xf000003f`, which enables exactly those four
+block bits plus bits 0-5 — a tidy fit for "four block summaries and six of something else".
+
+**The low bits are a different class, and bits 0-3 are now pinned down.** They appear only ever
+together, as `0xf`, **exactly once per stream stop** — the write of 0 to `REG_STREAM_IRQ_ARM`
+(`0x110`) — in all ten captures that stream: 7/7, 5/5, 9/9, 9/9, 12/12, 6/6, 1/1, 5/5, 14/14 stops,
+68 in all, each read followed by the vendor writing `0xf` back to clear it. That is where our
+driver's `0x100 = 0xf` write at arm comes from: it clears what the PREVIOUS stop left standing. Our
+servicer never sees them, correctly — it is stopped before `0x110 = 0` is written.
+
+**Bits 4 and 5: still never observed, and NOT the overrun error they were suspected of being.** The
+driver now accumulates every `0x100` value the servicer reads (`cause=` in the `stream-svc` summary)
+and reports any bit outside the four known ones at `info`. The vendor captures could not settle this
+because **not one of them contains a single period overrun**, so `tools/bench/cause_probe.sh`
+provokes them instead, by pushing the event rate up rather than waiting for a slow ack (Red 8Line,
+16-frame period, 20 s legs):
+
+| leg | device overruns | `cause=` |
+|---|---|---|
+| 48 kHz capture | 1 | `0xa0000000` |
+| 96 kHz capture | 3 | `0xa0000000` |
+| 192 kHz capture | 6 | `0xa0000000` |
+| 192 kHz duplex | **16** | `0x80000000` |
+
+**26 device-flagged overruns and `0x100` showed nothing but bits 31 and 29.** So the summary does
+not carry a per-stream error bit for this class; the overrun is reported where it always was, in the
+block's own cause word (`0x300` bit30). What remains open is narrower: whether bits 4/5 are two more
+of the stop class for engines these models do not have, or an error class we have not provoked
+(a descriptor or FIFO fault, say) — the overrun is simply the only stream error producible on demand.
+
+**Side finding, and a real one: at the cadence floor the device flags FAR fewer overruns than it used
+to, because the period is now acked from the interrupt.** The record for the poll loop was ~0.6
+overruns/s at a 16-frame period (2Pre); the first probe run here saw **zero** in 20 s at 48 kHz, and
+a repeat saw one. They only become frequent as the event rate climbs (1 -> 3 -> 6 -> 16 above, at
+one event every 333/167/83 µs). So the interrupt-driven servicer did not merely save CPU, it removed
+most of a device-visible fault class.
+
+### bit30 is `0x200`, and its silence is the TX ring's doing (Nov 13 2026) `[HW — Red 8Line]`
+
+Two facts had a single cause. `clarett_build_rings()` ORs `CLARETT_DESC_IRQ` (bit1) into every
+`clarett_irq_descs()`-th **RX** descriptor only; the TX ring gets `CLARETT_DESC_WRAP_TX` (bit0,
+wrap) on its last entry and no IRQ marker at all. So the playback engine never raises a period
+event, `0x200` never gets a cause, and bit30 -- its summary -- can never set. The vendor's rings
+must be built the same way, since its `0x200` reads zero in every capture too.
+
+Tested by marking the TX descriptors like the RX ones in a scratch build (never committed; it also
+recorded the `0x200` value the servicer normally discards, as `blk0=`). Red 8Line, 15 s legs:
+
+| leg | periods | `cause=` | `blk0=` |
+|---|---|---|---|
+| capture only (TX plays silence, so its engine still runs) | 1407, `late=0` | `0xe0000000` | `0x80000070` |
+| duplex | 1408, `late=0` | `0xc0000000` | `0x80000070` |
+
+`0x200` reports an event bit and an advancing counter exactly as `0x300` does, bit30 of `0x100`
+appears alongside it, and the driver's unknown-bit report fired twice reading **`0x40000000` alone**
+-- the TX block pending with nothing else. The top nibble is now fully mapped and confirmed. Both
+legs streamed cleanly, so the extra interrupt source is not in itself harmful; it is simply not
+needed, since the capture side already paces the shared clock.
+
+**Side note, worth remembering for the engine-wedge hunt:** a PCM opened and closed without ever
+being triggered logs `stream-svc: stopped (periods=0 ... ptr0=0x0 ptr1=0x0)` -- the same line the
+wedge produces. Four appeared in this run, from the script's `--dump-hw-params` probes, with a
+perfect stream immediately after. So that summary line alone is not the wedge signature; the
+zero-period WARNING is, because it requires 100 ms of a stream actually running, and it correctly
+stayed silent here.

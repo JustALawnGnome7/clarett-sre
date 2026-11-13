@@ -1070,7 +1070,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     answered. **A power cycle of the unit alone, module loaded, cleared it** (with the Sep result that a
     reload does not, the state is in the device). Laptop: hundreds of arm/stop cycles across Oct 16's
     tests, never wedged — so the ASRock's stalls landing in an arm or teardown is the lead, unproven.
-    **Next, not done:** (1) driver: warn when a stream ends with zero periods; (2) on the ASRock, churn
+    **★ SIGNATURE CAVEAT (Nov 13 2026): `stopped (periods=0 ... ptr0=0x0 ptr1=0x0)` IS NOT by itself
+    the wedge** — a PCM opened and closed without ever being triggered logs exactly that line (four
+    appeared in one bench run, from `--dump-hw-params` probes, with a perfect stream right after).
+    The zero-period WARNING is the signature, since it requires 100 ms of a stream actually running.
+    **Next, not done:** (1) ~~driver: warn when a stream ends with zero periods~~ DONE (0.4.0); (2) on the ASRock, churn
     with only `engine armed`/`stream-svc` debug on and STOP AT THE FIRST FAILED STREAM, to get the last
     good and first bad arm side by side with any stall between; (3) next time it is wedged, try
     `echo 1 > /sys/bus/pci/devices/<bdf>/reset` and dump the stream registers before power-cycling — a
@@ -1212,6 +1216,33 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   periods per poll, and `CLARETT_TX_GUARD_FRAMES` (then 64; 16 since Oct 16 2026) was *four periods* wide
   there — so the TX guard, not the period, would have set playback latency anyway. Cadence sweep at 48 kHz (1/4/16/64 = 16/64/256/1024
   frames) is in `CLARETT_CTR_OVERRUN`'s comment in `clarett.h`.
+- **★★ `0x100` IS A SUMMARY REGISTER, ONE BIT PER CAUSE BLOCK — AND BITS 4/5 ARE NOT STREAM ERRORS
+  (Nov 13 2026).** Derived by histogramming every `0x100` read in every capture here (**~150k reads,
+  all five models**, boot/streaming/MIDI/preamp/mute): only **five distinct values** ever appear.
+  **bit31 = `0x300`** (agrees with `0x300`'s own bit31 in **45905 of 45910** vendor sweeps; all 5
+  exceptions are the event landing between the two reads, none in the impossible direction);
+  **bit30 = `0x200`** — **CONFIRMED on hardware the same day**: nothing marks a TX descriptor
+  (`clarett_build_rings()` flags only RX, which is also why `0x200` never carries a nonzero value in
+  any capture), so marking the TX ring in a scratch build makes `0x200` report an event and an
+  advancing counter exactly as `0x300` does, with bit30 appearing alongside it and once reading
+  `0x40000000` ALONE; both legs streamed clean (1407/1408 periods, `late=0`), so the extra interrupt
+  source is harmless, just unnecessary; **bit29 = `0x400`** (the "DONE" bit — it reflects "`0x400` has bits pending", hence the
+  read-`0x100`-first rule); **bit28 = `0x500`/MIDI** (70 reads in the one MIDI capture, matching its
+  70 MIDI acks one for one, and absent from every other). `0x104 = 0xf000003f` enables exactly those
+  four plus bits 0-5. **Bits 0-3 are the stream-STOP class:** only ever together as `0xf`, exactly
+  once per stop (`0x110 <- 0`) in all ten streaming captures — 68 stops, 68 appearances — cleared by
+  writing `0xf` back, which is what our arm's `0x100 = 0xf` write is for. **The operator's bits-4/5
+  hypothesis is answered NO for the overrun class:** no vendor capture contains a single period
+  overrun, so `tools/bench/cause_probe.sh` provokes them by raising the event rate (16-frame period
+  at 48/96/192 kHz, capture and duplex) — **26 device-flagged overruns, and `0x100` showed nothing
+  but bits 31 and 29**. Block-local errors stay in the block (`0x300` bit30). Still open and
+  narrower: two more of the stop class for engines these models lack, or an unprovoked error class.
+  The driver now ORs every `0x100` value the servicer reads into `cause=` in the `stream-svc`
+  summary and reports an unknown bit at `info` (`stream-cause:`), so the next one to fire announces
+  itself. **Side finding: interrupt-driven acking removed most device overruns at the floor** — the
+  poll loop's record was ~0.6/s at a 16-frame period, now 0-1 in 20 s at 48 kHz, rising with the
+  event rate (1/3/6/16 above). Full record: `spec/provenance/clarett-fcp-transport.md`, final
+  addendum.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
   runs, every 2-second window with `stepmax=0x1` had zero flags and every window with `stepmax=0x2` had at
