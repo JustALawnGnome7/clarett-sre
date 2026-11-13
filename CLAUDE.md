@@ -1216,6 +1216,68 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   path did `usleep_range(100, 200)` per drop — the misread was self-inflicting the run's worst latency at
   exactly the cadence low-latency work needs. Telemetry: `overrun=` in the 2-second line; `badreads=` now
   means only genuinely unusable samples (all-ones dead-link reads), and `badbits=` is their cumulative OR.
+- **★★★ THE DATA PLANE'S PERIOD EVENT HAS ALWAYS RAISED AN MSI — ON VEC0, AND WE WERE
+  DISCARDING IT (Nov 13 2026, Red 8Line).** `clarett.h` and the ISR comment both said vec1/vec2 were
+  the stream period vectors, so the ISR read `0x200`/`0x300` on them and threw the value away, while
+  the servicer polled `0x300` every ~150 µs. **Measured with the new `tools/bench/irq_rate.sh`
+  (per-vector `/proc/interrupts` counts, 60ch capture, 10 s legs): vec1, vec2 and vec3 fire ZERO
+  times, and vec0 rises by 1.009 interrupts per device period event at a 512-frame period and 1.001
+  at a 64-frame one** — an eightfold cadence change tracked to within 1 %, which no fixed-rate
+  source can fake (vec0's idle baseline is exactly 40.0/s, fcp-server's metering, and is subtracted).
+  This explains two old observations at once: step 4a's "only vec0 fires", and "a stream adds no
+  relays" — the interrupt was arriving, but a period event raises no bit in `0x400`, so the ISR
+  found an empty event mask and returned.
+  **The vendor never used it either**, which is why nobody noticed: through a 27 s streaming window in
+  `captures/red_8line.log` it sweeps `0x100`/`0x300`/`0x200`/`0x400`/`0x500`, **8042 reads each,
+  always in that order, at a flat 297.9/s with the gap pinned at p50 3.998 ms** — a 4 ms timer,
+  coalescing several periods per sweep (1292 of the sweeps found nothing pending). So there was no
+  vendor behaviour to port. Its arm writes match ours byte for byte, `0x110 = 7` at arm and `0` at
+  stop included (14 pairs in the capture), so no configuration was missing: nothing had to be
+  enabled.
+  **First step taken (uncommitted, TESTED on the Red 8Line, srcversion `1B72AB39EBE3490F747C7E4`):**
+  the vec0 ISR sets a flag and wakes the
+  servicer; the servicer waits on it (`clarett_svc_wait()`) instead of the poll sleep, and stays the
+  sole reader of `0x300`, because that read IS the period ack and the engine must not be acked from
+  interrupt context. `CLARETT_SVC_FALLBACK_US` (1000) covers a lost interrupt — and is kept short
+  because it is ALSO the cadence at which playback is topped up between events
+  (`clarett_pcm_tx_refill()`), which is what a short-lead client depends on, so `tx_guard_lead.sh`
+  with `leadplay` is the test that matters, not just the ramps — **NOT YET RUN**.
+  **Results (Nov 13 2026, Red 8Line, laptop): `irq_rate.sh` as root gives 1.001 and 1.000 interrupts
+  per device period event at 512- and 64-frame periods against the driver's own `periods=`;
+  `loopback_order.sh` 8/8 sample-exact; `duplex_stress.sh` 0 failing parts (churn 10/10, 0 xruns,
+  `overrun=0`, `badreads=0`); servicer CPU at 60 channels 3.00 % of a core at a 512-frame period and
+  4.50 % at 64**, against the poll loop's recorded ~11-12 % — but that figure is from other hosts, so
+  the controlled A/B on this box (reload the previous build, repeat the two CPU measurements) is still
+  owed before quoting a ratio.
+  **★ THEN `tx_guard_lead.sh` FOUND A REAL REGRESSION IN IT, AND NOTHING ELSE COULD HAVE.** That
+  first cut used ONE wait for two jobs — collecting the period event and topping playback up between
+  events — and at 1 ms the second is far too coarse: `leadplay` (48-frame lead, 16-frame writes,
+  32-frame period) wrote all 480000 frames with no underruns and **160 of them reached the device**,
+  `breaks=0` (nothing torn — the rest was replaced by SILENCE, `clarett_play_fill()`'s standing
+  mechanism). The 8Pre's baseline for that cell is ~0.1 % loss. aplay was perfect at both periods,
+  and the ramps, duplex stress and churn all passed on that build — a full-buffer client never
+  writes into a passed region, so only a short-lead one probes this. **Fixed by separating the two
+  cadences:** the refill reads NO register (an atomic plus a copy off the software frame clock), so
+  the servicer wakes every `CLARETT_SVC_REFILL_US` (150, the old poll cadence) to refill but reads
+  the device only when the ISR flagged a period, or after `CLARETT_SVC_FALLBACK_US` (1000) without
+  one — MMIO falls from ~20k/s to the period rate while playback is bit-for-bit as before
+  (srcversion `4A852112C3A0973841A5262`). **VERIFIED: `leadplay` at a 32-frame period now delivers
+  719968 of 720000 frames (was 160), `breaks=0 gaps=1`, better than the 8Pre's ~0.1 % baseline;
+  ramps 8/8, duplex stress 0 failing parts, churn 10/10; `irq_rate.sh` with fcp-server stopped gives
+  an idle baseline of 0.2/s against 94.9/s and 751.1/s while streaming — vec0's rate IS the period
+  rate — at 1.011 and 1.001 per event.**
+  **★ CONTROLLED CPU A/B, one host and unit (`tools/bench/svc_cpu_ab.sh`, which reloads each build
+  in turn): the poll loop costs 11.27 % of a core at a 512-frame period and 11.67 % at 64; the
+  interrupt-driven servicer costs 4.00 % and 5.53 % — 2.8x and 2.1x lower.** So the ~11-12 % figure
+  on record, taken on other hosts, reproduces here; and note the poll loop is FLAT across period
+  sizes while the new one SCALES with the period rate, which is the signature of the polling (not
+  the per-event work) having been what cost the CPU.
+  Removing the last timer needs the refill to run
+  from the client's write (`.ack`), which is atomic context and cannot take `pcm_lock`: separate
+  change. **Lesson: when a change alters how OFTEN something runs, the test is a client whose timing
+  depends on that rate.** The churn windows' `late=2..6` is the known old-rate tail (the late
+  threshold follows `cur_rate` while the device still clocks the previous rate), matching the Oct 16
+  Red run on the poll-loop build. Full record: `spec/provenance/clarett-data-plane.md` §17.
 - **Servicer `late=` is PERIOD-RELATIVE now (`clarett_tick_late_us()`), not a fixed 16 ms.** The old
   constant was calibrated when the period was always ~5.3 ms; `dyn_period` makes nominal span 0.33 ms to
   tens of ms, so a fixed threshold was wrong in *both* directions — at a 1024-frame period every healthy

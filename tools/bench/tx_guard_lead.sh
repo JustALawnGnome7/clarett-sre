@@ -1,6 +1,11 @@
 #!/bin/bash
 # The tx_guard question: does a playback client holding a SHORT lead tear the audio at a small guard?
-# Run as your user (sudo is asked for once, to set tx_guard):  bash tx_guard_lead.sh <card> [reps] [secs]
+# Run as your user:  bash tx_guard_lead.sh <card> [reps] [secs]
+# Since tx_guard became a constant (CLARETT_TX_GUARD_FRAMES) the guard cannot be set at runtime, so
+# the grid collapses to the compiled-in guard, reported as `builtin`; on a driver that still has the
+# parameter the sweep runs as before and sudo is asked for once to set it. The short-lead client is
+# also what measures how often playback is topped up between period events, so this is the test for
+# a change to the servicer's wait.
 # Grid, one variable at a time, each cell repeated: client (leadplay holding a 48-frame lead in
 # 16-frame chunks | aplay keeping its buffer full) x period (32, buffer 128 | 64, buffer 256) x
 # tx_guard (16, 32, 64). Each run plays the digital-loopback ramp on the ramp channel while arecord
@@ -36,9 +41,18 @@ R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31;;
 esac
 RAMP=${RAMP:-$R0}
 
-sudo -v || exit 1
-( while sleep 60; do sudo -n true || exit; done ) & KEEP=$!
-G0=$(cat $GP)
+# tx_guard is a constant on a current driver: sweep it only where it is still writable
+if [ -w $GP ]; then
+	HAVE_GP=1
+	sudo -v || exit 1
+	( while sleep 60; do sudo -n true || exit; done ) & KEEP=$!
+	G0=$(cat $GP)
+	GUARDS=${GUARDS:-"16 32 64"}
+else
+	HAVE_GP=0
+	G0=builtin
+	GUARDS=builtin
+fi
 
 PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readlink -f /sys/class/sound/card$CARD/device)" | tr ":" "_")" \
 	'$2 ~ b {print $2}')
@@ -60,9 +74,11 @@ printf '%s\t%s\n' "$CTL" "$(amixer -c "$CARD" cget name="$CTL" | sed -n 's/.*: v
 amixer -q -c "$CARD" cset name="$CTL" "PCM $RAMP"
 restore() {
 	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done < "$W/restore"
-	echo "$G0" | sudo -n tee $GP >/dev/null
+	if [ "$HAVE_GP" = 1 ]; then
+		echo "$G0" | sudo -n tee $GP >/dev/null
+		kill $KEEP 2>/dev/null
+	fi
 	[ -n "$PWCARD" ] && pactl set-card-profile "$PWCARD" "$PWPROF"
-	kill $KEEP 2>/dev/null
 	rm -rf "$W"
 }
 trap restore EXIT
@@ -71,7 +87,7 @@ say() { echo "$*" | tee -a "$LOG"; }
 
 run() {	# client period guard
 	local cl=$1 per=$2 g=$3 buf=$(( $2 * 4 )) pl ur res
-	echo "$g" | sudo -n tee $GP >/dev/null
+	[ "$HAVE_GP" = 1 ] && echo "$g" | sudo -n tee $GP >/dev/null
 	arecord -D hw:$CARD,0 -f S32_LE -c $CH -r 48000 -t raw -d $(( SECS + 2 )) \
 		--period-size=$per --buffer-size=$buf 2>"$W/rec.err" | $PY count $CH $EXP > "$W/res" &
 	local rp=$!
@@ -88,13 +104,15 @@ run() {	# client period guard
 	wait $rp
 	res=$(cat "$W/res")
 	printf '%s\t%s\t%s\t%s\n' "$cl" "$per" "$g" "$(sed -n 's/.*breaks=\([0-9]*\).*/\1/p' <<<"$res")" >> "$W/all"
-	say "$(printf -- '-- %-8s period %-2s guard %-2s: %s; client underruns %s' "$cl" "$per" "$(cat $GP)" "$res" "${ur:-?}")$( [ -n "${ur:-}" ] || echo "; $pl")"
+	say "$(printf -- '-- %-8s period %-2s guard %-7s: %s; client underruns %s' "$cl" "$per" "$g" "$res" "${ur:-?}")$( [ -n "${ur:-}" ] || echo "; $pl")"
 }
 
 say "== $(date) tx_guard lead test card $CARD $ID, ramp PCM $RAMP -> ch $EXP, $REPS reps x $SECS s, 48 kHz (srcversion $(cat /sys/module/snd_clarett/srcversion), tx_guard was $G0)"
 for r in $(seq 1 "$REPS"); do
 	say "- rep $r"
-	for cl in leadplay aplay; do for per in 32 64; do for g in 16 32 64; do run $cl $per $g; done; done; done
+	for cl in leadplay aplay; do for per in 32 64; do
+		for g in $GUARDS; do run $cl $per $g; done
+	done; done
 done
 say "-- summary: breaks per run"
 sort -k1,1 -k2,2n -k3,3n "$W/all" | awk -F'\t' '{k=$1" period "$2" guard "$3; v[k]=v[k] (v[k]==""?"":" ") $4; if(!(k in o)){o[k]=++n; ks[n]=k}}

@@ -995,3 +995,144 @@ the mirror of `clarett_rx_drain`); the ALSA buffer / per-period math stay on the
 `tx_frag_pad` lever mirrors `rx_frag_pad` (`-1` auto pow2 default, `0` = old contiguous for A/B).
 **Hardware-confirmed on the 8PreX: clean music playback, fold gone.** No change for the 2Pre/4Pre
 (fragment already a power of two).
+
+## 17. The period event DOES raise an MSI — on vec0, all along (Nov 13 2026) `[HW — Red 8Line]` + `[TRACE]`
+
+The servicer has polled `0x300` since the engine first clocked, and the standing assumption —
+written into `clarett.h` and the driver's own ISR comment — was that `0x200`/`0x300` interrupts
+arrive on MSI vec1/vec2, which the ISR therefore read and discarded. **Both halves of that were
+wrong: vec1/vec2 never fire at all, and the period event arrives on vec0 together with the mailbox
+and the device events.**
+
+**Measurement** (`tools/bench/irq_rate.sh`, written for this; Red 8Line, 60ch capture at 48 kHz,
+10 s legs, per-vector counts from `/proc/interrupts`):
+
+| ALSA period | expected device period events | vec0 attributable | per event | vec1 | vec2 | vec3 |
+|---|---|---|---|---|---|---|
+| 512 frames | 937 | 945 | **1.009** | 0 | 0 | 0 |
+| 64 frames | 7500 | 7511 | **1.001** | 0 | 0 | 0 |
+
+The two legs are the control for each other: an **eightfold** change in period cadence moved vec0's
+rate by the same factor, to within 1 %, which no fixed-rate source (the ~40/s mailbox baseline, a
+timer, a MIDI or notification source) can do. vec0's idle baseline was exactly 40.0/s both times
+(fcp-server's ~20 Hz metering, two MSIs per command) and was subtracted. Taken on the laptop, where
+`periods=` and the counts agree; the figure needs no root beyond the `periods=` line, since the
+expected cadence is just rate/period.
+
+Corroborating evidence already on record, now explained: the step-4a work found "only vec0 fires",
+and the Oct 10 relay measurements found that **a stream adds no relays** — the interrupts were
+arriving and being handled, but a period event raises no bit in `0x400`, so the ISR read it, found
+the event mask empty, and returned. Nothing in the kernel log could show the difference.
+
+**The vendor does not use this interrupt.** In `captures/red_8line.log`, through a 27 s streaming
+window (the one bracketed by `0x110 <- 7` at +481.337 s and `0x110 <- 0` at +508.442 s), the vendor
+driver reads all five cause blocks in one fixed sweep — `0x100`, `0x300`, `0x200`, `0x400`, `0x500`,
+**8042 reads each, always in that order** (`0x300` is preceded by `0x100` and followed by `0x200` in
+all 8042 cases) — at a flat **297.9/s, inter-read gap p50 3.998 ms**: a 4 ms polling timer. 1292 of
+those sweeps found nothing pending and 6750 had bit 31 set, so it coalesces several periods per
+sweep exactly as our servicer does. So there was never a vendor behaviour to port here, which is
+why this went unnoticed for so long.
+
+Also confirmed in passing, against a note in CLAUDE.md that read as if the driver double-wrote it:
+the vendor writes `0x110 = 7` at arm and `0x110 = 0` at **stop**, 14 arm/stop pairs in the capture,
+and our `clarett_engine_program()`/`clarett_engine_stop()` do exactly the same. The arm writes
+(`0x108 = 0x10`, `0x20c = 1`, `0x10c = 0x1e70700`, `0x110 = 7`) match byte for byte, and `0x104`
+is written once at init (`0xf000003f`) and once at teardown (`0`) by both. So the period MSI needs
+no configuration we were missing — it was always being delivered.
+
+**First driver step taken the same day:** the vec0 ISR now sets a flag and wakes the servicer, which
+waits on it instead of sleeping ~150 µs between polls (`clarett_svc_wait()`,
+`CLARETT_SVC_FALLBACK_US` = 1000). The servicer remains the only reader of `0x300`, because that
+read is how a period is acknowledged and the engine must not be acked from interrupt context. The
+fallback timeout is deliberately short: it is also the cadence at which playback is topped up
+between events (`clarett_pcm_tx_refill()`), which a client writing with a short lead depends on —
+the thing `tx_guard_lead.sh` measures.
+
+**Tested the same day (Red 8Line, laptop, srcversion `1B72AB39EBE3490F747C7E4`): PASS.**
+- `irq_rate.sh` as root, against the driver's own `periods=`: **1876 interrupts for 1875 period
+  events (1.001) at a 512-frame period, 15004 for 15000 (1.000) at 64**, vec1/vec2/vec3 zero in
+  both legs. So the interrupt arrives once per period event with the new wake path in place, and
+  nothing is coalesced or lost.
+- `loopback_order.sh`: **8/8 legs sample-exact** (144k/288k/576k frames at 48/96/192 kHz), ramp on
+  the expected channel every time, S/MUX-removed tails all zero.
+- `duplex_stress.sh`: **0 failing parts** — 48/96/192 kHz sustained sample-exact with 0 xruns, the
+  64/256 leg sample-exact (one non-RT arecord overrun outside the ramp, as before), churn 10/10 with
+  no servicer thread left, the 96k-into-48k open narrowed and unbroken. `overrun=0`, `badreads=0`
+  throughout.
+- **Servicer CPU, measured on this host at 60 channels** (`/proc/<tid>/stat` of the `clarett-svc`
+  thread over 10 s): **3.00 % of a core at a 512-frame period, 4.50 % at 64**. The poll loop's
+  recorded figure is ~11-12 %, but from earlier sessions on other hosts, so a controlled A/B on this
+  box (reload the previous build, repeat these two) is still worth doing before quoting a ratio.
+- The `late=2..6` counts in the churn windows are the already-recorded old-rate tail, not new: the
+  late threshold scales with `cur_rate`, republished at the handshake, while the device keeps
+  clocking the previous slower rate for tens of ms, so the first gaps of a faster leg exceed a
+  threshold computed for the new rate. Every one has `gapmax` equal to the previous rate's period
+  (10611 µs in a 96 kHz leg, 5337 µs in a 192 kHz one), and the range matches the Oct 16 Red run on
+  the poll-loop build.
+
+### The first cut of that step BROKE short-lead playback, and only `leadplay` saw it (Nov 13 2026) `[HW — Red 8Line, FIXED]`
+
+The step above tied one wait to two jobs: collecting the period event, and topping playback up
+between events (`clarett_pcm_tx_refill()`). At a 1 ms timeout the second is far too coarse.
+`tx_guard_lead.sh` on the new build, Red 8Line, `leadplay` holding a 48-frame lead in 16-frame
+writes at a 32-frame period:
+
+| client | period | frames of ramp captured (of 480000) | breaks | gaps | client underruns |
+|---|---|---|---|---|---|
+| `leadplay` | 32 | **160** | 0 | 3 | ~0 |
+| `leadplay` | 64 | 297056 | 0 | 6188 | 14999 (lead < period, inherent) |
+| `aplay` | 32 | 720000 | 0 | 0 | 0 |
+| `aplay` | 64 | 720000 | 0 | 0 | 0 |
+
+The client wrote all 480000 frames and reported no underruns; the audio simply never reached the
+device. `breaks=0` throughout, so nothing was torn — the frames were replaced by **silence**, which
+is the mechanism `clarett_play_fill()` has always had (the fill writes silence past `appl_ptr`, so a
+frame written after its slot has been passed is never copied). The poll loop's ~150 µs cadence hid
+it; the 8Pre baseline for this cell was ~0.1 % loss. **Every other test passed on that build** — the
+ramps at three rates, the duplex stress, the churn — because `aplay`-style clients keep the buffer
+full and never write into a passed region. A short-lead client is the only probe for this.
+
+**Fix: separate the two cadences, which is sound because the refill reads no register.**
+`clarett_pcm_tx_refill()` checks an atomic and copies from the ALSA buffer using the software frame
+clock, so waking for it costs memory traffic only, and nothing while no playback stream is attached.
+The servicer therefore wakes every `CLARETT_SVC_REFILL_US` (150, the poll loop's old cadence) and
+refills, but **reads the device only when the ISR has flagged a period event**, or after
+`CLARETT_SVC_FALLBACK_US` (1000) without one. The four MMIO reads per iteration — the poll loop's
+real cost — drop from ~20k/s to the period rate, while playback behaviour is bit-for-bit what it was.
+
+Removing the last timer would mean refilling from the client's own write (`.ack`), which runs in
+atomic context and so cannot take `pcm_lock` as `clarett_play_fill()` does. Separate change.
+
+**Verified on hardware (Red 8Line, srcversion `4A852112C3A0973841A5262`): PASS.** The same cell,
+same script, back to back against the build above: `leadplay` at a 32-frame period delivered
+**719968 of 720000 frames** (was 160), `breaks=0 gaps=1`, no client underruns — better than the
+8Pre's ~0.1 % baseline for that cell. The period-64 cell and both aplay cells are unchanged, as they
+should be. `loopback_order.sh` 8/8 sample-exact at 48/96/192 kHz; `duplex_stress.sh` 0 failing parts
+(churn 10/10, 0 xruns). `irq_rate.sh` with fcp-server stopped, so the idle baseline is **0.2/s** and
+vec0's streaming rate IS the period rate: 94.9/s at a 512-frame period and 751.1/s at 64, **1.011
+and 1.001 interrupts per period event**, vec1/vec2/vec3 zero.
+
+**★ SERVICER CPU, CONTROLLED A/B ON ONE HOST AND ONE UNIT** (`tools/bench/svc_cpu_ab.sh`, written
+for this: it reloads each module in turn and times the `clarett-svc` thread across a 15 s capture at
+each period size; Red 8Line, 60ch):
+
+| ALSA period | poll loop `3767D0A3B9DEA0C5709F400` | interrupt-driven `4A852112C3A0973841A5262` | saving |
+|---|---|---|---|
+| 512 frames | **11.27 %** of a core | **4.00 %** | −7.27 pp, 2.8x |
+| 64 frames | **11.67 %** | **5.53 %** | −6.14 pp, 2.1x |
+
+Two secondary results. (1) **The ~11-12 % on record reproduces on this host**, so that figure, taken
+elsewhere, was sound. (2) **The poll loop's cost is FLAT across period sizes (11.27 vs 11.67) while
+the new servicer's scales with the period rate (4.00 -> 5.53)** — which is the signature of the
+change having removed the right thing: what is left is per-event work, not polling. Earlier
+unprivileged runs of the same cells gave 3.50 / 5.20 %, within ~0.5 pp of the controlled figures
+(15 s at a 100 Hz tick is ~0.07 pp per tick, and the thread can land on a different core).
+
+The script hit one trap worth remembering: under zsh `sudo BENCH_LOG_DIR=~/dir` passes the tilde
+through UNEXPANDED (zsh tilde-expands assignments, not arguments), so the first A/B ran correctly but
+lost every figure to `tee` errors. Both new scripts now expand a leading `~` themselves and fall back
+to the cwd if the directory is unwritable; `sudo` also drops an exported `BENCH_LOG_DIR` outright.
+
+**Lesson:** when a change alters *how often* something runs, the test is a client whose timing
+depends on that rate. Everything that measures correctness of the audio path passed while playback
+was being silently discarded.
