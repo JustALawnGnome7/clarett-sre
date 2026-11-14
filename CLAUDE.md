@@ -950,6 +950,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   check `ps -o psr` on it before blaming the driver for missed deadlines. Still not done on this host: a
   listening test (all evidence so far is telemetry) and a native hwlat run (no VM needed there — the plan
   in `spec/provenance/clarett-smi-hwlat-vm-plan.md` applies with the VM step dropped).
+  **★ THE "SMI / WHOLE-CPU FREEZE" FRAMING IN THIS ENTRY IS SUPERSEDED FOR THE 42 ms STALL (Nov 13
+  2026):** `osnoise` and the servicer measured in the same window show the CPU losing <4.1 ms while
+  the servicer lost 42 ms inside a `readl`, so it is an MMIO-path block, not SMM. What stands here is
+  the platform-specificity (the EliteBook shows nothing) — see the A/B entry under Driver limitations
+  for the measurement and for the read-rate lever.**
 - **★ LOG POLICY — the default load is ONE `dev_info` line (Aug 20 2026).** The RE instrumentation that
   used to print unconditionally is now `dev_dbg`, so a healthy driver prints:
   ```
@@ -1168,6 +1173,28 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     poll loop and not under the interrupt-driven one -> the SMI itself is rate-driven; it sees the
     same under both -> something other than the SMI explains the `gapmax` difference and this needs
     re-reading. The memory [[clarett-playback-skipping]] carries the same caveat.
+    **★★★ ANSWERED THE SAME DAY, AND IT RETRACTS THE "WHOLE-CPU FREEZE": THE 42 ms STALL IS AN
+    MMIO-PATH BLOCK, NOT SMM.** Both instruments in ONE 300 s window, poll-loop build streaming
+    60ch: the servicer logged **94 windows, 6 of them with a >=42 ms gap, `gapmax` 52.7 ms,
+    `readmax` 42.1 ms** (so it was inside a `readl`), while **`osnoise` — which touches no device —
+    saw 0 hardware-noise events and a worst single noise of 4.1 ms** in the same window. Six times
+    the register read blocked for 42 ms and the CPU never lost more than 4 ms to anything. A
+    system-wide SMM freeze cannot hide from osnoise, so this fault is not one. Earlier the same
+    evening, 300 s of `hwlat` on an IDLE box (no stream) saw nothing at all — and hwlat cannot be run
+    alongside a 60ch stream here, since it spins with interrupts disabled for 500 ms at a time and
+    kills the capture with EIO within seconds (that is why osnoise is the instrument).
+    **Consequences.** (1) **[[clarett-periodic-mmio-stall]] was the correct characterisation all
+    along** ("the device stops answering MMIO for ~48 ms, every read returning 0xffffffff") and the
+    two memories are almost certainly ONE fault with two faces: the register path goes unresponsive,
+    sometimes returning all-ones, sometimes blocking the read for tens of ms. We saw both faces in
+    one run today (`0x100=0xffffffff` on one read; `readmax` 42.1 ms on others).
+    (2) **"BIOS-only, no driver-side fix exists" is retracted** — there is a lever and we are already
+    using it: the read rate. (3) The Aug 19 EliteBook result stands and is compatible: the stall
+    needs THIS host and the read storm.
+    **Still unresolved, and no longer load-bearing:** July 31's hwlat caught ~39.7 ms outer
+    latencies, which this contradicts. Today's idle hwlat saw none in 300 s, so either that
+    observation was not what it was taken for or the host has changed. Whatever it was, the fault
+    that costs audio is in the MMIO path, which is where the next work belongs.
     **Two results from that run that are NOT news:** the 192 kHz duplex leg and 3 of 10 churn cycles
     failed, with ramp breaks of exactly `0x80100` = 2048 frames = ONE TX ring lap. The Red's playback
     ring is 2048 frames, which at 192 kHz is 10.7 ms against a 42 ms stall, so the engine laps it
