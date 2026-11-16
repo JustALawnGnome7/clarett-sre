@@ -1149,8 +1149,12 @@ the same answer, with the idle baseline at 0.0/s once fcp-server is stopped. Eve
 sample-exact at 48/96/192 kHz with the S/MUX-removed tails silent. Note that all three Claretts are
 CLEAN on the short-lead client while the Red leaves one gap, which fits its halved TX fragment (64
 channels at 16 frames exceeds the engine's per-descriptor read cap, so its fill geometry differs);
-worth remembering rather than acting on. **Not yet run on this build: the 2Pre** — the narrowest
-stream (14ch) and the only model whose capture loopback pair sits at position 4.
+worth remembering rather than acting on. **The 2Pre, run on the 0.4.0 release build (Nov 16 2026,
+laptop, srcversion `4A852112C3A0973841A5262`), passes too:** 1.005 and 1.001 interrupts per period
+event at 512- and 64-frame periods, vec1-3 zero; the ramp 9/9 sample-exact at 48/96/192 kHz with the
+position-4 loopback pair on ch 13/14; `tx_guard_lead.sh` breaks=0 in all 12 runs, aplay gap-free, and
+`leadplay` at a 32-frame period gaps 10/21/8 per 20 s run against the client's own reported
+underruns 10/20/8 (non-RT; one gap without a matching underrun, unexplained). All five models pass.
 
 **Lesson:** when a change alters *how often* something runs, the test is a client whose timing
 depends on that rate. Everything that measures correctness of the audio path passed while playback

@@ -687,8 +687,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     servicer no longer polls; the playback refill keeps its own cadence), MSI is mandatory and the
     polled mailbox cycle is gone, and a stream whose engine raises no period warns. Servicer CPU on
     a 60-channel capture 4.0 % of a core against 11.3 % polling. **Tested on the Red 8Line, 8PreX,
-    8Pre and 4Pre; NOT the 2Pre**, which had no bench time that day — run `irq_rate.sh`,
-    `loopback_order.sh` and `tx_guard_lead.sh` on it when it is next attached.
+    8Pre and 4Pre** that day; **the 2Pre on Nov 16 2026** (the akmod's release build,
+    srcversion `4A852112C3A0973841A5262`, laptop): `irq_rate.sh` 1.005/1.001 per event with
+    vec1-3 at zero, `loopback_order.sh` 9/9 sample-exact, `tx_guard_lead.sh` breaks=0 in all 12
+    runs. **All five models pass.**
   - **Version 0.3.0 from Nov 4 2026** (snd-clarett `96bc47f`, tag `v0.3.0`): the kernel-style pass
     plus the refactor:
     - **Files:** clarett_main.c split into models/engine/follow/pm; long functions split into helpers;
@@ -1413,9 +1415,16 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   1.011/1.009/1.010/1.006 at a 512-frame period and 1.001 at 64, vec1-3 zero on every one, ramps
   sample-exact at 48/96/192 kHz, and `leadplay` at a 32-frame period 719968/720000 (gaps=1) on the
   Red and a clean **720000/720000 gaps=0** on all three Claretts (consistent with the Red's halved
-  TX fragment). Two product lines, two Thunderbolt controllers, one answer. **Still to run: the
-  2Pre** (`irq_rate.sh`, then `loopback_order.sh` and `tx_guard_lead.sh`, which need no root) —
-  narrowest stream (14ch) and the only model whose capture loopback pair sits at position 4.
+  TX fragment). Two product lines, two Thunderbolt controllers, one answer. **2Pre DONE Nov 16
+  2026 (laptop, 0.4.0 release build `4A852112C3A0973841A5262`), so all five models pass:**
+  `irq_rate.sh` 1.005 per event at a 512-frame period and 1.001 at 64 (1884/1875 and 15008/15000),
+  vec1-3 zero; `loopback_order.sh` 9/9 sample-exact at 48/96/192 kHz with the position-4 loopback
+  pair on ch 13/14, ADAT 1 on ch 5 and the S/MUX-dead channels zero; `tx_guard_lead.sh` (20 s legs,
+  3 reps) **breaks=0 in all 12 runs**, aplay 960000/960000 gaps=0 at both periods, `leadplay` at a
+  32-frame period 959888-960000 frames with gaps 10/21/8 against leadplay's own reported
+  underruns 10/20/8 (the non-RT client falling behind; one gap in rep 2 has no matching underrun,
+  unexplained; the other Claretts showed no gaps that day), and at 64 the expected underrun every
+  period (lead < period).
   Removing the last timer needs the refill to run
   from the client's write (`.ack`), which is atomic context and cannot take `pcm_lock`: separate
   change. **Lesson: when a change alters how OFTEN something runs, the test is a client whose timing
