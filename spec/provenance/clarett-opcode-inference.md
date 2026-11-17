@@ -35,6 +35,9 @@ That is the real novel surface — category 5, most of category 6, category 7, o
 
 ## 2. `0x007002` / `0x007003` — stream width declaration, per speed class `[TRACE]`
 
+> **Superseded (Nov 17 2026, §12):** these are channel-list reads `{u32 band}`, one 16-byte record per
+> stream channel; the reply was never visible in the traces.
+
 Payload `{u32 speed_class, u16 channels}`. The host **supplies** the count, so these declare
 geometry rather than query it — the `GET_7.2`/`GET_7.3` names in `clarett.h` are misnomers.
 `speed_class` 0/1/2 = single/double/quad, fixed by the `0x006003` immediately preceding.
@@ -190,7 +193,7 @@ are not an error but behave differently per model, so stop at band 2.
 | 0x05 | `S/PDIF` | 0x27-0x28 | `Loop 1`..`2` |
 | 0x06 | `ADAT` | 0x29-0x2a | `MIDI In`, `MIDI Out` |
 | 0x07-0x08 | `ADAT1`, `ADAT2` | 0x2b-0x46 | `Output 1`..`Output 28` |
-| 0x09-0x0c | `Analog`, `S/PDIF`, `ADAT`, `LOOP` | 0x47+ | clamps to `Output 28` (4Pre) / `Output 5Pre` (2Pre, a read past the table) |
+| 0x09-0x0c | `Analog`, `S/PDIF`, `ADAT`, `LOOP` | 0x47+ | ~~clamps to `Output 28` (4Pre) / `Output 5Pre` (2Pre, a read past the table)~~ **refused** (§12: the clamp was a stale response buffer) |
 
 So it confirms the model-independent id enumeration §3 derived, and it cannot enumerate a model's
 ports (a 4Pre names ADAT 9-16 and Output 28). Ids 3-8 are the clock-source names, which resolves the
@@ -393,3 +396,118 @@ in both the reads follow `0x800005`. So the app knows the model before it reads 
 revision shares the Line models' value, which the descriptors do not say. Reading it on a Red Pre
 (`unit_ident.sh`) answers that; the firmware bundle's `.bit` headers might too (design name and FPGA
 part per image), but the bundle is not on the laptop host.
+
+## 12. Addendum (Nov 16-17 2026): the device describes itself — MODEL_ID, clocks, channels; MSI under Windows
+
+All on the 2Pre, laptop host. Device reads with `tools/fcp_cmd.c` through main's driver (fcp-server
+stopped); vendor behaviour from two routine Windows-guest traces, MMIO and (the second) MSI,
+taken Nov 17 (kept in `/tmp`, not committed).
+
+### Correction to §9: nothing lies past the string table
+
+`0x005000` read for every id 0x0000-0x00ff, plus 256, 512, 1024, 4096, 32768 and 65535, twice each, all
+reads agreeing: id 0 answers an empty string, 0x01-0x46 exactly §9's table (ids 1-2 `Clarett8Pre`,
+0x46 `Output 28`), and **every id from 0x47 on is refused**. §9's "clamps to `Output 28` (4Pre) /
+`Output 5Pre` (2Pre)" was the response buffer read after a refusal, from before the driver failed
+refusals (`-EIO`) and poisoned the buffer: the same artifact as §10's "band 3 repeats band 2".
+`Output 5Pre` was never a firmware string, so there is no hidden name list after the table, and the
+table holds no per-model name: ids 1-2 read `Clarett8Pre` on every Clarett. The table is the line's
+superset (word clock, two ADAT ports, `Output 1`-`28`, i.e. sized for the 8PreX), and each model
+uses a subset; the vendor requests carry only the 2-byte id, so there is no table selector.
+
+### `0x800005` (MODEL_ID) is a 12-byte record `{u32 family, u32 model, u32}`
+
+`{u32 offset, u32 len}` addresses it like GET_DATA: `{0,4}` = 1, `{4,4}` = 4, `{8,4}` = 0, `{0,12}` =
+`1 4 0` (three reads, stable), and any range past byte 12 (`{0,16}`, `{0,32}`, `{8,8}`) is refused. So
+the third word is **0 on the 2Pre**, as on the 4Pre (§9); two zeros do not decode it. It is neither
+the appspace FPGA `type` word (@16 = 1) nor the 2Pre's word @20 (5). Next reading worth having: the
+Red 8Line's.
+
+The driver now identifies by it (snd-clarett, uncommitted at the time of writing): MODEL_ID names
+the entry, STREAM_INFO band 0 cross-checks it, and geometry matching remains for the models never
+read. On the 2Pre: `Clarett 2Pre: identified by MODEL_ID {1, 4}`.
+
+**Hypothesis (operator's): the model word indexes one list of model names shared by both families.**
+8Pre 1, 8PreX 2, 4Pre 3, 2Pre 4 (Clarett); the first two Reds reused Clarett names (4Pre, 8Pre), and
+the first new names were appended in release order: Red 16Line (released 2017) = 5, Red 8Line (2020)
+= 6, measured. It fits all five readings with no invented products, explains why the 8Line is 6, and
+predicts **Red 8Pre `{2, 1}`, Red 4Pre `{2, 3}`, Red 16Line `{2, 5}`**: one reading of any of those
+units confirms or breaks it. The family word is then what tells a Clarett 4Pre from a Red 4Pre. Kept
+out of the driver's table until read: a wrong guess would turn a working geometry match into a
+refusal. Two coincidences fit it too, neither evidence: the shared Clarett firmware names itself
+after model 1 (`Clarett8Pre`, above), and the Red 8Line's Thunderbolt DROM names it `Red16Line`
+after model 5.
+
+### `0x006000` is the clock-source list; the vendor sends its values, so S/PDIF is 4 on the 2Pre
+
+`0x006000` (any payload, identical replies) -> `{u16 clock value, u16 name id}` pairs: `24/3`,
+`4/5`, `0/6` = **Internal 24, S/PDIF 4, ADAT 0**, the names being `0x005000` ids 3/5/6. `0x006001`
+lists the supported rates as u32s (44100, 48000, 88200, 96000, 176400, 192000); `0x006002` answers
+`{u32 current rate, u16 source, u16 source}`.
+
+The trace settles which value the vendor uses: at attach it reads `0x006000`, then `0x005000` ids 3,
+5, 6 (the vendor driver's "one `0x005000` per clock source", §11 step 2), and Clock Source -> S/PDIF
+in Focusrite Control sends **`0x006003 {192000, 4}`**, back to Internal `{192000, 24}`. Nothing
+between attach and the change reads the S/PDIF Source setting or re-reads `0x006000`: the value is the
+table's, not derived. It matches the descriptors, which give S/PDIF as a fixed per-model option: 4
+on the 2Pre (one S/PDIF source, Optical), 3 on the 4Pre, 8Pre and 8PreX (RCA or Optical). With the
+Aug 14 measurement (on the 2Pre, 3 locks only to S/PDIF, 4 to S/PDIF or ADAT, both over TOSLINK),
+4 reads as "clock from the optical input", 3 as "from S/PDIF": a reading, not proven.
+
+Each clock change also raises the `0x400` sync event (bit 3) and is followed by `0x006002` and a
+fresh `0x007002`/`0x007003` + per-channel `0x005000` burst.
+
+The driver now builds its Clock Source items from `0x006000` + `0x005000` (model table as the
+fallback). On the 2Pre: Internal 24, S/PDIF 4, ADAT 0; `tools/bench/clock_live.sh` passed
+(Unlocked/Locked both ways, 960,000 frames 0 breaks, raw and with PipeWire holding the card).
+**This corrects the driver's long-standing S/PDIF = 3 on the 2Pre** (and the "S/PDIF = 3 on every
+model INCLUDING the 2Pre" reading in CLAUDE.md: 3 does select S/PDIF there, but it is not what the
+vendor sends).
+
+### `0x007002`/`0x007003` are channel lists, not width declarations (corrects §2)
+
+`{u32 speed band, u16 count}` -> one **16-byte record per stream channel** at that band, in stream
+order: `{u8 0, u8 index, u16 port id, u16 port id, u16 port class, u32 0, u32 type}`. The count is
+ignored (4 and 32 both return the full list); a band past 2 is refused. Port id and class are
+`0x005000` ids. The 2Pre's capture list:
+
+| index | 0 | 1 | 2 | 3 | 4 | 5 | 6-13 |
+|---|---|---|---|---|---|---|---|
+| port | Input 1 (0x0d) | Input 2 | S/PDIF 1 (0x15) | S/PDIF 2 | Loop 1 (0x27) | Loop 2 (0x28) | ADAT 1-8 (0x17-0x1e) |
+| class | Analog (0x09) | Analog | S/PDIF (0x0a) | S/PDIF | **LOOP (0x0c)** | **LOOP** | ADAT (0x0b) |
+| type | 1 | 1 | 2 | 2 | 7 | 7 | 4 |
+
+Band 1 returns the first 10 (ADAT 1-4), band 2 the first 8 (ADAT 1-2): the S/MUX widths, as
+STREAM_INFO's. Playback (`0x007002`) lists Output 1-4 (0x2b-0x2e, class Analog). So the device
+reports where its loopback pair sits (index 4 on the 2Pre: main's measured `rx_loopback_at`), and
+the identity of every stream channel at every speed. The vendor driver reads both at every stream
+setup and then names each record's port with `0x005000`, which is the per-channel burst §3 traced.
+The driver now takes the loopback position from it (model table as the fallback and cross-check).
+
+### Under Windows the vendor driver is interrupt-driven, idle as well (corrects `clarett-data-plane.md` §17)
+
+Two 2Pre traces with `vfio_msi_interrupt` (needs `x-no-kvm-msi=true`), Nov 16 (~5900 interrupts) and
+Nov 17 (17,007 over two minutes: attach, idle, two clock changes, a knob, three streams):
+
+- **Every interrupt arrives on vector 0**, although 4 are enabled.
+- **After each one the vendor reads `0x100, 0x300, 0x200, 0x400, 0x500`**, p50 29 us later (Nov 17),
+  whether streaming or idle; that sweep is its interrupt handler. While streaming the period event
+  comes every 4 ms (250/s), and a separate 10 Hz sweep reads the ring pointers and the
+  `0x800`/`0x880` blocks. The "4 ms timer, never used the interrupt" reading of `captures/red_8line.log`
+  (§17) was wrong: that capture had no MSI trace, and the 4 ms cadence is the period event.
+- **Idle with Focusrite Control open:** ~24 `GET_METER`/s and ~1.5 interrupts per command (the
+  `0x400` phase bits 1 and 2, sometimes one interrupt for both). Attached but with Focusrite Control
+  not yet connected: **no interrupts and no traffic at all** for 30 s.
+- **What each sweep found** (Nov 17): 9,009 RX periods, 5,772 mailbox phases, 93 both, one stop
+  class (`0xf`), and 246 nothing. 238 of those 246 came ~115 us after a mailbox interrupt whose sweep
+  had already read `0x400 = 0x3`: both phases latched at once, and the second phase's interrupt then
+  arrives after its cause has been collected. Interrupt delivery lags the register; not spurious.
+  (Likely the Nov 16 trace's 353 sweeps that read `0x300 = 0`.)
+- **Knob (`0x400` bit 22), Focusrite Control's response per event:** one `GET_DATA {24, 92}` (the
+  monitor region), three `MUX_READ`s (two entries at index 14/10/8, one per speed band: by position,
+  what feeds Monitor Outputs 1-2), then, if the level moved, `SET_DATA` 32 and 33 with `DATA_CMD 1`
+  each, and an 8 KB app-storage persist. So Focusrite Control mirrors the knob into the SW gains
+  itself, as main's driver does in `hw_gain_follow`, and it reads the region once per notification,
+  not once per control.
+
+Still open: whether `0x108`/`0x10c` route causes to vectors 1-3 (needs writes, so a scratch build).
