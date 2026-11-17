@@ -483,6 +483,12 @@ reports where its loopback pair sits (index 4 on the 2Pre: main's measured `rx_l
 the identity of every stream channel at every speed. The vendor driver reads both at every stream
 setup and then names each record's port with `0x005000`, which is the per-channel burst §3 traced.
 The driver now takes the loopback position from it (model table as the fallback and cross-check).
+**Hardware-tested Nov 17 2026 on the 2Pre** (snd-clarett `06c8383`, srcversion `3B1CC8E7505DB019F53A673`):
+probe logged `loopback pair at capture channel 4` with no cross-check warning, and the
+digital-loopback ramp (`tools/bench/loopback_order.sh`) passed 9/9 sample-exact at 48/96/192 kHz,
+"PCM 13"/"PCM 14" on ch 13/14, ADAT 1 on ch 5, the S/MUX-dead channels zero. That commit's message
+says the device-read loopback position was not yet tested on hardware; it was tested after the
+commit, and passes.
 
 ### Under Windows the vendor driver is interrupt-driven, idle as well (corrects `clarett-data-plane.md` §17)
 
