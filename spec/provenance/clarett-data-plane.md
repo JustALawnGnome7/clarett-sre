@@ -1222,3 +1222,48 @@ Consequences worth carrying: the TX guard (`CLARETT_TX_GUARD_FRAMES`) and `sched
 the servicer are the whole of the protection, and the regression that `tx_guard_lead.sh` caught in
 the interrupt work is the same failure arriving by a different route. Nothing in the telemetry can
 flag it; a short-lead client is the only probe.
+
+## 18. `0x108`/`0x10c` route nothing to vectors 1-3; `0x108` sets the period-event interval (Nov 17 2026) `[HW — Red 8Line]`
+
+Scratch build (never committed, srcversion `5ADEFC886D2C9C7A6AE6FC3`): `0x108`/`0x10c` taken from
+module parameters at each arm and read back after it, the ISR servicing the mailbox on any vector and
+no longer reading the ring cause blocks. Red 8Line, fcp-server stopped, one 4 s 60ch capture per value
+pair at 48 kHz, ALSA period 512 / buffer 2048 (375 period events expected). `0x110` read back 1 in
+every run.
+
+| `0x108` | `0x10c` (reads back) | periods | vec0 / vec1 / vec2 / vec3 | servicer `gapmax` |
+|---|---|---|---|---|
+| `0x10` (vendor) | `0x1e70700` (`0x00070700`) | 375 | 385 / 0 / 0 / 0 | 10.7 ms |
+| `0xffffffff` (reads `0x3fff`) | vendor | **0** | 9 / 0 / 0 / 0 | — |
+| `0x10` | `0xffffffff` (`0x001f1f03`) | 375 | 385 / 0 / 0 / 0 | 10.8 ms |
+| `0x0` | vendor | **0** | 6 / 0 / 0 / 0 | — |
+| `0x10` | `0x0` | 375 | 386 / 0 / 0 / 0 | 10.7 ms |
+| `0x1` | vendor | **0** | 6 / 0 / 0 / 0 | — |
+| `0x2` | vendor | 375 | **12332** / 0 / 0 / 0 | **1.47 ms** |
+| `0x4` | vendor | 375 | 380 / 0 / 0 / 0 | **2.76 ms** |
+| `0x8` | vendor | 375 | 383 / 0 / 0 / 0 | **5.42 ms** |
+| `0x20` | vendor | 375 | 382 / 0 / 0 / 0 | **21.4 ms** (every event late) |
+| `0x40` | vendor | 235 (client timed out) | 245 / 0 / 0 / 0 | **42.7 ms** |
+| `0x80` | vendor | 118 (client timed out) | 125 / 0 / 0 / 0 | **85.4 ms** |
+| `0x10` | `0x1e707ff` / `0x1e7ff00` / `0x1180700` / `0xfee70700` | 375 each | ~382 / 0 / 0 / 0 | 10.7 ms |
+| `0x10` (closing baseline) | vendor | 375 | 381 / 0 / 0 / 0 | 10.8 ms |
+
+- **Neither register routes any interrupt to vectors 1-3**, over every value tried: vec1-3 stayed at
+  exactly zero. Closes the last open item of the MSI follow-up.
+- **`0x108` is the period-event interval, a one-hot power of two.** Bits 1-7 gave events every 64,
+  128, 256, 512, 1024, 2048 and 4096 frames (`gapmax` 1.33 x 2^(n-1) ms at 48 kHz), i.e. at this
+  ALSA period the interval is `0x108` x 32 frames; the vendor's `0x10` is the one that matches the
+  descriptors' IRQ markers here. 0 or bit 0 (alone or in all-ones) raises no event at all. 14 bits
+  are writable (`0x3fff`). Whether the interval is absolute or relative to the IRQ-marker spacing was
+  not separated (one ALSA period size only). `0x2` also raised ~33 interrupts per expected period
+  (~3000/s, one per 16-frame fragment) while the servicer saw events every 1.47 ms: unexplained.
+- **`0x10c`: writable bits `0x001f1f03`** (bits 0-1, 8-12, 16-20); the vendor's `0x1e70700` stores as
+  `0x00070700`, so its top byte and the upper bits of `0xe7` are ignored. No value changed the period
+  events or their vector, `0x10c = 0` included. **But after a run that left bits 16-20 at `0x1f` or
+  `0x18`, the next stream's handshake lost all four mailbox responses** (`accepted, response not
+  landed`, recovered by the lost-response path), and only then did the arm write the vendor value
+  back; after `0x07` or `0` it did not happen. The stop does not reset `0x10c`, so the setting
+  outlives the stream. So bits 16-20 bear on the mailbox's response landing, not on interrupts.
+- **First sighting of `0x100` bit 4**, during the `0x108 = 0x2` run (`stream-cause: 0x100=0x00000010`).
+  Bits 4/5 had never been seen in ~150k vendor reads; it appears when the event interval is shorter
+  than the period the descriptors mark. Meaning unknown.
