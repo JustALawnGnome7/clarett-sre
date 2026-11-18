@@ -159,7 +159,7 @@ The boot capture located the mailbox and validated the framing. `[TRACE-CONFIRME
 | `0x104` | IRQ enable mask = `0xf000003f` (written once) | |
 | `0x410`/`0x414` | GET-response DMA buffer bus address: low32 / **high32** | init wrote `0x521ff000`/`0x2`; `0x414`=addr-high confirmed (hardcoding `0x2` → IOMMU fault at `0x2_xxxxxxxx`) |
 | `0x408` | **doorbell**: write `0x1` = submit, `0x2` = ack/clear prior completion | 58×`0x1`, 57×`0x2`, strictly alternating |
-| `0x500`/`0x510`/`0x514` | IRQ summary/mask block (`0x500`=`0xff0000`) | |
+| `0x500`/`0x510`/`0x514` | MIDI block, not an IRQ summary (that is `0x100`) `[CORRECTED Nov 18 2026]`: `0x500` MIDI status (`0xff0000` idle), `0x510` transmit-ready threshold, `0x514` = `0x847` block description; see `clarett-midi-plan.md`, addendum | |
 | `0x8000`–`0x801f` | **read-only info header**: `0x8000`=`0x04061973`, `0x8004`=`0x18101966` (fw version/build), then `1,1,0x400,0x410,0x20` | read once before any command |
 | `0x8020`+ | **FCP request mailbox** (see below) | |
 

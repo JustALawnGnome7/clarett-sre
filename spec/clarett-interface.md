@@ -84,7 +84,8 @@ returned by DMA into a host-allocated buffer.
 | `0x200`/`0x300`/`0x400` | Cause blocks (playback ring, capture ring, mailbox phase + device events) — read-to-clear |
 | `0x408`           | Doorbell — write `1` = submit, `2` = acknowledge completion   |
 | `0x410` / `0x414` | Response DMA buffer bus address (low32 / high32)             |
-| `0x500` / `0x504` | MIDI IRQ summary / acknowledge (§5)                            |
+| `0x500` / `0x504` | MIDI status / receive-interrupt acknowledge (§5)              |
+| `0x510` / `0x514` | MIDI transmit-ready threshold / block description (§5)        |
 | `0x58c`           | MIDI data, bidirectional (§5)                                  |
 | `0x8000`–`0x801f` | Read-only firmware-info header                                |
 | `0x8020`          | FCP request mailbox (header + data)                           |
@@ -469,12 +470,31 @@ Offsets are relative to the block base `B` (`0x200` or `0x300`):
 | `B+0x0c`| Ring enable — written **last**, after base and size             |
 | `B+0x10`| Descriptor-table base bus address, low 32 bits                   |
 | `B+0x14`| Descriptor-table base bus address, high 32 bits                  |
-| `B+0x18`| DMA pointer — current descriptor index (device-written, host reads)|
+| `B+0x18`| The engine's working level (read-only): steady while it keeps up, zero when the playback engine runs dry. Unit not known; not a ring position |
+| `B+0x1c`| The minimum of `B+0x18` since the last read; reading resets it to `0x1ff` (also its idle value) |
+| `B+0x20`| **Ring position** in 16-frame units (read-only, live, not cleared by reading); zero at the start, width = ring length in units |
 
-Global data-plane registers: `0x108` = IRQ config, `0x10c` = a second IRQ config
-word, `0x110` = period-IRQ arm. A period event raises MSI vector 0 (§2.1) and sets bit 31
-of the block's cause word; it raises no bit in `0x400`. The period IRQs must be left armed once set;
-disarming them (`0x110 = 0`) stops the engine.
+**Ring position.** `B+0x20` is the engine's position in its ring, counting the descriptors
+it has completed, one per 16 frames. Its width is the ring's length in 16-frame units (8 bits
+for a 4096-frame ring, 7 for the Red's 2048-frame playback ring). It runs from zero to one
+period ahead of the period counter last read from the cause word (both count the same
+descriptors), so a host can place it without wrap ambiguity: frames = (frames at the last
+event) + ((position − counter) mod ring units) × 16. When it says a unit is done, that
+unit's capture samples are already in host memory. A host can therefore report a live
+position between period events to 16 frames, for playback the engine's read position and for
+capture the audio written so far.
+
+Global data-plane registers:
+
+| Register | Meaning |
+|---|---|
+| `0x108` | Frames the engine moves per descriptor, one per sample-clock tick. Must be `0x10` (the descriptors' 16-frame fragment): smaller values move only that many frames of each fragment, larger ones idle out the extra ticks, and 0 or bit 0 stops the engine. 14 bits writable. |
+| `0x10c` | Bus transfer settings: bits 8–12 govern the device's reads (playback), bits 16–20 its writes (capture and mailbox responses); bits 0–1 have no visible effect. Write the vendor value `0x01e70700` (stored as `0x00070700`). A value with bit 3 of either field set breaks that direction, and the setting outlives a stream stop. |
+| `0x110` | Run control: write `7` after everything else to start the engine, `0` to stop it (which raises the `0x100` stop class once). Reads back `1`. |
+
+A period event raises MSI vector 0 (§2.1) and sets bit 31 of the block's cause word; it
+raises no bit in `0x400`. Bit 4 of `0x100` reports the playback engine running dry
+(its `B+0x18` level at zero).
 
 **Cause word layout.** The ring's cause register at `B+0x00` is read-to-clear, and
 each read delivers a pending event exactly once:
@@ -498,9 +518,11 @@ flag and every window in which it did not had none — 59 of 59 windows — with
 across cadences that rules out both a constant per-event rate and a time-based
 source.
 
-Programming order per ring is channels → size → base (high then low) → arm the
-period IRQs → enable (`B+0x0c = 1`). The enable must come after the base is
-programmed.
+Programming order, as the vendor driver does it: clear the stop class (`0x100 = 0xf`),
+`0x108 = 0x10`, the global enable `0x20c = 1`, then per ring channels → size → base (high
+then low), then `0x10c`, and `0x110 = 7` last. DMA starts only on that final write, so no
+ring is fetched before its base is programmed. Stopping writes `0x20c = 0`, `0x30c = 0`,
+`0x110 = 0` and `0x108 = 0`.
 
 ### 4.2 Descriptor table
 
@@ -643,9 +665,14 @@ state.
 
 | Register | Role                                                                |
 |----------|---------------------------------------------------------------------|
-| `0x500`  | IRQ summary; low byte `0x0a` = MIDI RX pending                      |
-| `0x504`  | Write `0x8` to clear the MIDI RX interrupt                          |
-| `0x58c`  | MIDI data, bidirectional — TX on write, RX on read                  |
+| `0x500`  | Status: low byte `0x0a` = receive pending; bit 16 = transmit FIFO ready; bits 17–23 read 1. Idle `0x00ff0000`. Written `8` at attach |
+| `0x504`  | Write `0x8` to clear the receive interrupt                          |
+| `0x510`  | Transmit-ready threshold, 4 bits: bit 16 of `0x500` is set while the transmit FIFO has more than this many free words. Written `8` at attach |
+| `0x514`  | Read-only, `0x00000847` on every unit; fits a description of the block (bits 3–0 = log2 of the 128-word receive FIFO, 7–4 = log2 of the 16-word transmit FIFO, 11–8 = 8 data bits) |
+| `0x58c`  | MIDI data, bidirectional — transmit on write, receive on read       |
+
+The block is present on models without MIDI ports too (the Red range), reading the same
+values.
 
 ### 5.1 Transmit
 
@@ -661,33 +688,36 @@ word = (count << 24) | (b2 << 16) | (b1 << 8) | b0      count = 1..3
 of the outgoing byte stream and is independent of message boundaries, so a host can
 hand the device whatever bytes it has queued, three at a time, without parsing them.
 
-The vendor reads `0x500` before each data write. Whether that is a required
-transmit-ready gate or merely advisory is unconfirmed; mirroring it is harmless.
+**Every write must be gated on bit 16 of `0x500`.** The transmit FIFO holds 16 words and
+silently discards a word written while it is full. With the attach value of `0x510` (8),
+the bit is set only while at least 9 words are free, so one word per check can never
+overrun; it drops after 9 words written back to back (one already sending plus 8 queued)
+and returns as each word goes out, about 1 ms per 3-byte word at the DIN wire rate
+(3125 bytes/s).
 
 ### 5.2 Receive
 
-Each read of `0x58c` returns one byte:
+Each read of `0x58c` returns one word in the transmit format: a byte count in bits 24–31
+and up to three bytes packed low to high. A count of 0 means the FIFO is empty. The device
+decides the packing: normally one byte per word, sometimes two (seen on the 8PreX), and
+three per word once the receive FIFO's 128 words are all waiting. It then keeps buffering to
+a hard limit of 139 words / 159 bytes, keeping the oldest bytes and dropping the newest.
 
-```
-value = (valid << 24) | byte          valid = bit 24; value 0 = FIFO empty
-```
+Receive is interrupt-driven — an idle device generates no MMIO at all. The interrupt
+arrives on MSI vector 0 like every other (§2.1), with `0x100` bit 28 set. On the interrupt,
+drain `0x58c` until it reads empty, then write `0x8` to `0x504` to clear. The FIFO must be
+emptied in one pass: a non-empty FIFO raises no fresh interrupt. It must also be drained
+even when no client is listening, since the acknowledge is what re-arms the interrupt.
+No register reports the fill level.
 
-Receive is interrupt-driven — an idle device generates no MMIO at all. On the
-interrupt, drain `0x58c` until it reads empty, then write `0x8` to `0x504` to clear.
-The FIFO must be drained even when no client is listening, since an undrained FIFO
-holds the interrupt asserted.
-
-Two cautions for the drain loop. A failed PCIe read returns `0xffffffff`, which has
-the valid bit set and a `0xff` data byte, so a loop that trusts the valid bit alone
-spins forever emitting `0xff` from a device that has gone away — treat all-ones as
-"stop", never as data. And the drain needs mutual exclusion against itself: which
-MSI vector carries MIDI RX is unconfirmed, so a host that drains on any vector will
-have concurrent drainers on different CPUs while audio is streaming, and two
-drainers of a one-byte FIFO interleave their reads and reorder the byte stream,
-corrupting multi-byte messages.
+Two cautions for the drain loop. A failed PCIe read returns `0xffffffff`, a count of 255:
+treat any count above 3 as "stop", never as data, or the loop spins on a device that has
+gone away. And the drain needs mutual exclusion against itself: two drainers on different
+CPUs interleave their reads and reorder the byte stream.
 
 This transport was decoded from three 2Pre MMIO captures taken with a USB-MIDI
-interface on the host driving the unit's DIN ports.
+interface on the host driving the unit's DIN ports; the flow control, FIFO sizes and
+threshold were measured on hardware with a cable looping MIDI Out to MIDI In.
 
 ---
 

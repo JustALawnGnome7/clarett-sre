@@ -1392,3 +1392,54 @@ every run.
 - **First sighting of `0x100` bit 4** (named above: the playback engine running dry), during the `0x108 = 0x2` run (`stream-cause: 0x100=0x00000010`).
   Bits 4/5 had never been seen in ~150k vendor reads; it appears when the event interval is shorter
   than the period the descriptors mark (descriptors there completing 8x faster than they fill). Meaning unknown.
+
+## 19. A live ALSA position from `0x220`/`0x320` (Nov 18 2026) `[HW — Clarett 2Pre]` `[DRIVER, uncommitted]`
+
+Until now `.pointer` reported the frame clock as of the last period event, so ALSA saw both directions move
+a whole period at a time. §18 showed the ring position is readable at any moment, so the driver now reports
+it between events.
+
+**The 2Pre's counters behave as on the Red and 8PreX** (scratch build sampling `0x220`/`0x320` at the
+servicer's own read point, ~1000 samples/s, 7 legs: capture, playback, duplex at 48 kHz with 64/512/1024-frame
+periods, duplex at 96 and 192 kHz; ~20,000 samples):
+- both counters 8 bits wide (OR of every value `0xff`; the 2Pre's rings are 4096 frames each);
+- the lead over the counter the servicer last latched from `0x300` runs from 0 to exactly one period and
+  never beyond: 0..4 units at a 64-frame period, 0..31 at 512, 0..64 at 1024. The value at one full period
+  is a boundary passed between the `0x300` read and the position read, whose event the next pass collects;
+- the driver's frame clock (in 16-frame units) equalled the latched counter in every sample, so the
+  position lines up with the buffer;
+- never backwards; `0x220` equal to `0x320` in practice (once one unit apart, at 192 kHz);
+- the two extra reads cost ~9 us on average, 25 us worst, on the laptop.
+
+**Design.** The read cannot go in `.pointer` (atomic context, stream lock held, and on the ASRock a single
+MMIO read can stall 42 ms). It goes where the servicer already reads the device: every period event and at
+least every `CLARETT_SVC_FALLBACK_US` (1 ms). The lead over the latched counter is taken modulo the ring
+length in units (power of two; 7 bits on the Red's 2048-frame playback ring) and placed on the frame clock
+as `pcm_frames + lead * 16`. A failed read or a lead over one period is ignored.
+- **Playback:** `play_live`, monotonic, reported by `.pointer`. The fill and the START check count from it:
+  counting from the last event instead would read an app legitimately writing up to a buffer past the live
+  position as an underrun, and queue silence (caught in review before testing).
+- **Capture:** the ALSA buffer only holds what the driver has copied, so the servicer copies from the RX ring
+  up to the live position (`cap_drained`), and each period event copies only the rest. `.pointer` reports
+  `cap_drained`, published with release/acquire against the copy (no stream lock between events).
+  A new capture stream starts copying at its own frame 0.
+- Granularity: ~48 frames at 48 kHz (the 1 ms read cadence in 16-frame units).
+
+**Tests, 2Pre, laptop (srcversion `4F4C2C9A615AA794D7F15F4` playback only, `02B572B40C25A62FD72D3E4` both):**
+- `hw_ptr` sampled from `/proc` every 0.5 ms at 48 kHz: playback, then capture, step by 48 or 64 frames at
+  1024- and 256-frame periods (was one period per step).
+- **Capture data between events is real.** A client polling `snd_pcm_avail()` every 250 us and reading
+  whatever was there (`livecap.c`, scratchpad) kept the loopback ramp sample-exact at 48 kHz (periods 1024,
+  256, 64), 96 and 192 kHz, with thousands of reads shorter than a period, down to single 16-frame units.
+  So when `0x320` counts a unit, its samples are in memory; no one-unit holdback is needed. Method trap: the
+  first run used `snd_pcm_avail_update()`, which does not ask the driver, and at 48 kHz saw only whole
+  periods; `snd_pcm_avail()` does.
+- `loopback_order.sh` 9/9, `SHORT=1 duplex_stress.sh` 0 failing parts (churn 10/10), on both builds.
+- `tx_guard_lead.sh`: breaks 0 in every run on both builds. Short-lead client (leadplay, period 32, 48-frame
+  lead), 10 reps x 20 s each, interleaved A5 B5 A5 B5: gaps 64 (playback only) against 22 (both), leadplay's
+  own underruns 62 against 17, frames lost 96 and 128 of 9.6 M. The gaps follow the non-RT client's
+  underruns, so neither build tears anything and the capture copy costs nothing measurable. (A 3-rep run
+  had shown 0/0/0 for the playback-only build: a quiet stretch.)
+
+**Open:** the Red 8Line (7-bit playback counter), and playback START is still anchored one period ahead,
+which the live position may make unnecessary (one period off the measured round trip).

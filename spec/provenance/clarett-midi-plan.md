@@ -154,3 +154,41 @@ captures and never toggle**. Consequences, and why it's still fine:
   `clarett_arm_device()` already sets it up.
 - RX (device→host) delivery: polled, or a new MSI vector? (`bar_profile --new-only` on a cause block.)
 - Running status / active sensing / SysEx framing: does the device hand us raw MIDI bytes or parsed events?
+
+## Addendum: `0x510`, `0x514` and the FIFO sizes (Nov 18 2026) `[HW — Clarett 2Pre]`
+
+Scratch module (never committed) on a 2Pre with a 5-pin cable from MIDI Out to MIDI In, fcp-server stopped
+during the measurements so only MIDI's own interrupts drained receive.
+
+**`0x510` = the transmit FIFO's ready threshold, in free words.** Only bits 0-3 store (all ones reads `0xf`,
+`0x5a5a5a5a` reads `0xa`, `0x10` and up read 0); the value never changes by itself. Writing words of 3 bytes
+to `0x58c` in a tight loop and reading `0x500` after each, ready (bit 16) dropped after **17 - v** words for
+v = 0..11 (17 at 0, 9 at the vendor's 8, 6 at 11), and came back ~0.6 ms later, when the next word moved
+out to be sent; for v = 12..15 after 16 - v words, back within 4-19 us (the first word had not yet moved
+out, and its moving freed a slot). So: ready = free slots > `0x510`. The driver's old "nine words deep" was
+this threshold at 8. Receive is unaffected at every value (one interrupt per byte, one byte per word,
+round trips within 0.2-0.4 ms of the wire time, every loop byte-exact).
+
+**The transmit FIFO holds 16 words.** Ignoring the flag, bursts of up to 16 words came back complete and
+bursts of 17-24 returned exactly 16 (the rest discarded), at `0x510` = 0 and 8 alike; a 32-word burst
+returned 17 (it took long enough to write that the first word had moved out). This is why the old
+unflagged driver delivered 75 of 3003 bytes.
+
+**The receive FIFO holds 128 one-byte words, then packs.** With the drain held off and N bytes sent round
+the loop: up to N = 129 the FIFO kept N one-byte words; beyond that the device packed further bytes into
+3-byte words, up to a hard limit of **139 words / 159 bytes** (Bennett's "139"), keeping the oldest bytes
+and dropping the newest. Packing starts here only once ~128 words wait; the 8PreX's occasional 2-byte words
+in normal flow must have another trigger (not pursued).
+
+**No fill-level register.** All of `0x500`-`0x588` (minus `0x58c`) dumped at every fill level: only `0x500`
+changed (idle `0x00ff0000`, receive pending `0x00ff000a`, no full bit; bit 16 clear while transmitting reads
+`0x00fe000a`); `0x510` = 8, `0x514` = `0x847`, everything else 0.
+
+**`0x514` = `0x847`, read-only** (writing 0 left it), on every unit including the Red 8Line, which has no MIDI
+ports. Its nibbles fit a description of the block: bits 3-0 = 7 = log2 of the 128-word receive FIFO, bits 7-4
+= 4 = log2 of the 16-word transmit FIFO (both measured independently), bits 11-8 = 8 = data bits
+(untestable). Strong but not proven: it cannot be changed, and every unit reports the same value. A
+baud-divisor reading fits poorly (31,250 x 0x847 = 66.2 MHz, not a usual FPGA clock).
+
+The driver needs no change: one word per ready check never overruns with the vendor's 8, and the receive
+drain's 256-byte bound covers the 159-byte maximum.

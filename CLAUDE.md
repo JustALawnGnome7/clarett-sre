@@ -195,7 +195,9 @@ how the Sep 2 ones were lost) and are committed; routine follow-up captures of a
   which is what a driver would read to adapt across models. It cannot be confirmed adaptive precisely
   *because* it is constant on every unit seen; disproving it needs a device whose transport differs.
 - **The MIDI transport ports to the Red line**: `0x510`/`0x514` (`0x847`), `0x58c`, and `0x500`
-  reading its documented idle `0xff0000` all appear on the Red exactly as in the 2Pre decode.
+  reading its documented idle `0xff0000` all appear on the Red exactly as in the 2Pre decode. (Nov 18 2026:
+  `0x510` is the MIDI transmit-ready threshold and `0x514` a constant block description; see the MIDI
+  flow-control entry.)
 - **The vendor driver writes `0x414 = 2`** — it places the response DMA buffer above 4 GB
   (`0x2_5b6ff000`), an independent confirmation that `0x414` is a real 64-bit address high word.
 - **★★ THE BRING-UP IS DE-BLOBBED — `tools/arm-tables/arm_red_8line.h` (Sep 4 2026).** From
@@ -1363,6 +1365,22 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   poll loop's record was ~0.6/s at a 16-frame period, now 0-1 in 20 s at 48 kHz, rising with the
   event rate (1/3/6/16 above). Full record: `spec/provenance/clarett-fcp-transport.md`, final
   addendum.
+- **★ LIVE ALSA POSITION FROM `0x220`/`0x320` — WRITTEN AND PASSING ON THE 2PRE, UNCOMMITTED (Nov 18 2026;
+  `spec/provenance/clarett-data-plane.md` §19).** `.pointer` used to move a whole period at a time. The
+  servicer now also reads the ring position (`STREAM_OFF_POS`, `+0x20`) wherever it already reads the device
+  (every period event, at least every 1 ms), never in `.pointer` (atomic; the ASRock's 42 ms reads). The lead
+  over the counter last latched from `0x300` (0 to one period, measured on the 2Pre as on the Red and 8PreX)
+  places it on the frame clock. Playback: `play_live`, which `.pointer`, the fill and the START check use (the
+  fill must count from it, or an app writing up to a buffer past the live position reads as an underrun).
+  Capture: the servicer copies the RX ring up to the live position (`cap_drained`, release/acquire against
+  `.pointer`). Steps of 48-64 frames at 48 kHz in both directions. **Tests (2Pre, laptop):** a client reading
+  every 250 us via `snd_pcm_avail()` got the loopback ramp sample-exact at 48/96/192 kHz in reads down to 16
+  frames, so a counted unit's samples are already in memory; `loopback_order.sh` 9/9; `SHORT=1
+  duplex_stress.sh` 0 failing; `tx_guard_lead.sh` breaks 0; the short-lead client over 10 interleaved reps,
+  playback-only vs both: gaps 64 vs 22, all following its own underruns. **Open:** the Red 8Line (7-bit
+  playback counter), then commit; candidate for 0.4.2 with the underrun telemetry. Follow-up idea: playback
+  START is anchored one period ahead because the position was known only at events; the live position may
+  remove that period from the round trip.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
   runs, every 2-second window with `stepmax=0x1` had zero flags and every window with `stepmax=0x2` had at
@@ -2342,6 +2360,15 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   FIFO raises no new interrupt). **4Pre, single-cable self-loop:** old driver at full speed delivered
   **75 of 3003** bytes; with the fix 3003/3003, 1500/1500 notes, 4 KB SysEx PASS; TX ~7% over the wire
   floor (poll granularity).
+  **★ THE MIDI FIFOs AND `0x510`/`0x514` MEASURED (Nov 18 2026, 2Pre, cable loop, scratch module;
+  `spec/provenance/clarett-midi-plan.md` addendum):** the transmit FIFO holds **16 words** (ignoring the
+  flag, the 17th and later are discarded); **`0x510` (4 bits, written 8 at attach) is its ready threshold:
+  `0x500` bit 16 is set while free words > `0x510`**, so with 8 ready drops after 9 words (the old "nine words
+  deep"). The receive FIFO holds **128** one-byte words, then packs 3 bytes per word to a hard limit of 139
+  words / 159 bytes (Bennett's 139), keeping the oldest. No register reports the fill level. **`0x514` =
+  `0x847`, read-only**, fits a description of the block (nibbles 7 = log2 128 receive, 4 = log2 16 transmit,
+  8 = data bits); not provable, since it cannot be changed. Receive behaviour is the same at every `0x510`.
+  No driver change needed.
   **★ OPEN — THE 8PRE LOSES 2 MIDI BYTES EVERY ~49.7 ms, AND IT IS NOT THE DRIVER'S DOING SO FAR.**
   Self-loop, paced at half the wire rate (FIFO never full): losses sit on a strict ~49.7 ms grid
   (phase-coherent over 2 s, skipping beats only when no byte is in flight), 2 bytes each, occasionally a
