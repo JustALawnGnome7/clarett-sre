@@ -490,6 +490,24 @@ digital-loopback ramp (`tools/bench/loopback_order.sh`) passed 9/9 sample-exact 
 says the device-read loopback position was not yet tested on hardware; it was tested after the
 commit, and passes.
 
+**The other four models, the same build, the same day** (laptop, one unit at a time, module loaded
+with `dyndbg` on `clarett_models.c`; `loopback_order.sh` then `clock_live.sh` against the device's
+own ADAT item):
+
+| | MODEL_ID | bands (capture live) | clock list from `0x006000` | loopback | ramp | clock_live |
+|---|---|---|---|---|---|---|
+| 4Pre | `{1,3}` | 3 (20/16/14) | Internal 24, S/PDIF 3, ADAT 0 | ch 10 | 9/9 | PASS |
+| 8Pre | `{1,1}` | 3 (20/16/14) | Internal 24, S/PDIF 3, ADAT 0 | ch 10 | 9/9 | PASS |
+| 8PreX | `{1,2}` | 3 (28/20/16) | Internal 24, S/PDIF 3, ADAT1 0, ADAT2 1, Word Clock 2 | ch 10 | 9/9 | PASS |
+| Red 8Line | `{2,6}` | 3 (60/52/32) | Internal 24, S/PDIF 3, ADAT1 0, ADAT2 1, Word Clock 2, Dante 4, Loop Sync 5 | (not reordered) | 8/8 | PASS |
+
+No cross-check warning on any unit: every device-read value agrees with the model table it replaces.
+Ramps sample-exact at 48/96/192 kHz with the S/MUX-dead channels zero; clock_live 960,000 frames,
+0 breaks, Sync Unlocked/Locked both ways raw and with PipeWire holding the card. So S/PDIF = 4 is the
+2Pre alone. The 8PreX's and Red's item names differ from the old table (`ADAT 1`/`ADAT 2`/`Wordclock`),
+so a saved alsactl state on one of those three sources fails to restore once; the bench presets now
+use `ADAT1`.
+
 ### Under Windows the vendor driver is interrupt-driven, idle as well (corrects `clarett-data-plane.md` §17)
 
 Two 2Pre traces with `vfio_msi_interrupt` (needs `x-no-kvm-msi=true`), Nov 16 (~5900 interrupts) and

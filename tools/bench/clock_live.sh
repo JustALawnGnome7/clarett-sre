@@ -20,8 +20,8 @@ case $ID in
 C2Pre)        CH=14 PB=4  R0=3  DST=13 EXP=13 EXT=ADAT;;
 C4Pre)        CH=20 PB=8  R0=7  DST=19 EXP=19 EXT=ADAT;;
 C8Pre)        CH=20 PB=20 R0=7  DST=19 EXP=19 EXT=ADAT;;
-C8PreX)       CH=28 PB=28 R0=7  DST=27 EXP=27 EXT="ADAT 1";;
-R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 EXT="ADAT 1";;
+C8PreX)       CH=28 PB=28 R0=7  DST=27 EXP=27 EXT=ADAT1;;
+R8Line|R4Pre) CH=60 PB=64 R0=31 DST=31 EXP=31 EXT=ADAT1;;
 *) echo "unknown card id $ID"; exit 1;;
 esac
 EXT=${2:-$EXT}

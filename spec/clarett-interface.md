@@ -342,8 +342,9 @@ specific region must window its requests.
 
 Sample rate and clock source are set with `SET_CLOCK{u32 sample_rate, u32
 clock_source}`. Supported rates are 44100, 48000, 88200, 96000, 176400, and 192000.
-The `clock_source` enum is uniform across the line — `Internal = 24`, `ADAT = 0`,
-`S/PDIF = 3` — and only the *set of sources a model offers* differs (§7.3).
+`Internal = 24` and `ADAT = 0` on every model; `S/PDIF = 3` on every model except the
+2Pre, which lists 4. Each device reports its own list (`0x006000`), so a driver need not
+carry it (§7.3).
 
 Neither the rate nor the source is a config-space byte: they exist only in the
 `SET_CLOCK` payload, so neither can be read or written through `GET_DATA`/`SET_DATA`
@@ -803,22 +804,24 @@ All four models have a 30-input × 16-bus mixer, with mix buses A–P on source 
 
 ### 7.3 Clock sources
 
-The clock-source enum is **not** model-specific. `Internal = 24`, `ADAT = 0` and
-`S/PDIF = 3` on every model; only which sources a model *offers* differs:
+Each device lists its clock sources, with names and values, in the `0x006000` reply
+(`{u16 value, u16 name id}` pairs; the names come from `0x005000`). As listed on hardware:
 
-| Model  | Internal | ADAT 1 | S/PDIF | ADAT 2        | Wordclock     |
-|--------|----------|--------|--------|---------------|---------------|
-| 8PreX  | 24       | 0      | 3      | 1 **(XML)**   | 2 **(XML)**   |
-| 8Pre   | 24       | 0      | 3      | —             | —             |
-| 4Pre   | 24       | 0      | 3      | —             | —             |
-| 2Pre   | 24       | 0      | 3      | —             | —             |
+| Model  | Internal | ADAT 1 | S/PDIF | ADAT 2 | Wordclock |
+|--------|----------|--------|--------|--------|-----------|
+| 8PreX  | 24       | 0      | 3      | 1      | 2         |
+| 8Pre   | 24       | 0      | 3      | —      | —         |
+| 4Pre   | 24       | 0      | 3      | —      | —         |
+| 2Pre   | 24       | 0      | 4      | —      | —         |
+
+The 8PreX names them `Internal`, `S/PDIF`, `ADAT1`, `ADAT2`, `Word Clock`; the others
+`Internal`, `S/PDIF`, `ADAT`.
 
 `Internal` is confirmed everywhere (every stream arms with it). `ADAT = 0` is
 confirmed on the 8Pre at 48, 96 and 192 kHz. `S/PDIF = 3` is confirmed on the 8Pre
-over RCA coax and the 2Pre over TOSLINK — **the 2Pre's XML claims 4, and that is
-wrong.** Value 4 is accepted by the device but is not source-specific: it locks to
-whatever external source is present, so it is something looser (any external, or
-any optical), not a per-model S/PDIF encoding.
+over RCA coax. On the 2Pre both values select an external clock: 3 locks to S/PDIF
+only, 4 (the value the device lists and the vendor driver sends) locks to whichever
+optical format is present.
 
 The 8PreX's `ADAT 2 = 1` and `Wordclock = 2` are verified too, once `Sync Status`
 reads bit 0 of the `0x006004` sync word: bit 1 is a read-to-clear change latch, and

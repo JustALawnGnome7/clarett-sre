@@ -115,7 +115,7 @@ response is acknowledged and the session continues; see the LOST-RESPONSE RECOVE
   Oct 16 2026, `tools/bench/unit_ident.sh`): Clarett 8Pre `1,1`, 8PreX `1,2`, 4Pre `1,3`, 2Pre `1,4`, Red 8Line
   `2,6`. **Bennett read it first** (`spec/provenance/clarett-opcode-inference.md` §9, Sep 9: 4Pre `{1,3}`,
   2Pre `{1,4}`, and `{0,12}` -> `{1,3,0}`) and guessed the second word was the per-model S/PDIF clock
-  value; the 8Pre's 1 and 8PreX's 2 refute that (S/PDIF = 3 on every model), and five distinct values fit
+  value; the 8Pre's 1 and 8PreX's 2 refute that (S/PDIF = 3 on the 4Pre/8Pre/8PreX/Red, 4 on the 2Pre), and five distinct values fit
   a model ID, which would explain why the vendor driver sends it first. Recorded in that file's §11. For the Claretts it duplicates the stream
   geometry; for the Reds it is the best candidate to separate 8Line/16Line from 4Pre/8Pre without the
   Thunderbolt-controller check (needs a Red Pre unit to confirm). Not in any public FCP source (kernel
@@ -1692,8 +1692,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     global-control; a GUI control needs a new fcp-server clocking category over `0x006003`/`0x006004`.
     `Sync Status` already exists via the SYNC capability and is the external-lock indicator — read it by
     **name**, never numid (fcp-server renumbers every control on restart).
-  - **Clock-source enums — MEASURED, and the 2Pre XML is WRONG (Aug 14 2026).** `Internal=24`, `ADAT=0`,
-    **`S/PDIF=3` on every model INCLUDING the 2Pre**, whose [XML] claims 4. Method: an 8PreX fed one optical
+  - **★ CORRECTED Nov 17 2026: the 2Pre's S/PDIF IS 4, and the driver now takes every model's list from the
+    device** (`0x006000` + `0x005000`, `spec/provenance/clarett-opcode-inference.md` §12). The device lists
+    S/PDIF = 4 on the 2Pre (Windows sends 4 too) and 3 on the 4Pre, 8Pre, 8PreX and Red 8Line, so the
+    "2Pre XML is WRONG" reading below is withdrawn: 3 does lock the 2Pre to S/PDIF only (the table stands as
+    measured), but 4 is the value the vendor lists and sends. Device item names: 8PreX and Red say
+    `ADAT1`/`ADAT2`/`Word Clock` (the old table said `ADAT 1`/`ADAT 2`/`Wordclock`).
+  - **Clock-source enums — MEASURED (Aug 14 2026).** `Internal=24`, `ADAT=0`,
+    ~~**`S/PDIF=3` on every model INCLUDING the 2Pre**, whose [XML] claims 4~~ (see the correction above). Method: an 8PreX fed one optical
     port (switchable between ADAT and S/PDIF via its `S/PDIF Source Playback Enum`), reading the 2Pre's
     `Sync Status` per value, with an invalid value 7 as the negative control and the captured audio proving
     the source was really on the wire each time:
