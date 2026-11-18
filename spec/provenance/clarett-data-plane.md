@@ -1223,7 +1223,7 @@ the servicer are the whole of the protection, and the regression that `tx_guard_
 the interrupt work is the same failure arriving by a different route. Nothing in the telemetry can
 flag it; a short-lead client is the only probe.
 
-## 18. `0x108`/`0x10c` route nothing to vectors 1-3; `0x108` sets the period-event interval (Nov 17 2026) `[HW — Red 8Line]`
+## 18. `0x108`/`0x10c` route nothing to vectors 1-3; `0x108` is the frames moved per descriptor (Nov 17 2026) `[HW — Red 8Line]`
 
 Scratch build (never committed, srcversion `5ADEFC886D2C9C7A6AE6FC3`): `0x108`/`0x10c` taken from
 module parameters at each arm and read back after it, the ISR servicing the mailbox on any vector and
@@ -1250,13 +1250,35 @@ every run.
 
 - **Neither register routes any interrupt to vectors 1-3**, over every value tried: vec1-3 stayed at
   exactly zero. Closes the last open item of the MSI follow-up.
-- **`0x108` is the period-event interval, a one-hot power of two.** Bits 1-7 gave events every 64,
-  128, 256, 512, 1024, 2048 and 4096 frames (`gapmax` 1.33 x 2^(n-1) ms at 48 kHz), i.e. at this
-  ALSA period the interval is `0x108` x 32 frames; the vendor's `0x10` is the one that matches the
-  descriptors' IRQ markers here. 0 or bit 0 (alone or in all-ones) raises no event at all. 14 bits
-  are writable (`0x3fff`). Whether the interval is absolute or relative to the IRQ-marker spacing was
-  not separated (one ALSA period size only). `0x2` also raised ~33 interrupts per expected period
-  (~3000/s, one per 16-frame fragment) while the servicer saw events every 1.47 ms: unexplained.
+- ~~**`0x108` is the period-event interval**~~ **CORRECTED the same night: `0x108` is the number of FRAMES
+  the engine moves per descriptor, one per sample-clock tick.** The servicer's `gapmax` column above is real,
+  but every event still advanced the counter by one 512-frame period (`stepmax=0x20`), and the arm ->
+  stop times in the kernel log scale with the value: 4 s of audio (192,000 frames) took **0.50 / 1.00
+  / 2.00 / 4.00 / 8.00 s** at `0x2`/`0x4`/`0x8`/`0x10`/`0x20` (`0x40`/`0x80` were cut off by the client's
+  10 s timeout). So the engine completes a descriptor every `0x108` sample periods; 0 or bit 0 (alone or in all-ones) stops
+  it; 14 bits are writable (`0x3fff`).
+  **What it does to the audio** (digital-loopback ramp, playback 31 -> "PCM 31" -> capture 31, 3 s
+  ramp, 6 s capture, 48 kHz, period 512; scratch `ramp_rate.sh`):
+
+  | `0x108` | capture wall time | ramp values captured | within each 16-frame fragment |
+  |---|---|---|---|
+  | `0x10` (vendor) | 6.0 s | 144000 of 144000 | all 16 frames, sample-exact |
+  | `0x8` | 3.0 s | 72000 | frames 0-7 real, **8-15 zero** |
+  | `0x4` | 1.5 s | 36000 | frames 0-3 real, **4-15 zero** |
+  | `0x20` | 12.0 s | 144000 of 144000 | all 16 frames, sample-exact |
+
+  Per-position counts (scratch `frag_probe.sh`, raw captures kept) settle it: at `0x8` the captured
+  ramp reads `2001..2008, 0 x8, 2017..2024, 0 x8, ...`: every fragment carries its first 8 frames,
+  consecutive, and the rest stays at the blank the driver writes at prepare; the next fragment
+  resumes 8 values on, so the playback side likewise read only the first 8 frames of each of its
+  fragments. **`0x108` = frames transferred per descriptor**, at one frame per sample-clock tick, which
+  is why the wall time scales with it while the device clock stays at 48 kHz. Above 16 the engine
+  still moves only the fragment's 16 frames (no spill: the `0x20` ramp is sample-exact) and then
+  waits out the remaining ticks, so both directions run at half rate in step. **Only `0x10`, the
+  16-frame fragment the descriptors carry (`CLARETT_FRAG_FRAMES`), is coherent**; the vendor writes
+  the same. (The first ramp run's "repeats" were these zero runs, counted as zero steps.)
+  Unexplained: the `0x2` run's 12332 interrupts in its 0.5 s, about one per DESCRIPTOR (375 periods x
+  32 = 12000), where every other value gave one per period.
 - **`0x10c`: writable bits `0x001f1f03`** (bits 0-1, 8-12, 16-20); the vendor's `0x1e70700` stores as
   `0x00070700`, so its top byte and the upper bits of `0xe7` are ignored. No value changed the period
   events or their vector, `0x10c = 0` included. **But after a run that left bits 16-20 at `0x1f` or
@@ -1264,6 +1286,109 @@ every run.
   landed`, recovered by the lost-response path), and only then did the arm write the vendor value
   back; after `0x07` or `0` it did not happen. The stop does not reset `0x10c`, so the setting
   outlives the stream. So bits 16-20 bear on the mailbox's response landing, not on interrupts.
-- **First sighting of `0x100` bit 4**, during the `0x108 = 0x2` run (`stream-cause: 0x100=0x00000010`).
+- **`0x10c` field by field (follow-up the same night, scratch `c10c_probe.sh`/`c10c_probe2.sh`).** Three
+  fields: **A** bits 0-1, **B** bits 8-12, **C** bits 16-20 (vendor A=0, B=7, C=7). Per value: the
+  loopback ramp (playback AND capture DMA), the driver's Level Meter read every 100 ms during the stream
+  and 10 times after the stop (each a `GET_METER`), and the share of non-zero samples on analogue inputs
+  1-8 (idle converter noise, 96 % non-zero when healthy) against the ramp channel. A 1 s capture at the
+  vendor value follows each test value, because the stop does not reset `0x10c` and a bad value
+  otherwise carries into the next stream's setup commands (which is what failed the first run's C=`0x10`).
+
+  | value | A | B | C |
+  |---|---|---|---|
+  | 0, 1, 3, 7 | pass (0-3) | pass | pass |
+  | `0x8`, `0xf`, `0x1f` | — | **ramp lost** | **ramp broken + responses lost** |
+  | `0x10` | — | pass | pass |
+
+  - **B = the device's READS from the host (playback):** analogue inputs stay at 96 %, the ramp channel
+    drops to 11-34 % non-zero, every mailbox response lands.
+  - **C = the device's WRITES to the host (capture and mailbox responses):** 28 `GET_METER` responses
+    "not landed" in every bad stream and 4 more after the stop; the ramp channel stays ~97 % non-zero but
+    breaks tens of thousands of times (old ring contents surviving failed writes, as far as can be told).
+  - Bit 3 set is what fails, in both; bit 4 is writable but changes nothing (`0x10` = 0).
+  - **Guess, not established:** transfer-size limits as log2 bytes, the vendor's 7 = 128 B. The link runs
+    **MaxPayload 128 B** (DevCap 512, DevCtl 128) with **MaxReadReq 512 B**, so C failing at 8 (256 B
+    writes over a 128 B link) fits; B failing at 8 (256 B reads, under the 512 B read limit) does not, nor
+    does bit 4 being ignored. No AER error was recorded anywhere up the chain (the endpoint's error
+    reporting is off, so that proves little). Raising the link's MaxPayload to 256 and retrying C=8 would
+    test it.
+- **`0x110` is the engine's run control, not an interrupt arm.** Written 7 at arm (after everything else)
+  and 0 at stop by both the vendor and us; DMA starts on the 7; the 0 raises the `0x100` stop class (bits
+  0-3) once per stop. It reads back **1** after every 7, so only bit 0 is stored (or bits 1-2 are
+  self-clearing strobes). Not varied tonight.
+- **`0x220`/`0x320` are live ring-position counters, in 16-frame units** (scratch build sampling both
+  every 50 ms while armed, each read twice back to back; Red 8Line, 60/64ch). Zero before the arm and
+  right after it, then counting: `0x320` steps 153.0 per 51 ms sample at 48 kHz (5967 in 1.989 s =
+  **3000/s = one per 16 frames**) and 306 at 96 kHz (6000/s), wrapping at 8 bits; `0x220` is the same
+  count wrapping at **7 bits** (`0x220 == 0x320 & 0x7f` in every sample). 256 x 16 = 4096 frames is the
+  Red's capture ring and 128 x 16 = 2048 frames its playback ring, so each is that ring's position in
+  16-frame units. Same counter as the period counter `0x300` latches in its low byte
+  (`CLARETT_CTR_FRAMES` 16, modulo `0x100`), here readable without clearing anything: back-to-back reads
+  differ by at most 1, never reset. Unaffected by what the host does: identical with capture only,
+  playback only, duplex, a direction joining mid-stream, and a capture client frozen for 1 s.
+  **Clarett 8PreX, the same probe (28ch, both rings 4096 frames):** `0x220` == `0x320` in all 100
+  samples, both wrapping at 8 bits (reaching `0xff`), as predicted from the ring lengths. Same rates
+  (153 per 51 ms at `0x10`, doubling at `0x8`), and `0x320` stayed 0..63 ahead of the latched counter:
+  less than one period again, since arecord's default period on this card is 1024 frames (64 units)
+  against the Red's 512. `+0x18`/`+0x1c` read TX `0x11`-`0x17`/`0x10`, RX `4`/`4` (Red: TX
+  `0x17`-`0x19`/`0x16`, RX `9`/`9`), so they differ by model as well; still undecoded.
+  **`+0x18` = a current level, `+0x1c` = its MINIMUM SINCE THE LAST READ, reset to `0x1ff` by the read
+  (8PreX, duplex 3 s at 48 and 96 kHz; the sampler reading `+0x1c`, `+0x1c` again at once, `+0x18`, then
+  `+0x1c` a third time, every 50 ms, both rings).** In every sample the first `+0x1c` read was at or one
+  below the current `+0x18` (TX 48 kHz: level `0x11`-`0x13`, minimum `0x10`-`0x11`; 96 kHz: level
+  `0xc`-`0xf`, minimum `0xb`; RX `4`/`4` throughout), and the immediate second read was **`0x1ff`**; the
+  third, after the `+0x18` read, was `0x1ff` or already a fresh minimum (`4`, `0xc`). So `0x1ff` idle is the
+  reset value of a low-water mark with nothing measured yet, and the vendor's 10 Hz order (`0x21c` then
+  `0x218`, `0x31c` then `0x318`) reads the low-water mark of the last 100 ms, then the level. What the level
+  counts is still open: it falls at the higher rate, sits steady on capture, differs by model (Red
+  TX `0x17`-`0x1b`, RX 9; 8PreX TX `0x11`-`0x13`, RX 4); fragments the engine holds ahead (a prefetch or FIFO
+  depth) fits. If so, a playback low-water mark reaching 0 would be the engine's own FIFO running dry,
+  the fetch-level error the `0x100` work could not provoke or see; the driver could report it.
+  **Red 8Line, the same run: identical behaviour** (59 samples per rate, first `+0x1c` read always <= `+0x18`,
+  the immediate second read `0x1ff` in 59/59 and 58/59, capture's in 59/59): TX level 23-25 with minimum 22
+  at 48 kHz, 18-27 with minimum 18 at 96 kHz; RX 9/9. No unit makes the two models agree:
+
+  | | TX min 48k / 96k | RX | TX descriptor | RX fragment (slot) |
+  |---|---|---|---|---|
+  | Red 8Line (64/60ch) | 22 / 18 | 9 | 8 frames, 2048 B | 3840 B (4096) |
+  | 8PreX (28/28ch) | 16 / 11 | 4 | 16 frames, 1792 B (2048) | 1792 B (2048) |
+
+  (as frames, 176 against 256; as slot bytes, 44 KB against 32 KB).
+  **Starving the engine names `0x100` bit 4, and the level is not the period's or the read size's (Red
+  8Line, duplex ~2 s per leg, scratch `lvl_probe.sh`):**
+
+  | leg | vec0 interrupts | TX level / low-water mark | RX | `0x100` |
+  |---|---|---|---|---|
+  | `0x108` = `0x10` (control) | 251 | 23-30 / 18-22 | 9 / 9 | — |
+  | `0x108` = `0x4` (engine 4x) | 780 | 23-28 / 22 | 9 / 9 | — |
+  | **`0x108` = `0x2` (engine 8x)** | **50804** | **0 / 0 in 40 of 41 samples** | 9 / 9 | **bit 4** |
+  | `0x108` = `0x10` again | 203 | 23-26 / 22 | 9 / 9 | — |
+  | `0x10c` B = 0, 1, 3, 7 | 203 each | 23-29 / 22 | 9 / 9 | — |
+  | period 64 / 256 / 1024 | 1552 / 394 / 107 | 23-31 / 22 | 9 / 9 | — |
+
+  - **Bit 4 of `0x100` = the playback engine ran dry.** It appears exactly when the TX level reaches 0, and
+    with it the interrupt storm the first sweep saw: ~25,000/s, one per descriptor at 8x (3000 x 8 = 24,000
+    descriptors/s). At 4x the engine keeps its level and raises one interrupt per period as usual. This is
+    the fetch-level error the `0x100` work could not provoke (the TX-starvation test starved the HOST side,
+    which the device cannot see). Capture held 9/9 throughout; a capture counterpart (bit 5?) is untested.
+  - **The level does not depend on the period size, on field B, or on the engine running 4x**: TX low-water
+    mark 22 in every such leg, RX 9. It does drop at 96 kHz (Red 18, 8PreX 11) and differs by model, so
+    it is set by something else; still undecoded.
+  **It is the engine's descriptor position, aligned with the driver's (follow-up, the sampler also
+  logging the counter the servicer last latched from `0x300` and the frame clock built from it; 2 s
+  captures at `0x108` = `0x10`, `0x8`, `0x10`):** at `0x10`, `0x320` minus the latched counter stayed
+  in **0..31 in all 120 samples**, i.e. ahead of the last period event by less than one 512-frame period
+  (32 units) and never behind, so it is the live position within the ring the driver's sample-exact
+  frame clock describes. At `0x8`, where the engine moves descriptors twice as fast as the sample
+  clock, `0x320` stepped **306 per 51 ms (6000/s, 50 mod 256)**, twice the 48 kHz rate, and stayed
+  0..31 ahead of the latched counter: it counts the engine's descriptors, not the sample clock. So it is
+  the ring buffer's hardware pointer in 16-frame units, readable at any moment without clearing
+  anything; the driver currently knows its position only as of the last period event.
+  **Correction:** an earlier read of these only at the stop, at a few stream lengths, took the values
+  (`0x41`, `0x61`, `0xc1`...) for flags; they were snapshots of this counter.
+  In the same samples `+0x18`/`+0x1c` barely move while streaming (TX `0x17`-`0x1b`/`0x16`, RX
+  `0x9`/`0x9` at 48 kHz; TX `0x12`/`0x11`-`0x12` at 96 kHz), so they are NOT ring positions as recorded
+  earlier; a prefetch or FIFO depth fits better. Idle, `+0x1c` reads `0x1ff`. Not decoded.
+- **First sighting of `0x100` bit 4** (named above: the playback engine running dry), during the `0x108 = 0x2` run (`stream-cause: 0x100=0x00000010`).
   Bits 4/5 had never been seen in ~150k vendor reads; it appears when the event interval is shorter
-  than the period the descriptors mark. Meaning unknown.
+  than the period the descriptors mark (descriptors there completing 8x faster than they fill). Meaning unknown.
