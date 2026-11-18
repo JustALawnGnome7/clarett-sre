@@ -85,8 +85,13 @@ vec1/vec2 period-IRQ hypothesis:
 | `+0x18` / `+0x1c` | read ×126 (`0x10`–`0x11`) | read ×126 (`0x4`–`0x5`) | **DMA pointer** (period-index units `[HYP]`) |
 
 Other data-plane offsets: `0x108=0x10`, `0x10c=0x1e70700`, `0x110=0x7`→`0x0` (IRQ config/arm);
-`0x800`–`0x8a4` read ×126 = a **meter/level readback** block (`0x814`/`0x88c` carry varying level
-values, rest 0). `0x1c` reads at `0x1c`/`0x202910` = a status word.
+`0x800`–`0x8a4` read ×126 = ~~a **meter/level readback** block (`0x814`/`0x88c` carry varying level
+values, rest 0)~~ **two ten-word blocks, `0x800`-`0x824` and `0x880`-`0x8a4`, and NOT a level readback
+(Nov 17 2026):** the vendor reads them only while streaming, at 10 Hz, after the ring pointers; one word
+per block is live (2Pre/4Pre/8Pre `0x810`/`0x888`, 8PreX `0x814`/`0x88c`, Red 8Line `0x814`/`0x890`)
+and it sits at `0x12c`-`0x139` (300-313) on every model whatever the audio, which a level would not.
+A timing or fill quantity is the guess (the two blocks agree within one or two; the live slot moves up
+on wider models); the 8Pre also shows small counts (1, 2, 4, 7) in `0x814`. Not decoded. `0x1c` reads at `0x1c`/`0x202910` = a status word.
 
 **Stream-start write sequence `[TRACE]`** (verbatim order in the capture):
 ```
@@ -1024,7 +1029,14 @@ and the Oct 10 relay measurements found that **a stream adds no relays** — the
 arriving and being handled, but a period event raises no bit in `0x400`, so the ISR read it, found
 the event mask empty, and returned. Nothing in the kernel log could show the difference.
 
-**The vendor does not use this interrupt.** In `captures/red_8line.log`, through a 27 s streaming
+**★ CORRECTED Nov 17 2026: the vendor IS interrupt-driven** (2Pre VM trace with `vfio_msi_interrupt`,
+`clarett-opcode-inference.md` §12): its five-block sweep follows every vec0 MSI, p50 29 us, idle and
+streaming, and the 4 ms cadence below is the period event at its period. The capture read here had no
+MSI trace, so a sweep on every interrupt looked like a timer. The paragraph below stands as a
+description of the sweep; its conclusion ("does not use this interrupt", "a 4 ms polling timer") is
+withdrawn.
+
+~~**The vendor does not use this interrupt.**~~ In `captures/red_8line.log`, through a 27 s streaming
 window (the one bracketed by `0x110 <- 7` at +481.337 s and `0x110 <- 0` at +508.442 s), the vendor
 driver reads all five cause blocks in one fixed sweep — `0x100`, `0x300`, `0x200`, `0x400`, `0x500`,
 **8042 reads each, always in that order** (`0x300` is preceded by `0x100` and followed by `0x200` in
@@ -1098,7 +1110,8 @@ clock, so waking for it costs memory traffic only, and nothing while no playback
 The servicer therefore wakes every `CLARETT_SVC_REFILL_US` (150, the poll loop's old cadence) and
 refills, but **reads the device only when the ISR has flagged a period event**, or after
 `CLARETT_SVC_FALLBACK_US` (1000) without one. The four MMIO reads per iteration — the poll loop's
-real cost — drop from ~20k/s to the period rate, while playback behaviour is bit-for-bit what it was.
+real cost — drop from ~20k/s to ~1000/s (the period reads plus the 1 ms fallback; "the period rate"
+as first written here missed the fallback), while playback behaviour is bit-for-bit what it was.
 
 Removing the last timer would mean refilling from the client's own write (`.ack`), which runs in
 atomic context and so cannot take `pcm_lock` as `clarett_play_fill()` does. Separate change.

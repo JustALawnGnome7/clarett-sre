@@ -79,15 +79,19 @@ returned by DMA into a host-allocated buffer.
 |-------------------|---------------------------------------------------------------|
 | `0x000`           | Capabilities                                                  |
 | `0x010` / `0x014` | Serial (low / high)                                           |
-| `0x100`           | MSI vector 0 cause — read-to-clear; DONE = bit `0x20000000`   |
+| `0x100`           | Cause summary, one bit per block (31 `0x300`, 30 `0x200`, 29 `0x400`, 28 `0x500`); bits 0–3 the stream-stop class |
 | `0x104`           | IRQ enable (`0xf000003f`)                                     |
-| `0x200`/`0x300`/`0x400` | MSI vector 1/2/3 cause — read-to-clear (one block per vector) |
+| `0x200`/`0x300`/`0x400` | Cause blocks (playback ring, capture ring, mailbox phase + device events) — read-to-clear |
 | `0x408`           | Doorbell — write `1` = submit, `2` = acknowledge completion   |
 | `0x410` / `0x414` | Response DMA buffer bus address (low32 / high32)             |
 | `0x500` / `0x504` | MIDI IRQ summary / acknowledge (§5)                            |
 | `0x58c`           | MIDI data, bidirectional (§5)                                  |
 | `0x8000`–`0x801f` | Read-only firmware-info header                                |
 | `0x8020`          | FCP request mailbox (header + data)                           |
+
+**Every interrupt arrives on MSI vector 0**, although four vectors are enabled: the mailbox
+phases, the device events and the data plane's period events alike (vectors 1–3 never fire).
+The handler reads `0x100` first, then the blocks it flags.
 
 `0x400` carries the two command-phase bits (bit 0 accepted, bit 1 response landed)
 plus asynchronous device events in bits 2 and up. Bit 0 is also raised once, with no
@@ -468,7 +472,8 @@ Offsets are relative to the block base `B` (`0x200` or `0x300`):
 | `B+0x18`| DMA pointer — current descriptor index (device-written, host reads)|
 
 Global data-plane registers: `0x108` = IRQ config, `0x10c` = a second IRQ config
-word, `0x110` = period-IRQ arm. The period IRQs must be left armed once set;
+word, `0x110` = period-IRQ arm. A period event raises MSI vector 0 (§2.1) and sets bit 31
+of the block's cause word; it raises no bit in `0x400`. The period IRQs must be left armed once set;
 disarming them (`0x110 = 0`) stops the engine.
 
 **Cause word layout.** The ring's cause register at `B+0x00` is read-to-clear, and

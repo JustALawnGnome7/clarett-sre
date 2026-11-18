@@ -386,8 +386,10 @@ how the Sep 2 ones were lost) and are committed; routine follow-up captures of a
   third Windows driver stack. The family register holds; see the `0x000` table above.
 - **Vendor init on the Red** (identical under both Windows drivers, apart from the DMA address):
   `0x800005 {off=0, len=8}`, then `GET_7.1` bands **0, 1 AND 2** — ours reads band 0 only — then a
-  **4.99 s** idle poll of `0x100`/`0x300`/`0x200`/`0x400`/`0x500` (the four MSI cause blocks + MIDI
-  status). Whether the vendor needs all three bands to identify a unit is open, and is a candidate
+  **4.99 s** idle poll of `0x100`/`0x300`/`0x200`/`0x400`/`0x500` (the `0x100` summary, the cause blocks and MIDI
+  status). **Nov 17 2026: that sweep is the vendor's INTERRUPT HANDLER** — the 2Pre MSI trace shows it
+  p50 29 us after every vec0 MSI — so this "4.99 s idle poll" is the Red's 4.99 s temperature event
+  (`0x40000000`, see the notify entry), not a timer. Whether the vendor needs all three bands to identify a unit is open, and is a candidate
   explanation for band 0 alone yielding a pair no Clarett entry matches.
 - **Topology**: the Red 8Line's internal Thunderbolt controller is a **JHL6540 Alpine Ridge 4C**
   (the Claretts carry a DSL2210 Port Ridge). `boltctl` names it `Focusrite Red16Line`, generation
@@ -484,8 +486,9 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   `error`@+8, pad@+12, `data[]`@+0x10. Matches scarlett2 header layout.
 - **Doorbell @ `0x408`**: write `1` = submit, `2` = ack/clear prior completion.
 - **Completion**: the `0x400` command-phase bits, delivered on MSI vec0 — bit0 = request
-  accepted, bit1 = response DMA landed. Cause regs `0x100/0x200/0x300/0x400` = one block per
-  MSI vector (read-to-clear). `0x100`'s DONE bit `0x20000000` reflects "`0x400` has bits
+  accepted, bit1 = response DMA landed. ~~Cause regs `0x100/0x200/0x300/0x400` = one block per
+  MSI vector~~ **EVERY interrupt arrives on vec0** (vec1-3 never fire, Nov 13/16 2026); `0x100` is a
+  summary with one bit per cause block, and `0x200`/`0x300`/`0x400`/`0x500` are the blocks (read-to-clear). `0x100`'s DONE bit `0x20000000` reflects "`0x400` has bits
   pending", so the ISR reads `0x100` first while a command is in flight; the old cycle polled
   it for DONE instead (removed Nov 13 2026, see the MSI-mandatory entry).
 - **GET responses arrive via DMA, NOT the BAR.** Device DMAs results into a host
@@ -682,7 +685,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.4.0 since Nov 13 2026** (snd-clarett `44ddc6d`, tag `v0.4.0`): the data plane's
+  - **Version 0.4.1 since Nov 17 2026** (snd-clarett `b1adab0`, tag `v0.4.1`): the stream layout,
+    offered rates, Clock Source items and capture loopback position come from what the device reports
+    (STREAM_INFO, MODEL_ID `0x800005`, the clock list `0x006000` + names `0x005000`, the channel list
+    `0x007003`), the model table kept to identify and as fallback/cross-check; a unit no entry claims
+    attaches on family defaults. **Tested on all five models that day** (2Pre, 4Pre, 8Pre, 8PreX, Red
+    8Line): MODEL_ID identified each with no cross-check warning, `loopback_order.sh` sample-exact,
+    `clock_live.sh` PASS. Detail: `spec/provenance/clarett-opcode-inference.md` §12.
+  - **Version 0.4.0 from Nov 13 2026** (snd-clarett `44ddc6d`, tag `v0.4.0`): the data plane's
     period events come from the interrupt (the device raises one per period on MSI vec0, so the
     servicer no longer polls; the playback refill keeps its own cadence), MSI is mandatory and the
     polled mailbox cycle is gone, and a stream whose engine raises no period warns. Servicer CPU on
@@ -709,7 +719,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -956,7 +966,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   2026):** `osnoise` and the servicer measured in the same window show the CPU losing <4.1 ms while
   the servicer lost 42 ms inside a `readl`, so it is an MMIO-path block, not SMM. What stands here is
   the platform-specificity (the EliteBook shows nothing) — see the A/B entry under Driver limitations
-  for the measurement and for the read-rate lever.**
+  for the measurement. The read-rate lever recorded there was RETRACTED Nov 14 2026 (300 s legs: the
+  interrupt-driven build stalls as often as the poll loop).**
 - **★ LOG POLICY — the default load is ONE `dev_info` line (Aug 20 2026).** The RE instrumentation that
   used to print unconditionally is now `dev_dbg`, so a healthy driver prints:
   ```
@@ -1190,13 +1201,21 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     two memories are almost certainly ONE fault with two faces: the register path goes unresponsive,
     sometimes returning all-ones, sometimes blocking the read for tens of ms. We saw both faces in
     one run today (`0x100=0xffffffff` on one read; `readmax` 42.1 ms on others).
-    (2) **"BIOS-only, no driver-side fix exists" is retracted** — there is a lever and we are already
-    using it: the read rate. (3) The Aug 19 EliteBook result stands and is compatible: the stall
+    (2) ~~**"BIOS-only, no driver-side fix exists" is retracted** — there is a lever and we are already
+    using it: the read rate.~~ **RETRACTED Nov 14 2026, see below.** (3) The Aug 19 EliteBook result stands and is compatible: the stall
     needs THIS host and the read storm.
     **Still unresolved, and no longer load-bearing:** July 31's hwlat caught ~39.7 ms outer
     latencies, which this contradicts. Today's idle hwlat saw none in 300 s, so either that
     observation was not what it was taken for or the host has changed. Whatever it was, the fault
     that costs audio is in the MMIO path, which is where the next work belongs.
+    **★★ RETRACTED Nov 14 2026 — THERE IS NO READ-RATE LEVER; the 0-of-30 was chance.** 300 s per leg
+    on the interrupt-driven build (`6E78318567C1058503E01F3`, Red 8Line, 512/2048, PipeWire profile off,
+    fcp-server stopped): **capture-only 18 of 149 windows >=40 ms, full duplex 8 of 149**, gapmax 52.9 ms
+    both — the poll loop's rate (3/31, 6/94) the same evening. And "~94 reads/s" was the INTERRUPT rate:
+    the servicer reads `0x300` at least every 1 ms (`CLARETT_SVC_FALLBACK_US`), ~1000 reads/s. Still
+    standing: osnoise says MMIO-path block, not SMM; no driver lever is known. After a later power-on
+    straight into 0.4.0 (an earlier one had first bound a stale 0.1.1 DKMS module) five 300 s legs read
+    0/149, unexplained and not pursued (operator's call). Detail: [[clarett-playback-skipping]].
     **Two results from that run that are NOT news:** the 192 kHz duplex leg and 3 of 10 churn cycles
     failed, with ramp breaks of exactly `0x80100` = 2048 frames = ONE TX ring lap. The Red's playback
     ring is 2048 frames, which at 192 kHz is 10.7 ms against a 42 ms stall, so the engine laps it
@@ -1366,7 +1385,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   This explains two old observations at once: step 4a's "only vec0 fires", and "a stream adds no
   relays" — the interrupt was arriving, but a period event raises no bit in `0x400`, so the ISR
   found an empty event mask and returned.
-  **The vendor never used it either**, which is why nobody noticed: through a 27 s streaming window in
+  **★ CORRECTED Nov 17 2026 (2Pre VM trace WITH `vfio_msi_interrupt`, `spec/provenance/clarett-opcode-inference.md`
+  §12): the vendor IS interrupt-driven.** Every MSI arrives on vec0 and its `0x100`/`0x300`/`0x200`/`0x400`/
+  `0x500` sweep follows each one (p50 29 us), idle and streaming; the "4 ms timer" below is the period
+  event (250/s at its period), read from a capture that had no MSI trace. What stands: vec0 only, and
+  no missing configuration. The original reading, struck:
+  ~~**The vendor never used it either**~~, which is why nobody noticed: through a 27 s streaming window in
   `captures/red_8line.log` it sweeps `0x100`/`0x300`/`0x200`/`0x400`/`0x500`, **8042 reads each,
   always in that order, at a flat 297.9/s with the gap pinned at p50 3.998 ms** — a 4 ms timer,
   coalescing several periods per sweep (1292 of the sweeps found nothing pending). So there was no
