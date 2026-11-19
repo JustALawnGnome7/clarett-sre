@@ -5,7 +5,8 @@
 # router capture destination and checks which ALSA capture channel it arrives on, sample-exact,
 # and that the channels S/MUX removes at 96/192 kHz stay zero. Whatever the ramp channel already
 # feeds (an output, a mixer input) is switched Off for the run and restored at exit, as is each
-# leg's route. Needs fcp-server running (the routing controls). Log: ./loopback_order.log
+# leg's route, and PipeWire's card profile is set off for the run. Needs fcp-server running (the
+# routing controls). Log: ./loopback_order.log
 set -u
 CARD=${1:?usage: $0 <card>}
 D=$(dirname "$(readlink -f "$0")")
@@ -35,6 +36,13 @@ esac
 RAMP=${RAMP:-$R0}
 dead() { case $1 in 48000) echo -;; 96000) echo $DEAD96;; 192000) echo $DEAD192;; esac; }
 
+# PipeWire off the card for the run (restored at exit): it holds both PCMs while the profile is on
+PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readlink -f /sys/class/sound/card$CARD/device)" | tr ":" "_")" \
+	'$2 ~ b {print $2}')
+if [ -n "$PWCARD" ]; then
+	PWPROF=$(pactl list cards | awk -v n="$PWCARD" '$1=="Name:"{c=($2==n)} c&&/Active Profile:/{print $3; exit}')
+	pactl set-card-profile "$PWCARD" off
+fi
 # controls currently fed by 'PCM $RAMP': switch them Off for the run
 amixer -c "$CARD" controls | sed -n "s/.*name='\(.*Enum\)'.*/\1/p" > "$W/enums"
 : > "$W/restore"
@@ -46,6 +54,7 @@ while read -r n; do
 done < "$W/enums"
 restore() {
 	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done < "$W/restore"
+	[ -n "$PWCARD" ] && pactl set-card-profile "$PWCARD" "$PWPROF"
 	rm -rf "$W"
 }
 trap restore EXIT
