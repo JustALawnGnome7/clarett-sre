@@ -1365,7 +1365,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   poll loop's record was ~0.6/s at a 16-frame period, now 0-1 in 20 s at 48 kHz, rising with the
   event rate (1/3/6/16 above). Full record: `spec/provenance/clarett-fcp-transport.md`, final
   addendum.
-- **★ LIVE ALSA POSITION FROM `0x220`/`0x320` — WRITTEN AND PASSING ON THE 2PRE, UNCOMMITTED (Nov 18 2026;
+- **★ LIVE ALSA POSITION FROM `0x220`/`0x320` — COMMITTED (snd-clarett `e0a3732`), PASSING ON THE 2PRE (Nov 18 2026)
+  AND THE RED 8LINE (Nov 19 2026;
   `spec/provenance/clarett-data-plane.md` §19).** `.pointer` used to move a whole period at a time. The
   servicer now also reads the ring position (`STREAM_OFF_POS`, `+0x20`) wherever it already reads the device
   (every period event, at least every 1 ms), never in `.pointer` (atomic; the ASRock's 42 ms reads). The lead
@@ -1377,8 +1378,15 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   every 250 us via `snd_pcm_avail()` got the loopback ramp sample-exact at 48/96/192 kHz in reads down to 16
   frames, so a counted unit's samples are already in memory; `loopback_order.sh` 9/9; `SHORT=1
   duplex_stress.sh` 0 failing; `tx_guard_lead.sh` breaks 0; the short-lead client over 10 interleaved reps,
-  playback-only vs both: gaps 64 vs 22, all following its own underruns. **Open:** the Red 8Line (7-bit
-  playback counter), then commit; candidate for 0.4.2 with the underrun telemetry. Follow-up idea: playback
+  playback-only vs both: gaps 64 vs 22, all following its own underruns. **Red 8Line, laptop (Nov 19):**
+  `live_cap.sh` 7/7 down to 16-frame reads at 48/96/192 kHz, `loopback_order.sh` 8/8, `SHORT=1
+  duplex_stress.sh` 0 failing, `tx_guard_lead.sh` breaks 0, no window gap >= 40 ms; so the 7-bit playback
+  position works. **On the ASRock** a 42 ms stall in a stream's first window loses the start of playback (the
+  first ~1000-1500 frames, then silence to the end of the first 2048-frame ring and on for 0.2-1 s): the OLD
+  build fails identically (interleaved `start_stall_ab.sh`: failures A 3 / B 5 of 36, first-window stalls 3 /
+  8, every failure but one on a stall). The stall hits ~150-200 ms after the engine starts, nearly always on a
+  stream after a change to a faster rate, and blocks whichever read is in flight (in B usually the new `0x320`
+  read): a victim, not the cause. **Next:** 0.4.2 with the underrun telemetry. Follow-up idea: playback
   START is anchored one period ahead because the position was known only at events; the live position may
   remove that period from the round trip.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it

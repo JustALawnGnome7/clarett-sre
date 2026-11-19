@@ -1393,7 +1393,7 @@ every run.
   Bits 4/5 had never been seen in ~150k vendor reads; it appears when the event interval is shorter
   than the period the descriptors mark (descriptors there completing 8x faster than they fill). Meaning unknown.
 
-## 19. A live ALSA position from `0x220`/`0x320` (Nov 18 2026) `[HW — Clarett 2Pre]` `[DRIVER, uncommitted]`
+## 19. A live ALSA position from `0x220`/`0x320` (Nov 18 2026) `[HW — Clarett 2Pre, Red 8Line]` `[DRIVER — snd-clarett e0a3732]`
 
 Until now `.pointer` reported the frame clock as of the last period event, so ALSA saw both directions move
 a whole period at a time. §18 showed the ring position is readable at any moment, so the driver now reports
@@ -1441,5 +1441,52 @@ as `pcm_frames + lead * 16`. A failed read or a lead over one period is ignored.
   underruns, so neither build tears anything and the capture copy costs nothing measurable. (A 3-rep run
   had shown 0/0/0 for the playback-only build: a quiet stretch.)
 
-**Open:** the Red 8Line (7-bit playback counter), and playback START is still anchored one period ahead,
-which the live position may make unnecessary (one period off the measured round trip).
+**Committed Nov 18 2026** (snd-clarett `e0a3732`; the built tree is srcversion `ADD4F6438EEBBD2A8809875`).
+
+### The Red 8Line passes; on the ASRock, a stall at stream start loses the first ring, with or without it (Nov 19 2026) `[HW — Red 8Line]`
+
+The scratchpad tools are now in `tools/bench/` (`livecap.c`, `live_cap.sh`, `load_build.sh`, `lead_ab.sh`,
+`start_stall_ab.sh`). A = `5788d74`, the commit before the live position (srcversion
+`385CEC8B7E7B99F160966BE`); B = the committed tree (`ADD4F6438EEBBD2A8809875`). Ramp playback 31 ->
+"PCM 31" -> capture 31, which survives every speed.
+
+**Laptop (no stall), both builds back to back, B is clean:**
+- `live_cap.sh`: B 7/7 sample-exact at 48/96/192 kHz (periods 512/128/64, buffer 4 periods), nearly every
+  read shorter than a period, down to 16 frames. A 6/7, reads a whole period long; its one failure (192 kHz,
+  period 128) was the client recovering from an xrun.
+- `loopback_order.sh` 8/8 and `SHORT=1 duplex_stress.sh` 0 failing parts (96/192 kHz sustained
+  sample-exact, churn 10/10) on both.
+- `tx_guard_lead.sh` on B: breaks 0 in all 12 runs; leadplay at period 32 lost 0/0/2 frames-runs, matching
+  its own 2 underruns (the Red's earlier baseline was gaps=1).
+- 360 servicer windows, none with a gap of 40 ms or more (worst 23 ms); no driver warnings.
+So the 7-bit playback position and the Red's 2048-frame ring work as on the 2Pre.
+
+**ASRock X570 Creator, same unit.** B's first runs failed on many 96/192 kHz legs with one signature: the
+first ~1000-1500 frames of playback lost, the rest of the first 2048-frame ring (the whole TX ring and the
+default buffer) delivered, then 0.2-1 s of silence, then the stream correct to the end; aplay reported no
+xrun. Everything that ran without a stall passed (48 kHz live capture to 16-frame reads included). A first
+back-to-back run (A then B, telemetry on) looked like B provoked it: first-window stalls (gap >= 40 ms)
+**A 0 of 30, B 7 of 30**, every failure on one of them. The interleaved run settled it
+(`start_stall_ab.sh`, 6 blocks A B A B A B x 12 four-second duplex streams rotating 48/96/192 kHz; B was a
+scratch build timing the new read, srcversion `6B0D7AB1B976F5903A72E2B`, not committed):
+
+| build | streams | failed | failed with a stall | first-window stalls |
+|---|---|---|---|---|
+| A | 36 | 3 | 3 | 3 |
+| B | 36 | 5 | 4 | 8 |
+
+- **A fails the same way:** two 192 kHz streams lost the first 1488 frames, then silence, with a 42 ms stall
+  in the first window. The signature is a stall at stream start, not the live position.
+- **The stall blocks whichever MMIO read is in flight.** In A it sat in the `0x300` read (`readmax` 42 ms);
+  in B, 6 of 8 times in the new `0x320` read (timed 42.0 ms), once in `0x300`, once in neither timed read.
+  In B it struck 156-200 ms after the engine started, nearly always on a stream that followed a change to a
+  faster rate (A's three: two 192 kHz, one 48 kHz after 192). The register read is a victim, not the cause.
+- 8 vs 3 is not significant (p ~ 0.2); with the sequential 7 vs 0 it is a weak lean, not a result.
+- One B failure had no stall (96 kHz): the ramp complete, a silent gap inside it, no frames lost; aplay's
+  stderr had been discarded, so it was not shown to be a client underrun. The script now logs aplay
+  underruns.
+- Why a stall at start loses the first ring: at 96/192 kHz the 2048-frame TX ring is 21/11 ms, so a 42 ms
+  stall lets the engine lap it before the servicer has filled past the prefill. Not investigated further.
+
+**Open:** playback START is still anchored one period ahead, which the live position may make unnecessary
+(one period off the measured round trip). Then 0.4.2 (with the underrun telemetry).
