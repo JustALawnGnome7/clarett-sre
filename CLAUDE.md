@@ -687,7 +687,15 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.4.1 since Nov 17 2026** (snd-clarett `b1adab0`, tag `v0.4.1`): the stream layout,
+  - **Version 0.4.2 since Nov 19 2026** (snd-clarett `6641cf6`, tag `v0.4.2`): the live ALSA position in
+    both directions (see the LIVE ALSA POSITION entry under Driver limitations), the playback engine running
+    dry (`0x100` bit 4) counted as `underrun=` in the servicer telemetry, and comment corrections (ring-block
+    vectors, the engine level register, the MIDI FIFOs and `0x510`). **Tested on all five models** (2Pre
+    Nov 18; Red 8Line, 8PreX, 8Pre, 4Pre Nov 19; laptop): `live_cap.sh` sample-exact at 48/96/192 kHz in
+    reads down to 16 frames, `loopback_order.sh`, `SHORT=1 duplex_stress.sh` 0 failing, `tx_guard_lead.sh`
+    breaks 0. The version commit's srcversion (`ADD4F6438EEBBD2A8809875`) equals the tested build's: only
+    comments changed after it.
+  - **Version 0.4.1 from Nov 17 2026** (snd-clarett `b1adab0`, tag `v0.4.1`): the stream layout,
     offered rates, Clock Source items and capture loopback position come from what the device reports
     (STREAM_INFO, MODEL_ID `0x800005`, the clock list `0x006000` + names `0x005000`, the channel list
     `0x007003`), the model table kept to identify and as fallback/cross-check; a unit no entry claims
@@ -721,7 +729,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -1365,8 +1373,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   poll loop's record was ~0.6/s at a 16-frame period, now 0-1 in 20 s at 48 kHz, rising with the
   event rate (1/3/6/16 above). Full record: `spec/provenance/clarett-fcp-transport.md`, final
   addendum.
-- **★ LIVE ALSA POSITION FROM `0x220`/`0x320` — COMMITTED (snd-clarett `e0a3732`), PASSING ON THE 2PRE (Nov 18 2026)
-  AND THE RED 8LINE (Nov 19 2026;
+- **★ LIVE ALSA POSITION FROM `0x220`/`0x320` — RELEASED IN 0.4.2 (snd-clarett `e0a3732`), PASSING ON ALL FIVE
+  MODELS (2Pre Nov 18 2026, the rest Nov 19;
   `spec/provenance/clarett-data-plane.md` §19).** `.pointer` used to move a whole period at a time. The
   servicer now also reads the ring position (`STREAM_OFF_POS`, `+0x20`) wherever it already reads the device
   (every period event, at least every 1 ms), never in `.pointer` (atomic; the ASRock's 42 ms reads). The lead
@@ -1386,7 +1394,9 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   build fails identically (interleaved `start_stall_ab.sh`: failures A 3 / B 5 of 36, first-window stalls 3 /
   8, every failure but one on a stall). The stall hits ~150-200 ms after the engine starts, nearly always on a
   stream after a change to a faster rate, and blocks whichever read is in flight (in B usually the new `0x320`
-  read): a victim, not the cause. **Next:** 0.4.2 with the underrun telemetry. Follow-up idea: playback
+  read): a victim, not the cause. **8PreX, 8Pre and 4Pre pass the same set (Nov 19, laptop)**; on the 8Pre an
+  interleaved short-lead A/B (`lead_ab.sh`) gave gaps without a client underrun 12 (old build) vs 3, frames lost
+  400 vs 80 of 9.6 M. **RELEASED in 0.4.2.** Follow-up idea: playback
   START is anchored one period ahead because the position was known only at events; the live position may
   remove that period from the round trip.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it

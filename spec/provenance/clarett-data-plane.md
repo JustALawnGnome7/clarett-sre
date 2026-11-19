@@ -1488,5 +1488,19 @@ scratch build timing the new read, srcversion `6B0D7AB1B976F5903A72E2B`, not com
 - Why a stall at start loses the first ring: at 96/192 kHz the 2048-frame TX ring is 21/11 ms, so a 42 ms
   stall lets the engine lap it before the servicer has filled past the prefill. Not investigated further.
 
+**8PreX, 8Pre and 4Pre, laptop, B, the same day: all pass.** `live_cap.sh` 6/6 each (periods 1024/256/64,
+reads down to 16 frames), `loopback_order.sh` 9/9 each (loopback 27/28 on the 8PreX, 19/20 on the 8Pre and
+4Pre, ADAT 1 on ch 11, S/MUX-removed channels zero), `SHORT=1 duplex_stress.sh` 0 failing (churn 10/10),
+`tx_guard_lead.sh` breaks 0 in every run. Leadplay at period 32 lost frames only around its own underruns
+(8PreX gaps 3/7/6 vs underruns 3/7/6; 8Pre 45/20/43 vs 43/20/40; 4Pre 28/54/58 vs 27/53/57). The few gaps
+without a matching underrun were checked on the 8Pre with an interleaved A/B (`lead_ab.sh`, 10 reps x 20 s
+each, no stall windows): gaps without an underrun **A 12, B 3**, frames lost A 400, B 80 of 9.6 M, so B
+misses fewer playback deadlines than the build before it. B's client underruns more (44 vs 23): with a live
+position its short queue is seen to drain in real time instead of only at period events. The windows over
+40 ms in these runs were 44.1 kHz churn cycles with 2048-frame periods (46.5 ms nominal), not stalls.
+
+**Released in 0.4.2** (snd-clarett `6641cf6`, tag `v0.4.2`; srcversion `ADD4F6438EEBBD2A8809875`, the tested
+build's, since only comments changed after it).
+
 **Open:** playback START is still anchored one period ahead, which the live position may make unnecessary
-(one period off the measured round trip). Then 0.4.2 (with the underrun telemetry).
+(one period off the measured round trip).
