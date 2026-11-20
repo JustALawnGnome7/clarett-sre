@@ -275,3 +275,111 @@ events at the nominal spacing have confirmed the rate, or read `+0x20` until the
 from the position + a 16-frame guard, against a lag of up to 46 frames at 192 kHz: either a larger guard
 when the estimate is used, or keep the fill on `+0x20` (one read per fill, not per `.pointer`).
 
+**E5, Nov 20 2026, Red 8Line, laptop** (scratch srcversion `50F6D9147B27BF3E9E423C4`): a 16-frame period, a
+128-frame buffer, 10 s legs, capture-only and duplex at 48/96/192 kHz, each leg run in mode 0 then mode 1,
+the whole set twice. Device-flagged period overruns (`0x300` bit30), summed:
+
+| leg | mode 0 (servicer acks) | mode 1 (ISR acks) |
+|---|---|---|
+| capture 48 / 96 / 192 kHz | 2 / 0 / 15 | 0 / 0 / **1** |
+| duplex 48 / 96 / 192 kHz | 0 / 0 / **276** | 0 / 0 / **0** |
+
+No client xruns and no late ticks in either mode. **Acking in the ISR all but removes the device's overruns
+at the floor** (291 to 1). Counting note: in mode 1 the servicer's `periods=` read 113-118k of 120k at
+duplex 192 kHz, because it took several ISR-collected events in one pass (the counter delta carries their
+frames); the ISR counted every event (120,023 / 120,004). Step 1 must count events in the ISR.
+
+**E4, Nov 20 2026, Clarett 8PreX, laptop** (scratch srcversion `BABCE1066F070E380D1618A`, mode 1 with the FIFO
+drained AFTER the sweep, the vendor's order; a 5-pin cable MIDI Out -> In):
+
+| loop (`midi_loop.py`) | drains with data, bit28 set | with data, bit28 CLEAR | bit28 set, FIFO empty | result |
+|---|---|---|---|---|
+| SysEx 6000 B unpaced | 5964 | 0 | 0 | byte-exact |
+| SysEx 6000 B at 1560 B/s | 5977 | 0 | 0 | byte-exact |
+| 1500 note pairs | 8943 | 0 | 0 | byte-exact |
+| SysEx 25000 B during a 28ch capture | 24198 | **644** | 0 | byte-exact |
+
+- **Every MIDI interrupt had bit28 set**, and bit28 never came with an empty FIFO.
+- The 644 are drains done on PERIOD interrupts (bit31) that found a byte already in the FIFO before the
+  device had raised bit28 for it; drained and acked, the byte raised nothing later (no "set, empty").
+- **The vendor gates the drain on bit28:** in `2pre_midi_rx.log` it reads `0x58c` only on its 70 sweeps with
+  bit28 set (each a data read then an empty one), and in `2pre_stream.log` 7841 sweeps without bit28 read
+  `0x58c` zero times. Gating therefore only delays a byte until its own interrupt.
+- So step 1 can drain on bit28 alone, as the vendor does. Its test: the same four loops byte-exact with the
+  drain gated (the 25 KB loop during a capture is the one that matters).
+
+**Step 0 is complete.** Answers for step 1: one owner reading `0x100` first is safe (E1); read the flagged
+blocks only, accepting the rare late event (E2: 2 in ~0.9 M events across E1, E5 and E6); no kick at arm (E3, at a short period); count
+events and overruns in the ISR, and expect the overruns to drop (E5); drain MIDI on bit28 (E4); the position
+from the event timestamp is a step 4 option with the start-up caveat (E6).
+
+**Step 1 built and tested, Nov 20 2026** (snd-clarett working tree, srcversion `B871A2A4F8850EC7E05921B`; laptop,
+Red 8Line + Clarett 8PreX). `clarett_irq_sweep()` (clarett_main.c) under `irq_lock` is the only reader of
+`0x100`/`0x300`/`0x200`/`0x400`/`0x500`/the MIDI FIFO, from every vector: `0x100` first, then the flagged
+blocks; `full` (the servicer's 1 ms backstop and probe's cause clear) also reads `0x300`/`0x200` unflagged.
+`clarett_engine_irq_period()` does the `0x300` work in the sweep (ack, modular step, overrun, wraps, timing,
+period count) and hands units to the servicer (`irq_pending`); the servicer takes units + counter together
+(`clarett_svc_take()`), ticks, and copies the sweep's stats into its window (`clarett_svc_collect()`).
+
+| test | Red 8Line | 8PreX |
+|---|---|---|
+| `irq_rate` (per period event, periods 512 / 64) | 1.007 / 1.001, vec1-3 zero | 1.010 / 1.001, vec1-3 zero |
+| `cause_probe`, 16-frame floor, six 10 s legs | 2 overruns | 3 overruns |
+| `phase_check` (GUI Levels open) | — | 60 GET_METER all `0x3`, 0 never-landed, 0 errors; knob 604 events relayed mid-capture, hands-off none |
+| duplex stress (SHORT) | 0 failing, churn 10/10 | 0 failing, churn 10/10 |
+| `loopback_order` | 8/8 | 9/9 |
+| digital round trip | 32 frames | 32 frames, all legs |
+| TX guard lead | breaks 0 | breaks 0 |
+| start loss | 0/60 | — |
+| MIDI self-loop (drain on bit28 only) | — | byte-exact x3 |
+| short-lead A/B vs the previous build, 10 x 20 s each | gaps 17 vs 17, underruns 8 vs 8, breaks 0, lost 272 vs 240 of 9.6 M | — |
+
+**Phase 1 ran both units' sets at once,** and `live_cap` failed 3 legs on the Red and 1 on the 8PreX, every
+one with client xruns (up to 362, with aplay underrunning too): the non-RT test clients starved. In the same
+phase the round-trip legs at 48 kHz / 64 showed 12-13 doubled steps (`stepmax` two periods, gap 2.7 ms, no
+overrun) per window on BOTH cards. **Not reproduced in a controlled dual-unit A/B** (`dual_ab.sh`: plain
+duplex 48 kHz / 64, 15 s, each unit alone and both at once, blocks A B A B): `late=0`, `stepmax` one period,
+`overrun=0`, no client xruns, on both builds in all 16 legs. Attributed to the whole-set load of phase 1 (two
+`rtlat` clients plus the other units' tests), not to step 1; what the device or host did there is open.
+`rt_latency.sh`'s default legs included 192 kHz / 1024 (a 4096-frame buffer) which the Red's 2048-frame ring
+refuses: the Red now has its own default legs.
+
+
+**Steps 2 and 3 built and tested, Nov 20 2026** (srcversion `AE346231AC0C132BCDA92C5`; laptop, Red 8Line +
+Clarett 8PreX chained behind it). **Step 2 took option A:** `pcm->nonatomic = true`; trigger, `.pointer` and
+`.ack` run under the stream mutex, `snd_pcm_period_elapsed()` only from the servicer thread; lock order
+stream mutex -> `pcm_lock`, and the servicer calls into ALSA without `pcm_lock`. **Step 3:**
+`clarett_play_fill()` keeps `tx_data_to` / `tx_silence_to` under `pcm_lock`; each call copies only the new
+frames `[max(tx_data_to, pos + guard, play_base), min(appl, pos + ring))` and extends silence to a ring past
+the read position; a rewind (appl behind `tx_data_to`) pulls both marks back to appl. It runs from `.ack`,
+START (marks reset, the prefilled buffer copied at once), STOP (ring silenced) and every period tick.
+`tx_dirty`, `clarett_pcm_tx_refill()` and `CLARETT_SVC_REFILL_US` are gone: the servicer wakes on period
+events or the 1 ms backstop only. Capture START unchanged (`cap_rebase`).
+
+| test | Red 8Line | 8PreX |
+|---|---|---|
+| digital round trip | 32 frames, all 6 legs | — |
+| `live_cap` | 6/7; 192 kHz / 128 broke once with 2 livecap xruns (client) | all legs pass (rerun) |
+| `loopback_order` | 8/8 | pass |
+| duplex stress (SHORT) | 0 failing | 0 failing (rerun) |
+| TX guard lead, 12 runs | 2 breaks (aplay p32, leadplay p32), one with no playback underrun | breaks 0 |
+| start loss | 0/60 | — |
+| short-lead A/B vs step 1, 10 x 20 s each | **gaps 81 -> 15, breaks 5 -> 1, lost 1776 -> 160 of 9.6 M**; every step-3 gap matches a leadplay underrun | — |
+| CPU, 64ch duplex 20 s, blocks A B A B (step 1 vs 3) | servicer at period 64 **11.5 / 13.1 % -> 4.7 / 3.9 %**, at 512 4.9 / 4.6 % -> 4.1 / 4.0 %; aplay +0.5 % | — |
+
+The A/B is the decisive one: the fill now runs on the client's write instead of a 150 us timer, and a
+short-lead client loses less than under the timer. The breaks without a playback underrun are unattributed:
+`tx_guard_lead.sh` does not report the capture client's overruns, and step 1's own A/B had 5 such breaks, so
+not counted against step 3. The PipeWire listening check (rewinds when a second stream joins) is owed.
+
+**The 8PreX's stream engine wedged during the first run** (16:09:40, unattended): `live_cap`'s 192 kHz /
+256 leg right after a clean 192 kHz / 1024 leg, a same-rate re-arm with only the period changed. Every arm
+after it was accepted and raised no period (0 MSIs, counter 0, ring pointers 0/0) while the servicer ran
+its 1 ms backstop normally; `livecap` polls `snd_pcm_avail()` and so hung instead of failing. The Red, idle
+at the time and never power-cycled, streamed normally after. The 8PreX's bus reset (its only
+`reset_method`) with the driver bound was inconclusive: it clears the attach-time registers (`0x104`, the
+mailbox address) and the driver has no `reset_done`, so the failing capture after it proves nothing. A
+power cycle cleared it, and the rerun with the engine's debug lines on armed ~49 times with identical
+register writes and no repeat, the failing leg included. A screen lock during 3 min captures on both units
+(monitor on the dock) broke nothing. This is the known device-side wedge (CLAUDE.md), first seen off the
+ASRock and without churn; cause open. Next time: reset, unbind + bind, then a capture.

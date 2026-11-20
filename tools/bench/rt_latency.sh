@@ -6,14 +6,15 @@
 # the digital-loopback reference PCM $REF -> capture "PCM $DST"; every other route from those two playback
 # channels Off. All restored at exit. Each leg runs rtlat (linked duplex, playback full) and prints the
 # click offsets per click: analogue = output -> cable -> input, digital = inside the device. legs =
-# "rate:period ..." (buffer 4 periods), default 48/96/192 kHz at a 1.33 ms and a 5.33 ms period.
+# "rate:period ..." (buffer 4 periods), default 48/96/192 kHz at a 1.33 ms and a 5.33 ms period
+# (on a Red, 192 kHz at 1.33 and 2.67 ms: its 2048-frame ring caps the buffer).
 # DIGITAL=1 (always on a Red) needs no cable: only the digital reference is set up, and rtlat's analogue
 # pair is pointed at it too. That is the device latency, the part the driver controls.
 # Needs rtlat built at $BENCH_LOG_DIR/rtlat (gcc -O2 -o rtlat rtlat.c -lasound -lm) and fcp-server.
 # Log: ./rt_latency.log
 set -u
 CARD=${1:?usage: $0 <card> [legs]}
-LEGS=${2:-"48000:64 48000:256 96000:128 96000:512 192000:256 192000:1024"}
+LEGS=${2:-}
 DIR=${BENCH_LOG_DIR:-$PWD}
 LOG=$DIR/rt_latency.log
 RT=$DIR/rtlat
@@ -26,10 +27,12 @@ C2Pre)   CH=14 PB=4  REF=3 DST=13 EXP=13;;
 C4Pre)   CH=20 PB=8  REF=7 DST=19 EXP=19;;
 C8Pre)   CH=20 PB=20 REF=7 DST=19 EXP=19;;
 C8PreX)  CH=28 PB=28 REF=7 DST=27 EXP=27;;
-R8Line|R4Pre) CH=60 PB=64 REF=31 DST=31 EXP=31 DIGITAL=1;;
+# the Red's ring is 2048 frames, so a 4-period buffer allows periods up to 512
+R8Line|R4Pre) CH=60 PB=64 REF=31 DST=31 EXP=31 DIGITAL=1 L0="48000:64 48000:256 96000:128 96000:512 192000:256 192000:512";;
 *) echo "unsupported card id $ID"; exit 1;;
 esac
 DIGITAL=${DIGITAL:-0}
+LEGS=${LEGS:-${L0:-"48000:64 48000:256 96000:128 96000:512 192000:256 192000:1024"}}
 # digital only: rtlat's analogue pair is the reference too, captured where
 # the loopback lands (not the input of the same number)
 CIN=$OUT
