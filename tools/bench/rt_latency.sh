@@ -7,6 +7,8 @@
 # channels Off. All restored at exit. Each leg runs rtlat (linked duplex, playback full) and prints the
 # click offsets per click: analogue = output -> cable -> input, digital = inside the device. legs =
 # "rate:period ..." (buffer 4 periods), default 48/96/192 kHz at a 1.33 ms and a 5.33 ms period.
+# DIGITAL=1 (always on a Red) needs no cable: only the digital reference is set up, and rtlat's analogue
+# pair is pointed at it too. That is the device latency, the part the driver controls.
 # Needs rtlat built at $BENCH_LOG_DIR/rtlat (gcc -O2 -o rtlat rtlat.c -lasound -lm) and fcp-server.
 # Log: ./rt_latency.log
 set -u
@@ -24,8 +26,14 @@ C2Pre)   CH=14 PB=4  REF=3 DST=13 EXP=13;;
 C4Pre)   CH=20 PB=8  REF=7 DST=19 EXP=19;;
 C8Pre)   CH=20 PB=20 REF=7 DST=19 EXP=19;;
 C8PreX)  CH=28 PB=28 REF=7 DST=27 EXP=27;;
+R8Line|R4Pre) CH=60 PB=64 REF=31 DST=31 EXP=31 DIGITAL=1;;
 *) echo "unsupported card id $ID"; exit 1;;
 esac
+DIGITAL=${DIGITAL:-0}
+# digital only: rtlat's analogue pair is the reference too, captured where
+# the loopback lands (not the input of the same number)
+CIN=$OUT
+[ "$DIGITAL" = 1 ] && OUT=$REF CIN=$EXP
 W=$(mktemp -d)
 PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readlink -f /sys/class/sound/card$CARD/device)" | tr ":" "_")" \
 	'$2 ~ b {print $2}')
@@ -41,12 +49,16 @@ while read -r n; do
 	amixer -c "$CARD" cget name="$n" | grep -qE "Item #$v 'PCM ($OUT|$REF)'$" || continue
 	save "$n"; amixer -q -c "$CARD" cset name="$n" 'Off'
 done < "$W/enums"
-for n in "Analogue Output $OUT Playback Enum" "Line Out $OUT Volume Control Playback Enum" "Line $OUT Playback Volume" \
-	 "PCM $(printf %02d $OUT) Capture Enum" "PCM $DST Capture Enum"; do save "$n"; done
-amixer -q -c "$CARD" cset name="Line Out $OUT Volume Control Playback Enum" off
-amixer -q -c "$CARD" cset name="Line $OUT Playback Volume" 127
-amixer -q -c "$CARD" cset name="Analogue Output $OUT Playback Enum" "PCM $OUT"
-amixer -q -c "$CARD" cset name="PCM $(printf %02d $OUT) Capture Enum" "Analogue $OUT"
+if [ "$DIGITAL" = 1 ]; then
+	save "PCM $DST Capture Enum"
+else
+	for n in "Analogue Output $OUT Playback Enum" "Line Out $OUT Volume Control Playback Enum" "Line $OUT Playback Volume" \
+		 "PCM $(printf %02d $OUT) Capture Enum" "PCM $DST Capture Enum"; do save "$n"; done
+	amixer -q -c "$CARD" cset name="Line Out $OUT Volume Control Playback Enum" off
+	amixer -q -c "$CARD" cset name="Line $OUT Playback Volume" 127
+	amixer -q -c "$CARD" cset name="Analogue Output $OUT Playback Enum" "PCM $OUT"
+	amixer -q -c "$CARD" cset name="PCM $(printf %02d $OUT) Capture Enum" "Analogue $OUT"
+fi
 amixer -q -c "$CARD" cset name="PCM $DST Capture Enum" "PCM $REF"
 restore() {
 	tac "$W/restore" | while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done
@@ -56,11 +68,15 @@ restore() {
 trap restore EXIT
 
 say() { echo "$*" | tee -a "$LOG"; }
-say "== $(date) round-trip latency card $CARD $ID: Analogue Out $OUT -> cable -> Analogue In $OUT (capture ch $OUT); digital reference PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
+if [ "$DIGITAL" = 1 ]; then
+	say "== $(date) round-trip latency card $CARD $ID, digital only (both columns): PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
+else
+	say "== $(date) round-trip latency card $CARD $ID: Analogue Out $OUT -> cable -> Analogue In $OUT (capture ch $OUT); digital reference PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
+fi
 sleep 0.5
 for l in $LEGS; do
 	R=${l%:*} P=${l#*:}
-	res=$("$RT" hw:$CARD,0 $PB $CH $R $P $(( 4 * P )) $OUT $OUT $REF $EXP 8 2>&1)
+	res=$("$RT" hw:$CARD,0 $PB $CH $R $P $(( 4 * P )) $OUT $CIN $REF $EXP 8 2>&1)
 	a=$(sed -n 's/.*analogue \(-\{0,1\}[0-9]*\) frames.*/\1/p' <<<"$res" | sort -n | uniq -c | awk '{printf "%s%sx%s", s, $1, $2; s=" "}')
 	d=$(sed -n 's/.*digital \(-\{0,1\}[0-9]*\) frames.*/\1/p' <<<"$res" | sort -n | uniq -c | awk '{printf "%s%sx%s", s, $1, $2; s=" "}')
 	pk=$(sed -n 's/.*analogue -\{0,1\}[0-9]* frames (peak \([-0-9.]*\) dBFS).*/\1/p' <<<"$res" | head -1)

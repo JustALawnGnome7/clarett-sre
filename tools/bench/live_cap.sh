@@ -8,7 +8,8 @@
 # were shorter than a period (the point of the test: many, down to 16 frames). A leg whose livecap
 # reports xruns broke the ramp by recovering, so read it against that window's stream-svc gapmax
 # (the ASRock's 42 ms stall), not as a position fault. PipeWire's profile is set off, whatever the
-# ramp channel feeds is switched off, and the loopback route set; all restored at exit.
+# ramp channel feeds is switched off, and the loopback route set; all restored at exit. The ramp is
+# generated to a file first (in $W, up to ~150 MB at 192 kHz), and aplay's underruns are logged.
 # Needs fcp-server (routing controls) and livecap built at $BENCH_LOG_DIR/livecap
 # (gcc -O2 -o livecap livecap.c -lasound). Log: ./live_cap.log
 set -u
@@ -64,10 +65,14 @@ trap restore EXIT
 echo "== $(date) live capture position card $CARD $ID, ramp PCM $RAMP -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))" | tee -a "$LOG"
 for leg in $LEGS; do
 	r=${leg%:*} p=${leg#*:} b=${BUF:-$(( ${leg#*:} * 4 ))}
+	# from a file: fed live through a pipe, a pause in the generator
+	# underruns aplay at the short legs (a 2.67 ms buffer at 192k/128)
+	$PY gen $((r * 3)) $PB $RAMP > "$W/ramp.raw"
 	"$LC" hw:$CARD,0 $r $CH $p 5 $b 2>"$W/lc.err" | $PY check $CH $EXP $((r * 3)) > "$W/lc.res" &
 	sleep 0.6
-	$PY gen $((r * 3)) $PB $RAMP |
-		aplay -q -D hw:$CARD,0 -t raw -f S32_LE -r $r -c $PB --period-size=$p --buffer-size=$b 2>/dev/null
+	aplay -q -D hw:$CARD,0 -t raw -f S32_LE -r $r -c $PB --period-size=$p --buffer-size=$b \
+		"$W/ramp.raw" 2>"$W/play.err"
 	wait
-	echo "-- $r Hz period $p buffer $b: $(cat "$W/lc.res") | $(cat "$W/lc.err")" | tee -a "$LOG"
+	ur=$(grep -c underrun "$W/play.err")
+	echo "-- $r Hz period $p buffer $b: $(cat "$W/lc.res") | $(cat "$W/lc.err") | aplay underruns $ur" | tee -a "$LOG"
 done

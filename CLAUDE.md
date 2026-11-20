@@ -544,6 +544,10 @@ spec/provenance/                    The RE lab notebook: the evidence trail behi
                                     exhausted (§5d) — confirmed the wall, blocked inside the stripped kext.
   clarett-windbg-plan.md            RUN (§5e): WinDbg of the working Windows driver's init DMA — vendor's
                                     driver-level DMA is attribute-equivalent to ours; wall confirmed below-driver.
+  clarett-irq-servicing-plan.md     PLANNED (Nov 20 2026): servicing the stream from the interrupt — one
+                                    handler owning 0x100 and every cause block (the vendor's sweep), the ack
+                                    in it, .ack-driven incremental playback fill, no kthread or timers.
+                                    Step 0 = register experiments E1-E5.
   clarett-rate-aware-plan.md        The rate-aware control-plane work: (1) per-rate meters, (2) per-rate
                                     router pins for the re-pinning second ADAT port (8PreX, Red), (3) the
                                     0x006004 sync word -- ALL DONE Oct 2 2026, with results. Its "Also
@@ -1311,7 +1315,10 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     + P + 32 + converters:** 48 kHz period 64 with a 2-period buffer = 252 frames = **5.25 ms**; period 32
     with the 128-frame minimum buffer = 220 frames = **4.6 ms** — only a 32-frame period is under the
     5 ms amp-modelling target. Anchoring playback off the event boundaries would save the P (a design
-    change, not proposed). **Side finding:** after a sample-rate change the ANALOGUE input reads exactly
+    change, not proposed). **SUPERSEDED Nov 20 2026: the P is gone** — capture START now takes playback's
+    anchor, so a linked duplex measures 32 frames on the digital loopback at every rate and period
+    (data-plane §20): 48 kHz period 64 with a 2-period buffer = **3.9 ms**, period 32 with the 128-frame
+    minimum the same. **Side finding:** after a sample-rate change the ANALOGUE input reads exactly
     zero for ~1 s, then ramps up over a few hundred ms (converter mute while re-locking); the digital
     loopback is unaffected, so the ramp tests never saw it. **Item 6:** `P64=1 duplex_stress.sh`, 60 s per rate, non-RT clients, a 1.33 ms period
     (64/128/256 frames at 48/96/192 kHz, buffer 4 periods): **8Pre and Red 8Line sample-exact at all three
@@ -1396,9 +1403,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   stream after a change to a faster rate, and blocks whichever read is in flight (in B usually the new `0x320`
   read): a victim, not the cause. **8PreX, 8Pre and 4Pre pass the same set (Nov 19, laptop)**; on the 8Pre an
   interleaved short-lead A/B (`lead_ab.sh`) gave gaps without a client underrun 12 (old build) vs 3, frames lost
-  400 vs 80 of 9.6 M. **RELEASED in 0.4.2.** Follow-up idea: playback
+  400 vs 80 of 9.6 M. **RELEASED in 0.4.2.** ~~Follow-up idea: playback
   START is anchored one period ahead because the position was known only at events; the live position may
-  remove that period from the round trip.
+  remove that period from the round trip.~~ **DONE Nov 20 2026, the other way round (snd-clarett `6ab6f87`,
+  data-plane §20): capture START now takes playback's anchor (the next period event), so a linked duplex
+  has no offset and the round trip is lead + 32 + converters** (digital loopback 32 frames on every leg,
+  Red 8Line, 8PreX, 8Pre). Moving playback OFF the event grid was tried first and failed the short-lead
+  A/B (4208 gaps vs 8). Not yet released. **Next priority (operator): servicing the stream from the
+  interrupt, `spec/provenance/clarett-irq-servicing-plan.md`.**
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
   runs, every 2-second window with `stepmax=0x1` had zero flags and every window with `stepmax=0x2` had at

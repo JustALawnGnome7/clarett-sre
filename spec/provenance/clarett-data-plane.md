@@ -1502,5 +1502,67 @@ position its short queue is seen to drain in real time instead of only at period
 **Released in 0.4.2** (snd-clarett `6641cf6`, tag `v0.4.2`; srcversion `ADD4F6438EEBBD2A8809875`, the tested
 build's, since only comments changed after it).
 
-**Open:** playback START is still anchored one period ahead, which the live position may make unnecessary
-(one period off the measured round trip).
+~~**Open:** playback START is still anchored one period ahead, which the live position may make unnecessary
+(one period off the measured round trip).~~ **Done differently, §20:** playback keeps its anchor and capture
+takes the same one.
+
+## 20. The round trip loses its period: capture anchored at START on playback's event (Nov 20 2026) `[HW — Red 8Line, Clarett 8PreX, Clarett 8Pre]` `[DRIVER — snd-clarett 6ab6f87]`
+
+**Where the P came from.** The measured round trip (retest item 5, Oct 16 2026) was app lead + P + 32 frames
++ converters. The P is the offset between the two directions' frame 0: playback's is the next period event
+after START (`play_base = now + period`, so its period boundaries stay on events), capture's was
+`pcm_frames` at prepare/attach (`pcm_base`). In a linked duplex the two STARTs see the same clock, so
+capture led playback by one period.
+
+**First attempt, abandoned: place playback's frame 0 off the event grid, at the live position.** Five
+scratch builds (never committed; the last diff kept off-repo). Each fixed the previous one's fault and the
+design still lost:
+- the due estimate based on the last event lagged by up to a period: leadplay gaps 1982/1691;
+- estimating from the live position and its read time instead left 16 frames of start loss in 2 of 60
+  starts, from the first fill landing on a pass with no usable position; deferring placement until a read
+  succeeded, with `.pointer` held at 0 until then, made start loss 0/60;
+- but a 64-frame period still measured 96 frames (P unchanged), because the position is unusable before
+  the first event and the fallback estimate was conservative;
+- **and the interleaved short-lead A/B (`lead_ab.sh`, Red) read gaps 4208 / underruns 1908 / frames lost
+  36,832 against 0.4.2's 8 / 5 / 80.** Off the grid, a client woken by period updates (leadplay uses
+  `snd_pcm_avail_update()`) refills behind the engine: exactly what the anchor's comment had warned of.
+
+**What shipped: capture START takes playback's anchor.** `clarett_pcm_trigger()` sets
+`pcm_base = now + period` for capture too, so a linked duplex has offset 0 and both directions stay on the
+event grid. The trigger is atomic and races the servicer's copies, so it only publishes the base and a
+`cap_rebase` flag (release); the servicer applies it under `pcm_lock` before its next copy
+(`clarett_cap_rebase()`: `cap_drained = base`, re-copying from the RX ring whatever the engine already
+wrote past it), and `.pointer` reports 0 while the flag is set. Capture period delivery waits for
+`pcm_frames >= pcm_base`, as playback's always did. Cost: capture's first frame comes up to a period after
+START, and frames captured between prepare and START are no longer delivered.
+
+**Results (laptop, srcversion `A90E4C2844C27933B127084`):**
+
+| test | Red 8Line | 8PreX | 8Pre |
+|---|---|---|---|
+| `DIGITAL=1 rt_latency.sh` | **32** frames, 8/8 clicks, every leg (48k 64/256/512, 96k 128/512, 192k 256) | **32**, every leg (48k 64/256, 96k 128/512, 192k 256/1024) | **32**, the same legs |
+| playback start loss (60 starts, 6 legs to 192k/64) | 0 | — | — |
+| `lead_ab.sh` vs 0.4.2, 10 x 20 s each | gaps 12 vs 11, underruns 5 vs 6, lost 172 vs 112 of 9.6 M, no stall windows | — | — |
+| `live_cap.sh` | 7/7 | 6/6 | 6/6 |
+| `loopback_order.sh` | 8/8 | 9/9 (27/28, ADAT 1 on 11) | 9/9 (19/20, 11) |
+| `SHORT=1 duplex_stress.sh` | 0 failing, churn 10/10 | 0 failing, churn 10/10 | 0 failing, churn 10/10 |
+| `tx_guard_lead.sh` | breaks 0 | breaks 0 | breaks 0 |
+
+On 0.4.2 the same Red legs read 96 / 288 / 544 at 48 kHz (P+32). **An app's round trip is now its lead +
+32 frames + converters:** 48 kHz, period 64, a two-period buffer = 128 + 32 + 28 (the 8Pre's analogue path)
+= 188 frames = **3.9 ms** (was 252 = 5.25 ms); a 32-frame period with the 128-frame minimum buffer the same
+3.9 ms (was 4.6). Leadplay's period-64 cell still underruns every period (lead 48 < period), as it always has.
+
+**Two harness bugs found on the way, both fixed:**
+- **`live_cap.sh`'s 192 kHz / 128 leg had failed on EVERY build, old ones included** (0.4.2 passed it once).
+  Each failure ended at exactly ramp frame 4736 (once 14336), sometimes with no capture xrun at all. That is
+  aplay underrunning, fed live from the Python generator through a 64 KB pipe (256 frames at 64 channels)
+  against a 2.67 ms buffer, at a 4800-frame chunk boundary; aplay's stderr was discarded. The ramp is now
+  generated to a file first and aplay's underruns are logged: 4/5 repeats and the full set then passed, the
+  one break (641 frames) with livecap reporting 2 xruns (the client).
+- `rt_latency.sh`'s new `DIGITAL=1` mode captured its "analogue" pair on the input of the reference's
+  number, right on a Red (31 -> 31) and wrong on a Clarett (PCM 7 lands on ch 27/19, not 7): it read the
+  input's noise floor. It now captures on the loopback channel.
+
+**Next:** servicing the stream from the interrupt, `clarett-irq-servicing-plan.md`.
+
