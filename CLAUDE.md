@@ -194,6 +194,17 @@ how the Sep 2 ones were lost) and are committed; routine follow-up captures of a
   self-description of the transport — doorbell block base, response-DMA pointer register, DONE bit —
   which is what a driver would read to adapt across models. It cannot be confirmed adaptive precisely
   *because* it is constant on every unit seen; disproving it needs a device whose transport differs.
+  **REVISED Nov 20 2026: `0x8010 = 0x400` IS THE MAILBOX PAYLOAD LIMIT, MEASURED** (Red 8Line,
+  `GET_DATA {0, L}` through the hwdep): L = 1016/1017/1024 served whole, **1025 truncated to 1024**,
+  1032 and up (1040, 1041, 2048, 4080) **refused** (error status, no data; the session carried on). The
+  vendor's largest request in every capture is a 1024-byte `SET_DATA` (8-byte header + 1016) and its
+  largest read 1016 bytes. So the header reads better as a description of the MAILBOX than as register
+  pointers: `0x8010` max payload (1024), `0x8014` = `0x410` max message (payload + the 16-byte FCP
+  header), `0x8018` = `0x20` the mailbox's offset (`0x8000 + 0x20` = the request header at `0x8020`). The
+  first half is measured, the rest still fitted to constants. `0x8000`/`0x8004` read as BCD dates
+  (04/06/1973, 18/10/1966): a signature, read twice by the vendor at init and never polled. The hwdep
+  now refuses a reply request over 1024 with `-EINVAL` (snd-clarett, `clarett_hwdep_resp_cap()`).
+  Detail: transport spec, final addendum.
 - **The MIDI transport ports to the Red line**: `0x510`/`0x514` (`0x847`), `0x58c`, and `0x500`
   reading its documented idle `0xff0000` all appear on the Red exactly as in the 2Pre decode. (Nov 18 2026:
   `0x510` is the MIDI transmit-ready threshold and `0x514` a constant block description; see the MIDI
@@ -508,7 +519,8 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
 - **`MUX_READ=0x003001`** — routing read-back, decoded on hardware July 20 2026 (transport spec §8):
   request `{u8 offset, u8 pad, u8 count, u8 mux_num}`, **reply capped at 28 entries (112 B)** whatever
   `count` says, and `offset` is a **flat** entry index crossing band boundaries. Callers must window.
-- **Open:** a 1 KB bulk `SET_DATA`; the init handshake.
+- **Open:** ~~a 1 KB bulk `SET_DATA`~~ (that is the payload limit, Nov 20 2026: see the fw-info header
+  entry under the Red range); the init handshake.
 
 ### The control-plane model (the key result)
 A config write = `SET_DATA{offset, len, value}` then `DATA_CMD{activate}`, where

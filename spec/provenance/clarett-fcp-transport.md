@@ -569,3 +569,36 @@ wedge produces. Four appeared in this run, from the script's `--dump-hw-params` 
 perfect stream immediately after. So that summary line alone is not the wedge signature; the
 zero-period WARNING is, because it requires 100 ms of a stream actually running, and it correctly
 stayed silent here.
+
+## Addendum (Nov 20 2026): the mailbox payload limit is 1024 bytes, and `0x8010` reports it `[HW — Red 8Line]` + `[TRACE]`
+
+**Traces.** Every capture's largest mailbox request is a 1024-byte `SET_DATA` (`0x800001`: the 8-byte
+`{offset, length}` header + 1016 bytes); the next largest is 628 bytes (`0x3002`). The largest `GET_DATA`
+the vendor asks for is 1016 bytes, though a read's request is only 8 bytes: one chunk size for both
+directions, derived from 1024.
+
+**Hardware.** A scratch tool (`fcp_getlen`, never committed) sent `GET_DATA {0, L}` through the hwdep,
+fcp-server stopped, and compared each reply with a reference read of the same bytes in 512-byte chunks,
+counting the trailing bytes still holding the driver's `0xa5` response pre-fill (what the device never wrote):
+
+| L | result |
+|---|---|
+| 1016, 1017, 1024 | served whole, every byte matching |
+| 1025 | **1024 bytes written**, byte 1024 still `0xa5` |
+| 1032, 1040, 1041, 2048, 4080 | **refused**: an error status with no data (the driver's `-EIO`) |
+
+Each later command was answered at once and fcp-server restarted clean (Sync Locked), so a refusal costs
+nothing. Where between 1025 and 1031 truncation turns into refusal, and why, is not measured (a length
+rounded or checked in 8-byte units would fit).
+
+**What it says about the fw-info header** (`0x8000`-`0x801c`, the same on every unit read): `0x8010 =
+0x400` is the payload limit. The rest fits a description of the mailbox: `0x8014 = 0x410` = the limit +
+the 16-byte FCP header, `0x8018 = 0x20` = the mailbox's offset in the `0x8000` page (the request header at
+`0x8020`). That replaces the earlier reading (`0x8010`/`0x8014` as pointers to the `0x400` doorbell block and
+the `0x410` address register), which matched only numerically. Only the first part is measured; the others
+cannot be tested while every unit reports the same constants.
+
+**Driver:** the hwdep capped a reply request at the response buffer (4080 bytes); it now caps it at
+`CLARETT_MBOX_DATA_MAX` (1024), so a request the device would refuse fails with `-EINVAL` before it is sent
+(`clarett_hwdep_resp_cap()`, also used by the INIT and meter-map checks). fcp-server never asks for more.
+

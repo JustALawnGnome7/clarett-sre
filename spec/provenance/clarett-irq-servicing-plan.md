@@ -106,7 +106,43 @@ Settle the register behaviour the design leans on. Each is a small change to a c
   device-flagged overruns (`0x300` bit30) against today's 0-1 / 1 / 3 / 6 / 16. A drop is the first
   measurable gain of step 1.
 
-Exit: a written answer to E1-E5 appended here, with the numbers.
+- **E6. Position from interrupt timestamps** (operator's proposal, Nov 20 2026): the sweep stores
+  `{frames at this event, ktime}`; `.pointer` = frames + elapsed x rate, clamped below the next event, with no
+  `+0x20` read. Measure, in a scratch build, the estimate against the live `+0x20` position at every
+  servicer sample (distribution of the difference, per rate and period), including the first events after a
+  rate change (the device keeps the old rate ~20-30 ms). Decides whether step 4 needs the ring-position
+  register at all.
+
+Exit: a written answer to E1-E6 appended here, with the numbers.
+
+### Results
+
+**E1-E3, Nov 20 2026, Red 8Line, laptop** (scratch build srcversion `733285811205505BE6F9542`, a runtime
+`e1_mode`; 10 s duplex 60/64 ch at 48 kHz, periods 512 and 64, fcp-server stopped so no command was in
+flight):
+
+| mode | ISR reads | period 512: vec0 / periods | period 64: vec0 / periods | clients |
+|---|---|---|---|---|
+| 0 (shipped) | `0x400`; servicer `0x100`/`0x300`/`0x200`/`0x500` | 950 / 939 | 7515 / 7503 | rc 0 |
+| 1 | `0x100`, `0x300`, `0x200`, `0x400`, `0x500` every MSI; the ack in the ISR | 950 / 939 | 7513 / 7502 | rc 0 |
+| 2 | as 1 but **`0x100` never read** | 950 / 939 | 7513 / 7502 | rc 0 |
+
+(The ~11 extra vec0 interrupts per leg are the Red's idle events, e.g. the 4.99 s temperature event.)
+
+- **E1: NO. Reading `0x100` does not re-arm the MSI.** With nothing reading it for 10 s, the device still
+  raised one interrupt per period event (942 MSIs for 939 events; 7504 for 7502) and the stream ran clean.
+  So the step 4a trap (reading `0x400` before `0x100` timed commands out) is not an interrupt re-arm: it is
+  the old polled DONE cycle's own dependence on bit29, which the phase-bit mailbox no longer has.
+- **E2: no event found with the summary bit clear** in 8441 events with `0x300` read straight after
+  `0x100` in the ISR (`nosum=0`). `0x100` read `0xa0000000` at most (bit31 period, bit29 `0x400`); bit30
+  (`0x200`) and bit28 (`0x500`) never set.
+- **E3: the engine raises an MSI for its first event without any ack first.** At period 64 (1.33 ms) the
+  first event came by interrupt 1.26-1.30 ms after the servicer started. At period 512 the 5 ms wait was
+  shorter than one period (10.7 ms), so the sweep was kicked: inconclusive there, not contrary. So the arm
+  needs no kick (re-check at a long period with a wait of two periods).
+- With the ack in the ISR, `gapmax` and `overrun` were the same as shipped (0 overruns everywhere at these
+  periods); E5 (the 16-frame floor) is still to run.
+
 
 ### Step 1 — one sweep, one owner
 
@@ -200,3 +236,42 @@ design), then a version bump. Records: data-plane §20 for the result, CLAUDE.md
   unknown; out of scope unless E-series work finds one.
 - Zero-copy playback (2Pre/4Pre/Red: fragment already a power of two) would remove the fill for those
   models entirely; not planned, revisit after step 3 measures what the incremental fill costs.
+
+**E6, Nov 20 2026, Red 8Line, laptop** (scratch srcversion `A580FB9156AA832668D44E9`, mode 1; 8 s duplex
+legs, rates rotated so most legs start after a rate change). At every servicer sample of the live ring
+position (`+0x20`, which is quantised DOWN to 16 frames: the true position is in [live, live + 16)), the
+estimate = frames at the last event + time since its ISR timestamp x rate. d = estimate - live, so 0..15 is
+exact, negative = the estimate lags, 16+ = it runs ahead.
+
+| leg | samples per direction | d, nominal rate (min / mean / max) | d, measured interval rate (min / max) | first 50 ms (min / max) |
+|---|---|---|---|---|
+| 48k / 512 | 7463 | -6 / 4-5 / 15 | -9 / 18 | -4 / 13 |
+| 48k / 64 | 11930 | -1 / 3 / 12 | -1 / 12 | 1 / 9 |
+| 96k / 128 (after 48k) | 11984 | -5 / 6-8 / 16 | -5 / 16 | -1 / **141** |
+| 96k / 512 | 7463 | -19 / 2-3 / 16 | -22 / 20 | -3 / 14 |
+| 192k / 256 (after 96k) | 11981 | -8 / 1-6 / 15 | -9 / 16 | -5 / **232** |
+| 192k / 64 | 23855 | **-46** / 0-2 / 16 | -54 / **79** | -5 / 13 |
+| 48k / 1024 (after 192k) | 7406 | -6 / 4-5 / 15 | -8 / **567** | **-647** / 14 |
+| 192k / 1024 (after 48k) | 7609 | -30 / -4-0 / 14 | -49 / 29 | -5 / **1976** |
+| 48k / 256 (after 192k) | 7451 | -9 / 5 / 15 | -10 / 16 | **-169** / 15 |
+
+- **Steady state, nominal rate: never more than one frame ahead** (d = 16 at most, 1 sample in a leg, 3 in
+  all), and lagging by at most ~10 frames at 48 kHz, ~20 at 96 and 30-46 at 192 (~0.24 ms: the
+  interrupt-to-timestamp latency, which only ever makes the estimate late).
+- **The measured interval rate is WORSE** (outliers to 79 and 567 frames ahead): one late or coalesced event
+  skews the interval. Use the nominal rate.
+- **After a rate change the estimate is wrong by up to ~2000 frames for the first ~50 ms**: AHEAD after a
+  change to a faster rate (141, 232, 1976), behind after a slower one (-169, -647). That is the old-rate
+  tail (the device keeps the previous rate ~20-30 ms after SET_CLOCK; see the duplex-stress side finding).
+  Ahead is the unsafe direction for capture (frames reported that are not yet written).
+- The estimate passed the next event 4 times in ~170k samples (the clamp's case).
+- E2 again: 1 event in 6002 (192k / 256) found in `0x300` with the summary bit clear.
+
+**Reading:** after the start-up tail, the timestamp estimate tracks the ring position as closely as the
+register itself resolves it, and errs only late. A `.pointer` built on it needs (1) the clamp below the next
+event, (2) a margin of one fragment (16 frames) for capture so it never reports past written data, and
+(3) something for the first events after a start: hold at the last event (period-step position) until two
+events at the nominal spacing have confirmed the rate, or read `+0x20` until then. Playback's fill counts
+from the position + a 16-frame guard, against a lag of up to 46 frames at 192 kHz: either a larger guard
+when the estimate is used, or keep the fill on `+0x20` (one read per fill, not per `.pointer`).
+
