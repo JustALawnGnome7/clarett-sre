@@ -429,3 +429,52 @@ further slack.
 | CPU, 64ch duplex 20 s, A B A B (step 3 vs 4) | period 64: servicer ~5.1 -> 4.7 %, aplay ~3.2 -> 3.9 %, arecord ~2.6 -> 2.9 % (the reads move into the clients' `.pointer`; total ~ +1 point); period 512: servicer ~4.1 -> 3.2 %, clients ~unchanged | — |
 
 No engine wedge on the 8PreX in these runs.
+
+**Step 5 built and tested, Nov 23 2026** (snd-clarett working tree, uncommitted at the time of writing,
+srcversion `452D1083A5C5B0C80475B11`; laptop, Red 8Line + Clarett 8PreX chained behind it). **The kthread is
+gone.** vec0 is `request_threaded_irq()` (not `IRQF_ONESHOT`, since vec0 also completes mailbox commands);
+the hardirq runs the sweep and returns `IRQ_WAKE_THREAD` when a period was latched (`svc_wake`), and vec1-3
+or any other context kick the thread with `irq_wake_thread()` (`clarett_svc_kick()`). The thread
+(`clarett_svc_thread()`) runs `clarett_pcm_tick()` and the 2 s telemetry window. **The 1 ms fallback is an
+hrtimer backstop** at 3 nominal periods (at least 1 ms): it sweeps only if no event arrived since its last
+expiry, counts `backstop=` in the telemetry, kicks the thread when a window is due, and stops re-arming on a
+disconnected device. `clarett_engine_stop()` claims the teardown under `pcm_lock` (`stream_run` false),
+then `hrtimer_cancel()` + `synchronize_irq(vec0)` outside it; `clarett_engine_run()` sets `stream_run`,
+sweeps once, kicks and starts the timer. The duplex arm/close guards' job (one caller arms, one tears down)
+is kept by the `pcm_lock` claims; there is no thread handle left to orphan or stop twice.
+
+| test (`step5_run.sh`) | Red 8Line | 8PreX |
+|---|---|---|
+| digital round trip | 32 frames, all 6 legs | — |
+| `live_cap` | 7/7 | 6/6 |
+| `loopback_order` | 8/8, dead channels zero | 9/9, dead channels zero |
+| duplex stress (SHORT) | 0 failing, churn 10/10 | 0 failing, churn 10/10 |
+| TX guard lead, 12 runs | breaks 0; leadplay p32 gaps 0/1/0, each a client underrun | breaks 0; leadplay p32 gaps 1/1/0, each a client underrun |
+| start loss | 59/60; one 16-frame (one fragment) loss at 192 kHz period 64 / buffer 128, no playback underrun (step 4: 0/60). Not re-run | — |
+| short-lead A/B vs step 4, 10 x 20 s each | gaps 7 -> 4, lost 0 -> 0, breaks 0, every gap a client underrun, no stall windows | — |
+| CPU, 64ch duplex 20 s, A B A B (step 4 vs 5) | servicer at period 64 4.55 / 2.95 % -> 1.55 / 1.90 %, at 512 3.10 / 3.20 % -> 0.90 / 1.10 %; aplay and arecord unchanged | — |
+| `backstop=` > 0, WARN/BUG | none in the whole run | none |
+
+**The CPU figure is partly accounting:** the step 4 kthread was charged for the sweep, the IRQ thread is
+not (the sweep runs in the hardirq, which no task is charged for). So the servicer column shows the thread
+got lighter, not by how much the driver's total cost fell. **The backstop never found an event the interrupt
+had missed** (`backstop=0` in every window of every stream).
+
+**Operator checks (Red 8Line, step 5 loaded):**
+- **Surprise removal:** the unit switched off during a 60ch capture. The stream stopped at once (ring
+  pointers read all-ones), no task in D state, no WARN/BUG/Oops; the unit re-attached when powered on.
+- **System sleep with a 60ch capture held across it, s2idle and deep:** the engine stops at suspend, the
+  stream re-prepares after the wake and runs on with `late=0`, `badreads=0`, `backstop=0`. On the s2idle
+  run `sleep_test.sh` read RUNNING / Locked / fcp-server active before and after, meter read OK, the device
+  resumed in place. (The first deep run was pointed at the wrong card number by mistake, so the script's
+  card checks there are void; the same checks by hand after it passed.)
+
+**Observation, open, not attributed to step 5: about 8 s after every wake the Red raised period events
+~8 % slower for ~10 s** (174-183 per 2 s window at a 512-frame period instead of 188, the gap between
+events 11.6-11.8 ms against 10.67 nominal, every step still exactly one period), then returned to normal.
+Seen on 3 of 3 wakes (two s2idle, one deep). Not the screen unlock: it began 4 s before the unlock on the
+third wake, and a lock/unlock with no sleep did not reproduce it. **With the mailbox trace on, no command
+reached the device from the post-wake burst (fcp-server's re-read after the resume relay, ~0.6 s after the
+wake) until the stream stopped**, apart from meter reads, so nothing on the host re-clocked it. The rate
+fits 44.1 kHz (172 events per 2 s), but that is a fit, not a measurement. The servicing path cannot set the
+device's clock, so this is read as device-side; whether the step 4 build shows the same was not checked.
