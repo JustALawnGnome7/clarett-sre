@@ -383,3 +383,49 @@ power cycle cleared it, and the rerun with the engine's debug lines on armed ~49
 register writes and no repeat, the failing leg included. A screen lock during 3 min captures on both units
 (monitor on the dock) broke nothing. This is the known device-side wedge (CLAUDE.md), first seen off the
 ASRock and without churn; cause open. Next time: reset, unbind + bind, then a capture.
+
+**PipeWire listening check on the steps 1-3 build: PASSED, Nov 20 2026** (Red 8Line, snd-clarett `baf9a0f`,
+operator by ear: "PipeWire sounds great").
+
+**Step 4 built and tested, Nov 20-23 2026** (snd-clarett `afc26d3`, srcversion `67276C2D48BF4371D1CEE29`;
+laptop, Red 8Line + Clarett 8PreX chained behind it). **Capture took option (a):** `.pointer` copies the RX
+ring up to the live position under `pcm_lock` (`clarett_cap_copy_to()`), capture START sets `pcm_base` and
+`cap_drained` together under the lock (`cap_rebase` gone). Playback: `.pointer` and the fill read `+0x20`
+themselves (`clarett_play_pos()`); the tick sets `pcm_frames` and `stream_ctr` together under `pcm_lock`;
+`clarett_pcm_sample_live()` is deleted, so job 3 is gone.
+
+**The first build (`00EA5CD26355B1C7A00F8EE`) regressed the short-lead client**, the only test to see it:
+`lead_ab.sh` step 3 -> step 4, gaps 9 -> 167, lost 0 -> 464 of 9.6 M, breaks 0. Everything else passed.
+Three scratch builds (never committed, `~/clarett-bench/step4x/`) separated it, 6 x 20 s per cell, leadplay
+period 32/128 with a 48-frame lead:
+
+| who reads `+0x20` (scratch `pos_reads`) | gaps | gaps without a client underrun | lost |
+|---|---|---|---|
+| `.pointer` and the fill (= the first build) | 170 | 30 | 480 |
+| neither; the servicer samples every 1 ms (= step 3) | 8 | 0 | 32 |
+| `.pointer` only | 124 | 0 (124 client xruns) | 0 |
+| the fill only | 121 | 110 | 1776 |
+
+So both readers lose with a position that is current, and a position up to 1 ms old had hidden it. Then,
+with only the fill reading, letting it write N frames behind `pos + guard` (guard 16): N = 0 gave 123 gaps /
+1888 lost, **N = 16 (= writing up to `+0x20`) 7 / 0**, 32 9 / 0, 48 8 / 16. With the fill at N = 16 and
+`.pointer` reading too, reporting N frames behind `+0x20`: N = 0 115 gaps (all client xruns), **N = 16
+4 / 16 lost**, 32 3, 48 4. **Reading: `+0x20` counts the 16-frame fragment the engine has FETCHED; the frames
+playing start one fragment behind it.** Reported as the position it runs one fragment ahead, so a client's
+lead shrinks by 16 frames, and the fill's guard measured from it skips frames the engine has not fetched.
+**Fix:** `clarett_play_pos()` takes the position one fragment (`CLARETT_CTR_FRAMES`) back; the guard stays
+16. No scratch value past one fragment improved anything, and 32 behind lost 16 frames once, so there is no
+further slack.
+
+| test (fixed build) | Red 8Line | 8PreX |
+|---|---|---|
+| digital round trip | 32 frames, all 6 legs | — |
+| `live_cap` | 7/7 (single client xruns on some legs) | 6/6 |
+| `loopback_order` | 8/8 | 9/9, dead channels zero |
+| duplex stress (SHORT) | 0 failing, churn 10/10 (first build: 1, a 48 kHz arecord overrun) | 0 failing, churn 10/10 |
+| TX guard lead, 12 runs | breaks 0; leadplay p32 gaps 5/1/1 (first build 23/26/17) | breaks 0; leadplay p32 gaps 0/0/0 |
+| start loss | 0/60 | — |
+| short-lead A/B vs step 3, 10 x 20 s each, run twice | **gaps 10 -> 3 and 8 -> 3, lost 16 -> 0 and 0 -> 0**, every gap a client underrun | — |
+| CPU, 64ch duplex 20 s, A B A B (step 3 vs 4) | period 64: servicer ~5.1 -> 4.7 %, aplay ~3.2 -> 3.9 %, arecord ~2.6 -> 2.9 % (the reads move into the clients' `.pointer`; total ~ +1 point); period 512: servicer ~4.1 -> 3.2 %, clients ~unchanged | — |
+
+No engine wedge on the 8PreX in these runs.
