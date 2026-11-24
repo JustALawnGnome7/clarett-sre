@@ -1,7 +1,7 @@
 # Servicing the stream from the interrupt — plan
 
 Status: DONE (Nov 23 2026). Steps 0-6 complete; the full matrix passed on all five models with the step 5
-build (srcversion `452D1083A5C5B0C80475B11`), released as 0.5.0. Results under Step 6 below. Originally
+build (srcversion `452D1083A5C5B0C80475B11`), released as 0.5.0 (snd-clarett `0c25efa`, tag `v0.5.0`, same srcversion). Results under Step 6 below. Originally
 PLANNED Nov 20 2026, with the capture-at-START anchor (round trip = lead + 32 frames) as prerequisite.
 
 ## Goal

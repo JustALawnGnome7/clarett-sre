@@ -703,7 +703,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.4.2 since Nov 19 2026** (snd-clarett `6641cf6`, tag `v0.4.2`): the live ALSA position in
+  - **Version 0.5.0 since Nov 23 2026** (snd-clarett `0c25efa`, tag `v0.5.0`): the stream serviced from the
+    interrupt (one vec0 sweep acks the period, its IRQ thread copies and fills; the `clarett-svc` kthread and
+    its timers gone, an hrtimer backstop instead), playback filled on `.ack`, positions read in `.pointer`,
+    capture anchored at START on playback's event (round trip = lead + 32 + converters), and hwdep replies
+    capped at the 1024-byte payload. **Tested on all five models** (laptop, Nov 23): the release matrix in
+    the IRQ-servicing entry under Driver limitations. The version commit's srcversion
+    (`452D1083A5C5B0C80475B11`) equals the tested build's: only `dkms.conf` and the specs changed.
+  - **Version 0.4.2 from Nov 19 2026** (snd-clarett `6641cf6`, tag `v0.4.2`): the live ALSA position in
     both directions (see the LIVE ALSA POSITION entry under Driver limitations), the playback engine running
     dry (`0x100` bit 4) counted as `underrun=` in the servicer telemetry, and comment corrections (ring-block
     vectors, the engine level register, the MIDI FIFOs and `0x510`). **Tested on all five models** (2Pre
@@ -745,7 +752,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
