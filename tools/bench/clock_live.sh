@@ -54,7 +54,7 @@ CTL="PCM $DST Capture Enum"
 printf '%s\t%s\n' "$CTL" "$(val "$CTL")" >> "$W/restore"
 amixer -q -c "$CARD" cset name="$CTL" "PCM $RAMP"
 restore() {
-	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done < "$W/restore"
+	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset -- name="$n" "$v"; done < "$W/restore"
 	[ -n "$PWCARD" ] && [ -n "$PWPROF" ] && pactl set-card-profile "$PWCARD" "$PWPROF"
 	rm -rf "$W"
 }

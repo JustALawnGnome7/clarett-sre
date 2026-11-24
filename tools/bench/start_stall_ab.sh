@@ -47,7 +47,7 @@ route() {	# switch off what the ramp channel feeds, route the loopback; restore 
 }
 unroute() {
 	[ -s "$W/restore" ] || return 0
-	while IFS=$'\t' read -r n v; do amixer -q -c "$C" cset name="$n" "$v" 2>/dev/null; done < "$W/restore"
+	while IFS=$'\t' read -r n v; do amixer -q -c "$C" cset -- name="$n" "$v" 2>/dev/null; done < "$W/restore"
 	: > "$W/restore"
 }
 trap 'unroute; kill $KEEP 2>/dev/null; rm -rf "$W"' EXIT

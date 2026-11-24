@@ -539,7 +539,8 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   name (no NUL, size = its length), one fixed table per family, the four Claretts byte-identical; `0x005001`+
   untried. STREAM_INFO takes exactly 1 byte and returns 24 bytes `{u16 play, u16 cap, u32 a, u32 b, u32 0 x3}`:
   **a + b = the analogue round-trip converter latency in frames per band** (8Pre 28/24/23 = its Oct 16 measured
-  28/24/23; 2Pre/4Pre 25/25/23 and Red 23/23/21 are predictions). The channel lists take exactly 6 bytes
+  28/24/23; 8PreX measured the same day at exactly 28/24/23, the 8Pre again; 2Pre and 4Pre, 25/25/23, at 25 / 26 / 23-24: exact
+  at 48 kHz, up to a frame more above, likely a few us of analogue-circuit delay; Red 23/23/21 unmeasured). The channel lists take exactly 6 bytes
   `{u16 band, u16 first, u16 count}` (the reply runs from record `first` to the end; count ignored), are fixed per band, and **on the Red their classes do not describe the channels** (all capture
   "Analog"; corrects §14). `0x007000` = 40 zero bytes everywhere. The vendor reads STREAM_INFO once at attach
   and re-reads both lists after every SET_CLOCK. **`0x008001`/`0x008002` (never sent by anyone before) are the

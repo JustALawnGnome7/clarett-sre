@@ -53,7 +53,7 @@ while read -r n; do
 	amixer -q -c "$CARD" cset name="$n" 'Off'
 done < "$W/enums"
 restore() {
-	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done < "$W/restore"
+	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset -- name="$n" "$v"; done < "$W/restore"
 	[ -n "$PWCARD" ] && pactl set-card-profile "$PWCARD" "$PWPROF"
 	rm -rf "$W"
 }
@@ -77,7 +77,7 @@ for R in 48000 96000 192000; do
 		sleep 0.5
 		aplay -q -D hw:$CARD,0 -f S32_LE -c "$PB" -r $R -t raw "$W/ramp_$R.raw"; prc=$?
 		wait $rec; rrc=$?
-		amixer -q -c "$CARD" cset name="$ctl" "$was"
+		amixer -q -c "$CARD" cset -- name="$ctl" "$was"
 		printf -- "-- %6s  PCM %s -> ch %-2s (aplay %s, arecord %s): %s\n" "$R" "$dst" "$exp" "$prc" "$rrc" \
 			"$($PY check "$W/cap.raw" $CH "$exp" "$(dead $R)")" | tee -a "$LOG"
 	done

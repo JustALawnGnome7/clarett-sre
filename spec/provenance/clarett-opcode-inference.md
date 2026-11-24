@@ -698,8 +698,9 @@ capture at each rate, and at the end: nothing in category 7 follows the current 
 - **★ a + b is the analogue round-trip converter latency, in frames at that band.** The 8Pre's measured
   analogue path (Oct 16 2026, `rt_latency.sh`, Out 1 cabled to In 1: 28 frames at 48 kHz, 24 at 96, 23 at
   192 on top of the digital loopback) matches its 28/24/23 exactly. The words group by hardware (2Pre with
-  4Pre, 8Pre with 8PreX, the Red alone). One unit measured; the rest are predictions (2Pre 25/25/23 is the
-  cheap check). Which word is the input and which the output is unknown: a loop measures only the sum.
+  4Pre, 8Pre with 8PreX, the Red alone). **Measured on all four Claretts the same day** (below): exact at
+  every rate on the 8Pre and 8PreX; on the 2Pre and 4Pre exact at 48 kHz, up to one frame more at 96 and 192. Which word is the input and which the output is unknown: a
+  loop measures only the sum.
   §10's 2Pre pairs match these; §9's differing ones were the stale-buffer era.
 - **`0x007000` answers 40 bytes of zeros on every unit**, idle and streaming, whatever it is sent (empty,
   1, 2, 4 bytes). Undecoded; nothing found makes it non-zero.
@@ -717,6 +718,37 @@ capture at each rate, and at the end: nothing in category 7 follows the current 
   bands 1/2 are the band-0 list cut to 56/36 and 52/32 records, ADAT kept at 16 although S/MUX halves it.
   Only the length means anything on a Red. The driver is unaffected: it looks for the LOOP class, finds
   none on the Red, and leaves its capture order alone (as designed).
+
+**The latency reading, measured on all four Claretts (Nov 24 2026; `tools/bench/rt_latency.sh`,
+Analogue Out 1 cabled to Analogue In 1, linked duplex, 8 clicks per leg at two period sizes per rate).**
+The figure is the analogue leg minus the digital-loopback reference (32 frames on every leg):
+
+| | 48 kHz | 96 kHz | 192 kHz |
+|---|---|---|---|
+| STREAM_INFO a + b, 2Pre and 4Pre | 25 | 25 | 23 |
+| 2Pre, run 1 / run 2 | 25 / 25 | 26 / 26 | 24 / 23 |
+| 4Pre | 25 | 26 | 24 |
+| STREAM_INFO a + b, 8Pre and 8PreX | 28 | 24 | 23 |
+| 8Pre, Oct 16 / today | 28 / 28 | 24 / 24 | 23 / 23 |
+| 8PreX | 28 | 24 | 23 |
+
+Every clean leg read the same on all 8 clicks at both period sizes (each leg straight after a change to a
+faster rate lost its first click to the converters re-locking, as always). So **the reading holds: exact at
+48 kHz on both groups**, where they differ by three frames (25 against 28), which no coincidence explains.
+At 96 kHz the 2Pre and 4Pre measure one frame more than the device says, every run, and at 192 kHz 23 or 24
+from run to run, so the true delay there sits near a frame boundary. In time the excess is about 5-10 us at
+96 kHz (25 frames = 260 us said, 26 = 271 us measured) and 0-5 us at 192 (120-125 us): consistent with a
+fixed delay of a few microseconds in the analogue circuitry, which the device's whole-frame converter figure
+would not include and which rounds away at 48 kHz (a quarter frame or less). The 8Pre shows none. That cause
+is a fit to the numbers, not a measurement. **Reading for a driver:** a + b is the converters' latency in
+whole frames per band: exact at every rate on the 8Pre (twice) and 8PreX, exact at single speed on the 2Pre
+and 4Pre and short by up to a frame above it. The Red's 23/23/21 remains unmeasured (the script runs only
+digital legs on a Red).
+
+The first 2Pre run also exposed a bench bug: the scripts restored saved control values with `amixer cset
+name=X "$v"`, and a value of `-127` (the 2Pre's Line 1 software gain at its floor) was parsed as the options
+`-1 -2 -7`, so that control was left at 0 dB (restored by hand; the output was under knob control, so nothing
+was heard). Every restore loop in `tools/bench/` now passes `--` first.
 
 **The list request has a starting index (operator's hypothesis, tested the same day; `tools/bench/
 cat7_offset.sh`, 8PreX and Red 8Line).** Bytes 2-3, which every earlier request (and the vendor's) left

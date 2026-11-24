@@ -64,7 +64,7 @@ else
 fi
 amixer -q -c "$CARD" cset name="PCM $DST Capture Enum" "PCM $REF"
 restore() {
-	tac "$W/restore" | while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done
+	tac "$W/restore" | while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset -- name="$n" "$v"; done
 	[ -n "$PWCARD" ] && pactl set-card-profile "$PWCARD" "$PWPROF"
 	rm -rf "$W"
 }

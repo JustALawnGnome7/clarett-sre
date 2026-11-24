@@ -52,7 +52,7 @@ route() {
 }
 unroute() {
 	[ -s "$W/restore" ] || return 0
-	while IFS=$'\t' read -r n v; do amixer -q -c "$C" cset name="$n" "$v" 2>/dev/null; done < "$W/restore"
+	while IFS=$'\t' read -r n v; do amixer -q -c "$C" cset -- name="$n" "$v" 2>/dev/null; done < "$W/restore"
 	: > "$W/restore"
 }
 pw() { pactl list cards short 2>/dev/null | awk -v b="pci-$(tr ':' '_' <<<"$BDF")" '$2 ~ b {print $2}'; }

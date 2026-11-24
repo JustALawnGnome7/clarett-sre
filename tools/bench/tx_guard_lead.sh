@@ -73,7 +73,7 @@ CTL="PCM $DST Capture Enum"
 printf '%s\t%s\n' "$CTL" "$(amixer -c "$CARD" cget name="$CTL" | sed -n 's/.*: values=//p')" >> "$W/restore"
 amixer -q -c "$CARD" cset name="$CTL" "PCM $RAMP"
 restore() {
-	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset name="$n" "$v"; done < "$W/restore"
+	while IFS=$'\t' read -r n v; do amixer -q -c "$CARD" cset -- name="$n" "$v"; done < "$W/restore"
 	if [ "$HAVE_GP" = 1 ]; then
 		echo "$G0" | sudo -n tee $GP >/dev/null
 		kill $KEEP 2>/dev/null

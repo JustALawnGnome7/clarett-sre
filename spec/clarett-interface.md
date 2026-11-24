@@ -213,7 +213,7 @@ The `cmd` word is `0x80000000` (execute) OR the opcode:
 | `0x006004`  | `SYNC_READ`  | → lock-status bitfield (§3.10)              |
 | `0x006005`  | `SYNC_RATE`  | → `u32` current sample rate (§3.10)         |
 | `0x007000`  | —            | → 40 bytes, all zero on every unit read; the request is ignored |
-| `0x007001`  | `STREAM_INFO` | `{u8 band}` (exactly 1 byte, bands 0-2) → `{u16 playback, u16 capture, u32 a, u32 b, u32 0 ×3}`: channel counts (§6.2); a + b = the analogue round-trip converter latency in frames at that band (measured on the 8Pre) |
+| `0x007001`  | `STREAM_INFO` | `{u8 band}` (exactly 1 byte, bands 0-2) → `{u16 playback, u16 capture, u32 a, u32 b, u32 0 ×3}`: channel counts (§6.2); a + b = the analogue round-trip converter latency in frames at that band (measured on all four Claretts: exact at every rate on the 8Pre/8PreX, at 48 kHz on the 2Pre/4Pre, which measure up to one frame more at 96/192) |
 | `0x007002`  | Playback list | `{u16 band, u16 first, u16 count}` (exactly 6 bytes, count ignored) → one 16-byte record per playback channel from index `first` to the end of the list (`first` past the end refused) `{u8 0, u8 index, u16 port id, u16 port id, u16 class, u32 0, u32 type}` |
 | `0x007003`  | Capture list | the same for capture; on the Red 8Line the classes do not describe the channels |
 
