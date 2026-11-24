@@ -533,7 +533,19 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   Red 8Line 0x00-0x91 (`RedPre`, clock names 3-10 incl. Loop Sync and Dante, a DANTE class, `MIDI In`/`Out`
   at 0x10/0x11, `Input 1`-`64`, `Playback 1`-`64`), refused past the end. Both name MIDI, so the names cannot
   detect it; category 8 does.
-- **Vendor opcodes we never send:** `0x006001` (rate list), `0x007000` (zeros, undecoded), and on the Red
+- **★ CATEGORIES 5, 7 AND 8 READ OUT ON ALL FIVE UNITS (Nov 24 2026; `spec/provenance/clarett-opcode-inference.md`
+  §15; `tools/bench/names_probe.sh`, `cat7_probe.sh`, `midi8_probe.sh`).** FCP status 8 = invalid argument (a
+  wrong request length or an id/band out of range). `0x005000` takes exactly `{u16 id}` and returns the bare
+  name (no NUL, size = its length), one fixed table per family, the four Claretts byte-identical; `0x005001`+
+  untried. STREAM_INFO takes exactly 1 byte and returns 24 bytes `{u16 play, u16 cap, u32 a, u32 b, u32 0 x3}`:
+  **a + b = the analogue round-trip converter latency in frames per band** (8Pre 28/24/23 = its Oct 16 measured
+  28/24/23; 2Pre/4Pre 25/25/23 and Red 23/23/21 are predictions). The channel lists take exactly 6 bytes
+  `{u16 band, u16 first, u16 count}` (the reply runs from record `first` to the end; count ignored), are fixed per band, and **on the Red their classes do not describe the channels** (all capture
+  "Analog"; corrects §14). `0x007000` = 40 zero bytes everywhere. The vendor reads STREAM_INFO once at attach
+  and re-reads both lists after every SET_CLOCK. **`0x008001`/`0x008002` (never sent by anyone before) are the
+  MIDI in/out port lists**: one 12-byte record `{u8 0, u8 index, u16 name id (0x29 MIDI In / 0x2a MIDI Out),
+  u32 3125 (the DIN byte rate), u32 0}` per port on a Clarett, empty on the Red. `0x008003`+ untried.
+- **Vendor opcodes we never send:** `0x006001` (rate list), `0x007000` (40 zero bytes, undecoded), and on the Red
   only `0x800007` (one 40-byte read) and `0x80000b` (~300 reads of a 7-byte record; Dante status?). None needed.
 - **Open:** ~~a 1 KB bulk `SET_DATA`~~ (that is the payload limit, Nov 20 2026: see the fw-info header
   entry under the Red range); the init handshake.

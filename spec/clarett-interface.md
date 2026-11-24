@@ -198,7 +198,10 @@ The `cmd` word is `0x80000000` (execute) OR the opcode:
 | Opcode      | Name         | Payload                                   |
 |-------------|--------------|-------------------------------------------|
 | `0x000001`  | `CAP_READ`   | `{u16 category}` → `u8`, non-zero = supported |
-| `0x008000`  | MIDI info    | → `{u16, u16}`: the MIDI port counts (1, 1 on a Clarett; 0 on a Red) |
+| `0x005000`  | Port name    | `{u16 id}` (exactly 2 bytes) → the name, no NUL, reply size = its length; one fixed table per family |
+| `0x008000`  | MIDI info    | → `{u16 in, u16 out}`: the MIDI port counts (1, 1 on a Clarett; 0 on a Red) |
+| `0x008001`  | MIDI in list | → one 12-byte record per MIDI input `{u8 0, u8 index, u16 name id, u32 3125, u32 0}`; empty on a Red |
+| `0x008002`  | MIDI out list | → the same for the MIDI outputs |
 | `0x800000`  | `GET_DATA`   | `{u32 offset, u32 len}` → response by DMA  |
 | `0x800001`  | `SET_DATA`   | `{u32 offset, u32 len, data[]}`            |
 | `0x800002`  | `DATA_CMD`   | `{u32 commit_code}`                        |
@@ -209,7 +212,10 @@ The `cmd` word is `0x80000000` (execute) OR the opcode:
 | `0x006003`  | `SET_CLOCK`  | `{u32 sample_rate, u32 clock_source}`       |
 | `0x006004`  | `SYNC_READ`  | → lock-status bitfield (§3.10)              |
 | `0x006005`  | `SYNC_RATE`  | → `u32` current sample rate (§3.10)         |
-| `0x007001`  | `GET_7.1`    | → `{playback, capture}` channel counts (§6.2) |
+| `0x007000`  | —            | → 40 bytes, all zero on every unit read; the request is ignored |
+| `0x007001`  | `STREAM_INFO` | `{u8 band}` (exactly 1 byte, bands 0-2) → `{u16 playback, u16 capture, u32 a, u32 b, u32 0 ×3}`: channel counts (§6.2); a + b = the analogue round-trip converter latency in frames at that band (measured on the 8Pre) |
+| `0x007002`  | Playback list | `{u16 band, u16 first, u16 count}` (exactly 6 bytes, count ignored) → one 16-byte record per playback channel from index `first` to the end of the list (`first` past the end refused) `{u8 0, u8 index, u16 port id, u16 port id, u16 class, u32 0, u32 type}` |
+| `0x007003`  | Capture list | the same for capture; on the Red 8Line the classes do not describe the channels |
 
 ### 3.2 Config-space write model
 

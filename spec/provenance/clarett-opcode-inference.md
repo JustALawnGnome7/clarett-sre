@@ -35,7 +35,7 @@ That is the real novel surface — category 5, most of category 6, category 7, o
 
 ## 2. `0x007002` / `0x007003` — stream width declaration, per speed class `[TRACE]`
 
-> **Superseded (Nov 17 2026, §12):** these are channel-list reads `{u32 band}`, one 16-byte record per
+> **Superseded (Nov 17 2026, §12):** these are channel-list reads (`{u16 band, u16 first, u16 count}`, §15), one 16-byte record per
 > stream channel; the reply was never visible in the traces.
 
 Payload `{u32 speed_class, u16 channels}`. The host **supplies** the count, so these declare
@@ -466,7 +466,7 @@ vendor sends).
 
 ### `0x007002`/`0x007003` are channel lists, not width declarations (corrects §2)
 
-`{u32 speed band, u16 count}` -> one **16-byte record per stream channel** at that band, in stream
+`{u32 speed band, u16 count}` (**§15: really `{u16 band, u16 first, u16 count}`**) -> one **16-byte record per stream channel** at that band, in stream
 order: `{u8 0, u8 index, u16 port id, u16 port id, u16 port class, u32 0, u32 type}`. The count is
 ignored (4 and 32 both return the full list); a band past 2 is refused. Port id and class are
 `0x005000` ids. The 2Pre's capture list:
@@ -631,8 +631,9 @@ driver's `-EIO`), as the Claretts refuse from 0x47 (§12). Id 0 is the empty str
 So the table is per family, not a shifted copy: every id past 0x08 moves, and the Red adds the Loop Sync
 and Dante clock names and the DANTE class. Like the Clarett table it is a superset, sized for the line's
 largest model (64 channels each way: the 16Line; the 8Line streams 64/60), and it names channels by number
-only (no `ADAT n`/`S/PDIF n`/`Loop n`), so on a Red the per-channel port class in the channel lists
-(§12), not the name, says what a channel is. The product name is a family string on both (`RedPre` on an
+only (no `ADAT n`/`S/PDIF n`/`Loop n`). ~~So on a Red the per-channel port class in the channel lists
+(§12), not the name, says what a channel is.~~ **Wrong (§15): the Red's channel-list classes do not
+describe its channels either** (every capture record says Analog). The product name is a family string on both (`RedPre` on an
 8Line, `Clarett8Pre` on every Clarett).
 
 **`MIDI In`/`MIDI Out` are in both tables, so the names cannot tell which units have MIDI**; category 8's
@@ -642,3 +643,136 @@ Nothing in the driver depends on the layout: it names a clock source by the id `
 why the Red's clock names (ids 3-10) were right without this table. The full dump is not committed: the
 table above reproduces every entry.
 
+
+## 15. Addendum (Nov 24 2026): categories 5, 7 and 8 read out on all five units `[HW]` `[TRACE]`
+
+Every unit (Clarett 2Pre, 4Pre, 8Pre, 8PreX, Red 8Line), one at a time on the laptop, through the hwdep
+(`tools/fcp_cmd`, fcp-server stopped) with the driver's `FCPr` trace on, so each reply's true size and FCP
+status are recorded (the hwdep zero-fills past the reply and cannot show its size). Scripts:
+`tools/bench/names_probe.sh`, `cat7_probe.sh`, `midi8_probe.sh`, with `names_sum.py`, `cat7_sum.py`,
+`cat7_recs.py`. Every command was answered with its own sequence number; no unit misbehaved after any run.
+
+**FCP status 8 = invalid argument.** Every refusal in this section is status 8 with no data, for a wrong
+request length and for an id or band out of range alike.
+
+### Category 5: `0x005000` is the only name read, and it is fully mapped
+
+289 requests per unit (ids 0x000-0x100 with a 64-byte reply, eight request shapes on three ids, five high
+ids, three reply lengths):
+
+- **The request is exactly `{u16 id}`.** Empty, 1, 4 (even `{id, 0, 0, 0}`) and 8 bytes are all refused.
+  So no second field selects a language or another table; ids `0xff`-`0xffff` (`0x8000` included) are
+  refused too.
+- **The reply is the bare name**: no terminating NUL, nothing after it, reply size = its length
+  (`RedPre` 6, `Playback 64` 11). Id 0 is an answered empty reply (status 0, size 0). A shorter reply
+  request cuts the name (4 bytes: `RedP`); 256 changes nothing.
+- **The four Claretts answer all 289 requests byte for byte the same**, refusals included: one table, ids
+  0x00-0x46 (§9, §12), `Clarett8Pre` at ids 1-2 on the 8PreX too. The Red's ids 0x00-0x91 equal the §14
+  dump exactly.
+- Nothing in either table is per unit (not the nickname, not the serial).
+
+`0x005001` and up stay untried: neither the vendor nor this project sends them, status 8 cannot tell a
+missing command from a bad request, and no request shape is safe if one of them is a write. The lead, if
+wanted: a VM trace of Focusrite Control or RedNet Control renaming a channel, if either can.
+
+**Driver note (not a bug, recorded):** for an answered empty reply (status 0, size 0, e.g. id 0) the hwdep
+hands back the response poison (`0xa5`), since the mailbox leaves a zero size alone (not every command
+fills it). It is the poison fill, not stale memory. The driver's own name read honours the size.
+
+### Category 7
+
+| unit | STREAM_INFO band 0 / 1 / 2 (play/cap) | trailing (a, b) band 0 / 1 / 2 | a + b |
+|---|---|---|---|
+| 2Pre | 4/14, 4/10, 4/8 | 11,14 / 9,16 / 9,14 | 25 / 25 / 23 |
+| 4Pre | 8/20, 8/16, 8/14 | 11,14 / 9,16 / 9,14 | 25 / 25 / 23 |
+| 8Pre | 20/20, 16/16, 14/14 | 13,15 / 9,15 / 9,14 | **28 / 24 / 23** |
+| 8PreX | 28/28, 20/20, 16/16 | 13,15 / 9,15 / 9,14 | 28 / 24 / 23 |
+| Red 8Line | 64/60, 56/52, 36/32 | 9,14 / 9,14 / 9,12 | 23 / 23 / 21 |
+
+Every reply was the same idle, after a 1 s capture at each of 44.1/48/88.2/96/176.4/192 kHz, during a
+capture at each rate, and at the end: nothing in category 7 follows the current rate or streaming.
+
+- **`0x007001` STREAM_INFO takes exactly 1 byte** (empty, 2 and 4 refused); bands 0-2 answer, band 3 is
+  refused (§10's "empty reply" for band 3 predates the status check). **The reply is 24 bytes**, not 20:
+  `{u16 playback, u16 capture, u32 a, u32 b, u32 0, u32 0, u32 0}`.
+- **★ a + b is the analogue round-trip converter latency, in frames at that band.** The 8Pre's measured
+  analogue path (Oct 16 2026, `rt_latency.sh`, Out 1 cabled to In 1: 28 frames at 48 kHz, 24 at 96, 23 at
+  192 on top of the digital loopback) matches its 28/24/23 exactly. The words group by hardware (2Pre with
+  4Pre, 8Pre with 8PreX, the Red alone). One unit measured; the rest are predictions (2Pre 25/25/23 is the
+  cheap check). Which word is the input and which the output is unknown: a loop measures only the sum.
+  §10's 2Pre pairs match these; §9's differing ones were the stale-buffer era.
+- **`0x007000` answers 40 bytes of zeros on every unit**, idle and streaming, whatever it is sent (empty,
+  1, 2, 4 bytes). Undecoded; nothing found makes it non-zero.
+- **`0x007002`/`0x007003` take exactly 6 bytes, `{u16 band, u16 first, u16 count}`** (empty, 4 and 8
+  refused; `first` found the same day, see below); the count is ignored (0, 1, 64), band 3 is refused. On
+  all five units, every record has byte 0 = 0, its two
+  port ids equal and the reserved word 0. Reply = 16 × the band's width (Red playback band 0: 1024 bytes,
+  exactly the payload limit).
+- **Clarett lists are consistent**: playback runs Analog (type 1), S/PDIF (2; 4Pre/8Pre/8PreX), ADAT (4;
+  8Pre/8PreX), and the higher bands drop ADAT from the end (8PreX playback 28/20/16, as S/MUX); capture
+  Analog, S/PDIF, LOOP (7), ADAT, as §12.
+- **★ The Red's lists do not describe its channels (corrects §14).** All 60 capture records say class
+  Analog, type 1, though the stream carries S/PDIF, ADAT, Dante and loopback; playback 15-16 S/PDIF and
+  17-32 ADAT are right but 33-64 (Dante) say Analog; the DANTE (0x0f) and LOOP classes are never used; and
+  bands 1/2 are the band-0 list cut to 56/36 and 52/32 records, ADAT kept at 16 although S/MUX halves it.
+  Only the length means anything on a Red. The driver is unaffected: it looks for the LOOP class, finds
+  none on the Red, and leaves its capture order alone (as designed).
+
+**The list request has a starting index (operator's hypothesis, tested the same day; `tools/bench/
+cat7_offset.sh`, 8PreX and Red 8Line).** Bytes 2-3, which every earlier request (and the vendor's) left
+zero and which had been read as the high half of a u32 band, are `u16 first`: the reply starts at that
+record and runs to the end of the list.
+
+| request `{band, first, count}` | 8PreX playback / capture (28 / 28) | Red playback / capture (64 / 60) |
+|---|---|---|
+| `{0, 0, 64}` | index 0-27 / 0-27 | 0-63 / 0-59 |
+| `{0, 8, 64}` | 8-27 (20 records) / 8-27 | 8-63 (56) / 8-59 (52) |
+| `{0, 1, 64}`, `{0, 12, 64}` | 1-27, 12-27 / the same | 1-63, 12-63 / 1-59, 12-59 |
+| `{0, 8, 4}`, `{0, 2, 1}` | 8-27, 2-27 (count ignored) / the same | 8-63, 2-63 / 8-59, 2-59 |
+| `{0, 60, 64}` | refused / refused | 60-63 (4) / refused |
+| `{0, 64, 64}`, `{0, 256, 64}` | refused | refused |
+| `{1, 8, 64}` | 8-19 / 8-19 (band-1 lists of 20) | 8-55 / 8-51 |
+| `{2, 4, 64}` | 4-15 / 4-15 (band-2 lists of 16) | 4-35 / 4-31 |
+
+So `first` at or past the list's length is refused (status 8), the count is ignored with any `first`, and
+each page is the same records as the full list. With every reply capped at the 1024-byte payload limit and
+the Red's 64-record playback list filling it exactly, `first` is how a list longer than 64 channels would be
+read in pages. The vendor always sends `first` 0. The records and the Red's classes are unchanged by it.
+
+**How the vendor uses category 7** (every boot capture, `2pre_streamstart.log`, `red_8line.log`):
+
+1. STREAM_INFO bands 0, 1, 2 straight after the first MODEL_ID, once per attach, never again.
+2. A block run twice at attach: `INIT_2`, `0x006002`, `0x006000` + a `0x005000` per clock id, `0x006001`,
+   MODEL_ID `{0, 12}`, **`0x007000` (empty request)**, `0x007002 {band 0, width}` + a `0x005000` per record,
+   `0x007003` likewise. This is the only place `0x007000` appears (the Red capture's third one ends a
+   truncated copy of the block).
+3. **After every `SET_CLOCK`** (a stream start, a rate change, a source-only change): `0x006002`,
+   `0x006004`, `0x006005`, then both lists with their name bursts, once or twice, at the band of the new
+   rate (44.1/48 -> 0, 88.2/96 -> 1, 176.4/192 -> 2) with that band's STREAM_INFO width as the count.
+
+So the vendor re-reads lists that never change per band; nothing it gets from category 7 is missing from
+what the driver already reads (the widths at probe, the loopback position from band 0's capture list).
+
+### Category 8: the MIDI port lists
+
+`0x008001` and `0x008002` had never been sent by anyone. Index 1 is a read in every known category, so
+`0x008001` went first (11 request shapes); `0x008002` (index 2 is the write in MIX and MUX) followed with
+an empty request only, a Clarett first. MIDI_INFO (`0x008000`) was read before and after each run and never
+changed.
+
+| unit | `0x008001` | `0x008002` |
+|---|---|---|
+| 2Pre, 4Pre, 8Pre, 8PreX | `00 00 29 00 35 0c 00 00 00 00 00 00` | `00 00 2a 00 35 0c 00 00 00 00 00 00` |
+| Red 8Line | empty (status 0, size 0) | empty |
+
+- **One 12-byte record per MIDI port**: `{u8 0, u8 index, u16 name id, u32 3125, u32 0}`. `0x29`/`0x2a`
+  are `MIDI In`/`MIDI Out` in the Clarett name table; **3125 is the DIN MIDI byte rate** (31250 baud ÷ 10
+  bits; the cable loops measure 3103-3132 B/s). The field split is a reading of one record per unit
+  (`u32 3125` against `u16 3125, u16 0` cannot be told apart).
+- **`0x008001` = the MIDI inputs, `0x008002` = the outputs**, so MIDI_INFO is most likely
+  `{u16 in, u16 out}` (inferred from the order; a 1/1 unit cannot confirm it). The Red's zero ports are
+  empty lists.
+- `0x008001` ignores its request entirely (all 11 shapes, same reply); `0x008002` was asked only empty.
+- So category 8 mirrors category 7: counts, then one list per direction whose records name their ports in
+  the `0x005000` table. The vendor never reads any of it; the driver needs only the counts.
+  `0x008003` and up stay untried.
