@@ -519,6 +519,16 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
 - **`MUX_READ=0x003001`** — routing read-back, decoded on hardware July 20 2026 (transport spec §8):
   request `{u8 offset, u8 pad, u8 count, u8 mux_num}`, **reply capped at 28 entries (112 B)** whatever
   `count` says, and `offset` is a **flat** entry index crossing band boundaries. Callers must window.
+- **★ CATEGORY 8 REPORTS THE MIDI PORTS (Nov 24 2026; `spec/provenance/clarett-opcode-inference.md` §13).**
+  `CAP_READ` says category 8 is supported on all five units (ESP_DFU, 9, says no: the negative control);
+  the vendor asks about it at attach and never uses it. Its info query `0x008000` answers `01 00 01 00` on
+  the 2Pre, 4Pre, 8Pre and 8PreX (1 MIDI in, 1 out) and zeros on the Red (no MIDI jacks), so `{u16, u16}` =
+  the MIDI port counts, by correlation over all five. The only device-reported MIDI capability found:
+  the UART block exists on the Red too, and the vendor driver itself (same attach on both families, same
+  `FocusritePCIe.sys`, no MIDI ports for the Red) evidently decides from MODEL_ID or `0x000`. Not yet used by
+  the driver (`has_midi` stays per model).
+- **Vendor opcodes we never send:** `0x006001` (rate list), `0x007000` (zeros, undecoded), and on the Red
+  only `0x800007` (one 40-byte read) and `0x80000b` (~300 reads of a 7-byte record; Dante status?). None needed.
 - **Open:** ~~a 1 KB bulk `SET_DATA`~~ (that is the payload limit, Nov 20 2026: see the fw-info header
   entry under the Red range); the init handshake.
 
@@ -644,7 +654,7 @@ tools/fcp_*.c                         Bench tools driving the hwdep directly (st
                                       it holds the hwdep exclusively). fcp_cfg_read: GET_DATA a config
                                       byte range, the only way to see what actually reached the device;
                                       fcp_meter_watch: which meter slot a channel moves; fcp_mux_probe:
-                                      MUX_READ windowing; fcp_cap_read: the per-category CAP_READ bytes
+                                      MUX_READ windowing; fcp_cap_read: the per-category CAP_READ bytes (categories 0-9 + DATA)
                                       + a GET_DATA probe (diagnoses fcp-server's "does not support
                                       required INIT category" — unarmed device vs zero capabilities);
                                       fcp_cmd: ANY opcode with request bytes from the command line,

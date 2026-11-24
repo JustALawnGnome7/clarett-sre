@@ -535,3 +535,71 @@ Nov 17 (17,007 over two minutes: attach, idle, two clock changes, a knob, three 
   not once per control.
 
 Still open: whether `0x108`/`0x10c` route causes to vectors 1-3 (needs writes, so a scratch build).
+
+## 13. Addendum (Nov 24 2026): category 8 reports the MIDI ports; the opcodes the vendor sends that we do not `[HW]` `[TRACE]`
+
+**Question:** can a driver tell whether a unit has DIN MIDI from the device, not a per-model list?
+
+**What does not tell.** The MIDI UART block is present on the Red 8Line, which has no MIDI jacks:
+`0x514` = `0x847` and `0x500` idle `0xff0000` on every unit, so register probing cannot. The `0x005000`
+string table names `MIDI In`/`MIDI Out` (ids `0x29`/`0x2a`) but is a fixed table (§9). The
+`0x007002`/`0x007003` channel lists cover stream channels only. No vendor XML has a MIDI element.
+
+**What the vendor driver does** (every boot capture: 2Pre, 4Pre, 8Pre, 8PreX, Red 8Line). Its attach is
+access-for-access the same on both families up to the first command, the MIDI setup included (read `0x514`,
+`0x510` = 8, two `0x58c` reads, `0x500` = 8); `0x500` is read in every interrupt sweep on the Red too. The
+values that differ are register `0x000` (`0x032003fd` / `0x042003fc`) and the reply to the first command,
+`0x800005` (MODEL_ID, family 1 / 2). Every unit reports PCI subsystem `1cb5:0002` (config reads at `0x2c`
+in every capture), so Windows cannot bind by ID. Operator, Nov 24: Windows lists no MIDI ports for the Red,
+and both the Red and the Claretts run `FocusritePCIe.sys`. So the vendor decides, most likely from MODEL_ID
+or `0x000`, in a table of its own; the MMIO cannot show which.
+
+**CAP_READ asks about a category nothing uses.** The vendor sends `CAP_READ` (`0x000001 {u16 category}`,
+one-byte reply) for categories 1-8 at attach, then uses 1-7 and DATA and never sends a category-8 opcode.
+`tools/fcp_cap_read` now asks 0-8 as well as 9 and DATA (it asked 0-4, 6, 9, DATA before):
+
+| category | 2Pre | 4Pre | 8Pre | 8PreX | Red 8Line |
+|---|---|---|---|---|---|
+| 0-7, DATA | supported | supported | supported | supported | supported |
+| **8** | **supported** | **supported** | **supported** | **supported** | **supported** |
+| 9 ESP_DFU | not supported | not supported | not supported | not supported | not supported |
+
+ESP_DFU is the negative control: the firmware does answer "no". Categories 5 and 7 are supported, matching
+the commands the driver sends in them.
+
+**Category 8's info query, `0x008000`** (the `N000` pattern; `tools/fcp_cmd`, 64-byte reply asked, the
+hwdep zero-fills past the reply):
+
+| unit | MIDI jacks | `0x008000` |
+|---|---|---|
+| Clarett 2Pre | 1 in, 1 out | `01 00 01 00` |
+| Clarett 4Pre | 1 in, 1 out | `01 00 01 00` |
+| Clarett 8Pre | 1 in, 1 out | `01 00 01 00` |
+| Clarett 8PreX | 1 in, 1 out | `01 00 01 00` (the same with a `u32 0` argument) |
+| Red 8Line | none | all zero (4 zero bytes or an empty reply: indistinguishable here) |
+
+**Reading: `{u16, u16}` = the MIDI port counts**, one each on a Clarett, none on the Red, which keeps the
+category (and the UART) but reports no ports. A correlation over all five units, not a decoded field: no unit
+has a count other than 0 or 1, so "count" against "flag" is untested, and which half is In and which Out is
+unknown. The vendor driver never sends `0x008000`, so this is a device-reported answer the vendor does not
+use. Not tried: `0x008001` and up (in other categories the later commands include writes: MIX/MUX write,
+flash erase, SET_CLOCK).
+
+**Use in a driver (not done):** read `0x008000` at probe, register MIDI when either count is non-zero, keep
+the per-model `has_midi` as fallback and cross-check (as STREAM_INFO did for the S/MUX widths).
+
+### The opcodes the vendor sends that this project does not
+
+Tallied over every vendor capture (`captures/*.log`, the `0x8020` command writes), against the driver and
+fcp-server. Everything else the vendor sends, one of the two sends too; `0x002001` (MIX read) is ours alone.
+
+| opcode | where | known |
+|---|---|---|
+| `0x006001` | every unit, once at attach | the supported-rate list, u32s 44100 ... 192000 (§12); the driver offers rates from STREAM_INFO's bands instead |
+| `0x007000` | every unit, once at attach, after `0x006001` | all zero on the 2Pre and 4Pre (§9); undecoded |
+| `0x800007` | Red only, once | `{u32 0, u32 0x28}`: a 40-byte read, reply by DMA; undecoded |
+| `0x80000b` | Red only, ~300 | `{0, 4}`, `{4, 2}`, `{6, 1}` reads, repeated: a 7-byte record; undecoded (Dante status is the guess; only the Red has Dante) |
+
+None of the four is needed for anything the stack does. The vendor sends no INIT_1 (`0x000000`), reboot or
+flash write/erase in any capture.
+

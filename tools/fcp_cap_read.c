@@ -10,7 +10,8 @@
  * whose capability bytes come back zero.
  *
  * CAP_READ is opcode 0x000001 — the same "subsystem enable/query" opcode the vendor init replays.
- * Request is a u16 category; the reply is one byte, non-zero = supported.
+ * Request is a u16 category; the reply is one byte, non-zero = supported. Every category from 0 to
+ * 8 is asked (the vendor driver asks 1-8 at attach), plus ESP_DFU (9) and DATA (0x800).
  *
  * Build:  gcc -O2 -o fcp_cap_read tools/fcp_cap_read.c
  * Run:    sudo ./fcp_cap_read /dev/snd/hwC3D0        (stop fcp-server first — it holds the hwdep)
@@ -45,7 +46,10 @@ static const struct {
 	{ 0x002, "MIX",     "mixer gain matrix" },
 	{ 0x003, "MUX",     "routing" },
 	{ 0x004, "FLASH",   "firmware update" },
+	{ 0x005, "NAMES",   "port/source name table, 0x005000" },
 	{ 0x006, "SYNC",    "clock sync status" },
+	{ 0x007, "STREAM",  "STREAM_INFO, channel lists" },
+	{ 0x008, "CAT8",    "never used; the vendor asks about it" },
 	{ 0x009, "ESP_DFU", "" },
 	{ 0x800, "DATA",    "required by fcp-server" },
 };

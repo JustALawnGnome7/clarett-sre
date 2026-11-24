@@ -197,6 +197,8 @@ The `cmd` word is `0x80000000` (execute) OR the opcode:
 
 | Opcode      | Name         | Payload                                   |
 |-------------|--------------|-------------------------------------------|
+| `0x000001`  | `CAP_READ`   | `{u16 category}` → `u8`, non-zero = supported |
+| `0x008000`  | MIDI info    | → `{u16, u16}`: the MIDI port counts (1, 1 on a Clarett; 0 on a Red) |
 | `0x800000`  | `GET_DATA`   | `{u32 offset, u32 len}` → response by DMA  |
 | `0x800001`  | `SET_DATA`   | `{u32 offset, u32 len, data[]}`            |
 | `0x800002`  | `DATA_CMD`   | `{u32 commit_code}`                        |
