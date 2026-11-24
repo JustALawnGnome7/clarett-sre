@@ -1566,3 +1566,14 @@ On 0.4.2 the same Red legs read 96 / 288 / 544 at 48 kHz (P+32). **An app's roun
 
 **Next:** servicing the stream from the interrupt, `clarett-irq-servicing-plan.md`.
 
+## 21. The stream serviced from the interrupt; the servicer thread gone (Nov 23 2026) `[HW — all five models]` `[DRIVER — snd-clarett baf9a0f, afc26d3, 1c7b060]`
+
+The data plane now runs the way the vendor driver does (§17's correction): every vec0 MSI is followed by one
+sweep of `0x100` and the cause blocks, in the hard interrupt handler, which is the only reader of the
+read-to-clear registers and so also acks the period. Its thread (`request_threaded_irq()`) copies capture,
+fills playback and calls `snd_pcm_period_elapsed()`; playback is also filled when the client writes
+(`.ack`), and `.pointer` reads the ring positions itself (the PCM is nonatomic). The `clarett-svc` kthread,
+its 150 us refill timer and its 1 ms fallback are gone; an hrtimer backstop at three periods (at least 1 ms)
+sweeps only if no event arrived and counted zero firings on every stream of the release matrix. Full record,
+steps 0-6 and the per-model matrix: `clarett-irq-servicing-plan.md`. Released as 0.5.0.
+

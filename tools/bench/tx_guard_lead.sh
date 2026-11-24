@@ -104,7 +104,8 @@ run() {	# client period guard
 	wait $rp
 	res=$(cat "$W/res")
 	printf '%s\t%s\t%s\t%s\n' "$cl" "$per" "$g" "$(sed -n 's/.*breaks=\([0-9]*\).*/\1/p' <<<"$res")" >> "$W/all"
-	say "$(printf -- '-- %-8s period %-2s guard %-7s: %s; client underruns %s' "$cl" "$per" "$g" "$res" "${ur:-?}")$( [ -n "${ur:-}" ] || echo "; $pl")"
+	local co=$(grep -c overrun "$W/rec.err")
+	say "$(printf -- '-- %-8s period %-2s guard %-7s: %s; client underruns %s; capture overruns %s' "$cl" "$per" "$g" "$res" "${ur:-?}" "$co")$( [ -n "${ur:-}" ] || echo "; $pl")"
 }
 
 say "== $(date) tx_guard lead test card $CARD $ID, ramp PCM $RAMP -> ch $EXP, $REPS reps x $SECS s, 48 kHz (srcversion $(cat /sys/module/snd_clarett/srcversion), tx_guard was $G0)"

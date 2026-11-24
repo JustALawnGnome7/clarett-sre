@@ -1,7 +1,8 @@
 # Servicing the stream from the interrupt — plan
 
-Status: PLANNED (Nov 20 2026). Nothing built. Prerequisite: the capture-at-START anchor (round trip =
-lead + 32 frames) is tested and committed first.
+Status: DONE (Nov 23 2026). Steps 0-6 complete; the full matrix passed on all five models with the step 5
+build (srcversion `452D1083A5C5B0C80475B11`), released as 0.5.0. Results under Step 6 below. Originally
+PLANNED Nov 20 2026, with the capture-at-START anchor (round trip = lead + 32 frames) as prerequisite.
 
 ## Goal
 
@@ -228,12 +229,58 @@ untenable, so the fill becomes incremental:
 Full matrix on all five models (the 0.4.x set), the ASRock included as a test host (not a gate on the
 design), then a version bump. Records: data-plane §20 for the result, CLAUDE.md entry.
 
+**DONE Nov 23 2026: the full matrix passes on all five models** (laptop, srcversion
+`452D1083A5C5B0C80475B11` = snd-clarett `1c7b060`, the loaded module checked against the tree build before
+each run; `~/clarett-bench/matrix_run.sh`, logs kept off-repo). The Red 8Line and 8PreX ran together (the
+8PreX chained behind the Red), then the 8Pre behind the Red, then the 4Pre and the 2Pre alone. Per card:
+digital round trip (`DIGITAL=1 rt_latency.sh`), `live_cap.sh`, `loopback_order.sh`, `SHORT=1
+duplex_stress.sh`, `tx_guard_lead.sh`, `irq_rate.sh`, and on the Claretts with a cable loop the MIDI
+self-loop (`midi_loop.py`: 6000 B SysEx unpaced and paced at 1560 B/s, 1500 note pairs).
+
+| test | Red 8Line | 8PreX | 8Pre | 4Pre | 2Pre |
+|---|---|---|---|---|---|
+| digital round trip, 6 legs (48/96/192 kHz, 2 periods each) | 32 frames, 0 xruns | 32, 0 | 32, 0 | 32, 0 | 32, 0 |
+| `live_cap` (reads down to 16 frames) | 6/7 (see below) | 6/6 | 6/6 | 6/6 | 6/6 |
+| `loopback_order`, dead channels zero | 8/8 | 9/9 | 9/9 | 9/9 | 9/9 |
+| duplex stress (SHORT): failing parts / churn | 0 / 10 of 10 | 0 / 10 | 0 / 10 | 0 / 10 | 0 / 10 |
+| TX guard lead: playback breaks | 0 of 12 | 0 of 12 | 0 of 12 | 0 of 12 | 0 of 32 (see below) |
+| leadplay period 32 gaps per rep | 1/0/0 | 1/0/0 | 0/1/1 | 0/0/0 | 0/0/1, then 2/0/2/1/0 |
+| vec0 interrupts per period event, 512 / 64 frames | 1.010 / 1.001 | 1.009 / 1.001 | 1.010 / 1.001 | 1.010 / 1.001 | 1.009 / 1.001 |
+| vec1-3 | 0 | 0 | 0 | 0 | 0 |
+| MIDI self-loop, 3 runs | (no MIDI) | not cabled | byte-exact | byte-exact | byte-exact |
+
+Every leadplay gap matches one of the client's own underruns; at period 64 leadplay underruns every period
+(its 48-frame lead is shorter than the period), as on every earlier build. **Every stream on every model:
+`backstop=0 overrun=0 underrun=0 badreads=0`, `cause=0xa0000000`**, and no WARN/BUG/Oops, no `raised no
+period`, no `stream-cause:` in the kernel log. Known benign signatures seen: first-window `late=1-4` in churn
+streams after a change to a faster rate (the old-rate tail), and one arecord overrun in the duplex stress's
+64-frame leg (non-RT clients, informational) on each Clarett.
+
+The three results off the clean line, each traced to a client:
+- **Red `live_cap` at 192 kHz period 128: one break**, a forward jump of `0x28100` (641 ramp steps, i.e. 640
+  frames lost = buffer 512 + period 128, the size of an overrun recovery); the test client (`livecap`) reported 2
+  xruns on that leg and the driver's telemetry for the stream was clean.
+- **2Pre `tx_guard_lead`, aplay at period 32: one break** (the ramp 160 frames short, no gap, no playback
+  underrun) in rep 3 of 3. `tx_guard_lead.sh` did not report arecord's own errors, so it now prints
+  `capture overruns`; re-run with 5 reps, it happened once more (rep 3 again) with **`capture overruns 1`**
+  on that run and on no other. 160 frames is buffer + period (128 + 32), what arecord drops recovering from an
+  overrun. The kernel logged nothing for either run.
+- The 2Pre's unmatched leadplay gap from 0.4.0 (one gap with no client underrun) did not recur: all 8 reps
+  match.
+
+**Not run, and not a gate (design rule above):** the ASRock as a test host, and `start_stall_ab.sh` against
+0.4.2. The start-loss figure (one 16-frame loss at 192 kHz period 64 on the Red, step 5) was not re-run.
+Still open from step 5: the slower period events for ~10 s after a wake on the Red.
+
 ## Open questions carried
 
 - Whether the 42 ms block on the ASRock changes once the ack is in the ISR (operator's expectation: it
   goes). Measure with `start_stall_ab.sh` against 0.4.2 after step 1 and again after step 5.
 - MIDI TX still polls `0x500` bit16 (`read_poll_timeout`, 200 us). Whether a TX-ready interrupt exists is
-  unknown; out of scope unless E-series work finds one.
+  unknown; out of scope unless E-series work finds one. Proposed test (scratch build, cable unplugged so no RX
+  interrupt confuses it): fill the TX FIFO, then log every vec0 sweep with `0x100` bit 28 and the `0x500`
+  value while it drains, at `0x510` = 2, 8 and 14, with an idle negative control. An interrupt that follows
+  the threshold would let TX run from the interrupt; none, and the poll stays.
 - Zero-copy playback (2Pre/4Pre/Red: fragment already a power of two) would remove the fill for those
   models entirely; not planned, revisit after step 3 measures what the incremental fill costs.
 

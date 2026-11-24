@@ -1421,8 +1421,25 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   data-plane §20): capture START now takes playback's anchor (the next period event), so a linked duplex
   has no offset and the round trip is lead + 32 + converters** (digital loopback 32 frames on every leg,
   Red 8Line, 8PreX, 8Pre). Moving playback OFF the event grid was tried first and failed the short-lead
-  A/B (4208 gaps vs 8). Not yet released. **Next priority (operator): servicing the stream from the
-  interrupt, `spec/provenance/clarett-irq-servicing-plan.md`.**
+  A/B (4208 gaps vs 8). Released in 0.5.0.
+- **★★ THE STREAM IS SERVICED FROM THE INTERRUPT; THE `clarett-svc` KTHREAD IS GONE (Nov 23 2026, snd-clarett
+  `baf9a0f`, `afc26d3`, `1c7b060`; `spec/provenance/clarett-irq-servicing-plan.md`, data-plane §21).** The vec0
+  hard handler is the one owner of `0x100` and every cause block (the vendor's sweep, so it also acks the
+  period); its thread (`request_threaded_irq()`, not ONESHOT since vec0 also completes the mailbox) copies
+  capture, fills playback and signals ALSA. Playback is filled on the client's write (`.ack`) as well,
+  `.pointer` reads the ring positions itself (nonatomic PCM), and the 1 ms fallback is an hrtimer backstop at
+  3 periods (at least 1 ms) that sweeps only when no event came. Teardown: claim under `pcm_lock`, then
+  `hrtimer_cancel()` + `synchronize_irq()` outside it (no thread handle left to orphan). **Release matrix
+  PASSED on all five models (laptop, srcversion `452D1083A5C5B0C80475B11`):** digital round trip 32 frames on
+  every leg, `live_cap`, loopback ramps, duplex stress + churn, TX guard lead (0 playback breaks), vec0
+  1.009-1.010 / 1.001 per event with vec1-3 zero, MIDI byte-exact on the 8Pre/4Pre/2Pre; `backstop=0` and
+  `overrun=0 underrun=0 badreads=0` on every stream. The two ramp breaks seen (Red `live_cap` 192 kHz p128,
+  2Pre aplay p32) were the recording client's own overruns (`tx_guard_lead.sh` now prints them). Servicer
+  CPU on a 64ch duplex fell to 1.6-1.9 % at period 64 (step 4 3-4.6 %; partly accounting, the sweep is in
+  hardirq). **What still waits on a timer or polls:** the backstop; the mailbox's short wait for a
+  response's tail to land after bit 1; the late-response retire; MIDI TX (`0x500` bit 16 every 200 us, a
+  TX-ready interrupt unmeasured; test proposed in the plan); and the debounce work items. Not run: the
+  ASRock, `start_stall_ab.sh`. Open: the Red's ~8 % slower period events for ~10 s after a wake.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
   runs, every 2-second window with `stepmax=0x1` had zero flags and every window with `stepmax=0x2` had at
