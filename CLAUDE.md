@@ -732,7 +732,13 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.5.2 since Nov 24 2026** (snd-clarett `ff5a963`, tag `v0.5.2`; the change is `eebb365`): whether a
+  - **Version 0.5.3 since Nov 24 2026** (snd-clarett `6da430e`, tag `v0.5.3`; the change is `9dd7fc8`): the
+    interrupt handler ignores an all-ones `0x400` read (a failed PCIe read would complete the command in flight and
+    relay every event bit); the `0x100` check was already in. **Tested on the 8PreX and Red 8Line** (laptop, Nov 24,
+    `phase_check.sh`): every command `phase=0x3`, none lost, knob relays followed, hands-off relays only the Red's
+    temperature event. The guarded case itself is untested (the laptop never reads all-ones). srcversion
+    `8FF0B172A1CFFE9C52BF0CB` = the tested build's.
+  - **Version 0.5.2 from Nov 24 2026** (snd-clarett `ff5a963`, tag `v0.5.2`; the change is `eebb365`): whether a
     unit has DIN MIDI comes from the device's `MIDI_INFO` (`0x008000`, FCP category 8), the model's `has_midi`
     the fallback and a cross-check. **Tested on all five models** (laptop, Nov 24): Claretts `1/1` + MIDI, Red
     `0/0` + none, no warnings, a MIDI loop byte-exact. srcversion `D30285195BA3BF87052082F` = the tested build's.
@@ -790,7 +796,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026); **`v0.5.1`** (annotated, on `3241d88`, Nov 24 2026); **`v0.5.2`** (annotated, on `ff5a963`, Nov 24 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026); **`v0.5.1`** (annotated, on `3241d88`, Nov 24 2026); **`v0.5.2`** (annotated, on `ff5a963`, Nov 24 2026); **`v0.5.3`** (annotated, on `6da430e`, Nov 24 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
