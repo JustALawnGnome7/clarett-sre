@@ -280,8 +280,9 @@ Still open from step 5: the slower period events for ~10 s after a wake on the R
   unknown.~~ ~~**ANSWERED Nov 23 2026 (2Pre, scratch build): there is none.**~~ **CORRECTED Nov 24 2026: there
   is one, enabled by `0x500` bit 24** (set with `0x504` = `0x1000000`, cleared with `0x508`): it fires when the
   ready flag returns, its time following `0x510`. The Nov 23 runs never set the bit, and the later ones left
-  the interrupt raised by setting it unacknowledged, which masked the rest. Not in the driver yet; the poll
-  stays until it is. Detail: `clarett-midi-plan.md`, final addendum.
+  the interrupt raised by setting it unacknowledged, which masked the rest. **In the driver (Nov 24 2026,
+  snd-clarett `b04f87b`, 0.5.1): MIDI TX runs from the trigger and the interrupt, the poll is gone;** byte-exact
+  at wire rate on all four Claretts and across s2idle. Detail: `clarett-midi-plan.md`, final addendum.
 - Zero-copy playback (2Pre/4Pre/Red: fragment already a power of two) would remove the fill for those
   models entirely; not planned, revisit after step 3 measures what the incremental fill costs.
 

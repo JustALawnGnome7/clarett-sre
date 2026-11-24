@@ -703,7 +703,12 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.5.0 since Nov 23 2026** (snd-clarett `0c25efa`, tag `v0.5.0`): the stream serviced from the
+  - **Version 0.5.1 since Nov 24 2026** (snd-clarett `3241d88`, tag `v0.5.1`; the change is `b04f87b`): MIDI
+    output sent from the transmit-ready interrupt (`0x500` bit 24) instead of polling the UART, and every MIDI
+    interrupt acknowledged; the README's 8Pre MIDI known issue dropped (the receive decode, fixed Oct 14). **Tested
+    on the 2Pre, 4Pre, 8Pre and 8PreX** (laptop, Nov 24): see the MIDI flow-control entry. Version commit's
+    srcversion (`A2BF428CCE46D84878434EE`) equals the tested build's: only docs, dkms.conf and the specs changed.
+  - **Version 0.5.0 from Nov 23 2026** (snd-clarett `0c25efa`, tag `v0.5.0`): the stream serviced from the
     interrupt (one vec0 sweep acks the period, its IRQ thread copies and fills; the `clarett-svc` kthread and
     its timers gone, an hrtimer backstop instead), playback filled on `.ack`, positions read in `.pointer`,
     capture anchored at START on playback's event (round trip = lead + 32 + converters), and hwdep replies
@@ -752,7 +757,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026); **`v0.5.1`** (annotated, on `3241d88`, Nov 24 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
@@ -1444,8 +1449,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   2Pre aplay p32) were the recording client's own overruns (`tx_guard_lead.sh` now prints them). Servicer
   CPU on a 64ch duplex fell to 1.6-1.9 % at period 64 (step 4 3-4.6 %; partly accounting, the sweep is in
   hardirq). **What still waits on a timer or polls:** the backstop; the mailbox's short wait for a
-  response's tail to land after bit 1; the late-response retire; MIDI TX (`0x500` bit 16 every 200 us; a
-  TX-ready interrupt exists, `0x500` bit 24, found Nov 24 2026 and not used yet, see the MIDI flow-control entry); and the debounce work items. Not run: the
+  response's tail to land after bit 1; the late-response retire; ~~MIDI TX (`0x500` bit 16 every 200 us)~~ (since
+  Nov 24 2026 on its transmit-ready interrupt, `0x500` bit 24; see the MIDI flow-control entry); and the debounce work items. Not run: the
   ASRock, `start_stall_ab.sh`. Open: the Red's ~8 % slower period events for ~10 s after a wake.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
@@ -2445,7 +2450,14 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   full); unknown. `0x500` bit 3 = MIDI interrupt pending (cleared by the ack), bit 1 = receive data. **Why
   Nov 23 missed it:** no run set bit 24 until the `0x504` scan, and that run neither recorded the write nor
   acked the interrupt it raised, which masked every later one. `0x104` bits 6-27 and `0x500` bits 16-23:
-  nothing. Not in the driver yet; TX still polls.
+  nothing. **IN THE DRIVER THE SAME DAY, RELEASED IN 0.5.1 (snd-clarett `b04f87b`, srcversion `A2BF428CCE46D84878434EE`):**
+  the TX work item and its 200 us poll are gone; the output trigger and `clarett_midi_irq()` write up to 9
+  words per ready check (`MIDI_TX_BURST`), bit 24 set while bytes remain and cleared when none do, and EVERY
+  MIDI interrupt is acked (it was only after receive data). Cable unplugged, 6 KB out: **222 interrupts =
+  one per 9-word refill, 0 idle, on all four Claretts**; cable loop (`midi_loop.py`, 6 KB unpaced/paced,
+  1500 notes, 25 KB under a duplex stream): **byte-exact on 2Pre, 4Pre, 8Pre, 8PreX at each unit's wire rate**
+  (3103-3132 B/s; the poll ran ~7 % under on the 4Pre); 8PreX across s2idle with 120 KB flowing: byte-exact,
+  no stale burst. Lost: the "TX FIFO stalled" warning (an interrupt that never came would stall silently).
   ~~**★ NO TRANSMIT INTERRUPT (Nov 23 2026, 2Pre, scratch build on 0.5.0; `spec/provenance/clarett-midi-plan.md`
   final addendum):**~~ (superseded above; the measurements stand, the conclusion does not) with the cable unplugged, a full TX FIFO draining raised ZERO interrupts in 23 runs, at every
   `0x500` write value tried (8, 0, each low bit, `0xff`) and `0x510` = 2/8/14; the ready flag came back on its

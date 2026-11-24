@@ -300,7 +300,7 @@ are is open (receive conditions such as "FIFO empty" would fit, untested).
 bit 1 marks receive data. This also explains the Nov 23 loose end: the `0x08` that appeared at the first
 `0x504` write was the unacknowledged interrupt that write raised.
 
-**A transmit path on the interrupt** (not implemented): write words until the ready flag clears, set bit 24
+**A transmit path on the interrupt** (implemented the same day, next subsection): write words until the ready flag clears, set bit 24
 (`0x504` = `0x1000000`) and ack; in the MIDI interrupt, with bit 24 set and the ready flag up, refill and
 ack; with nothing left to send, clear bit 24 (`0x508` = `0x1000000`) before the ack, since an ack while
 ready re-raises it. Receive and transmit share the one ack, so the handler drains receive, refills
@@ -308,3 +308,45 @@ transmit, then writes 8 once. That would remove the 200 us poll from MIDI transm
 
 Open: what bits 25-31 and bit 4 enable; whether the vendor driver uses bit 24 (no capture fills the FIFO);
 the Red's UART block (no MIDI ports, untested).
+
+### In the driver: MIDI transmit on the interrupt, all four Claretts (Nov 24 2026) `[HW — 2Pre, 4Pre, 8Pre, 8PreX]`
+
+snd-clarett `b04f87b` (released in 0.5.1, srcversion `A2BF428CCE46D84878434EE`), laptop. The transmit work item
+and its 200 us `read_poll_timeout` are gone. `clarett_midi_tx_fill()` (under a new `midi_tx_lock`) writes
+queued bytes, `MIDI_TX_BURST` = `0x510` + 1 = 9 words per ready check, until the queue is empty or the FIFO
+full; with bytes left it sets bit 24, with none it clears it. It runs from the rawmidi output trigger and
+from `clarett_midi_irq()`, which drains receive, refills transmit and then acknowledges **every** MIDI
+interrupt (before: only when receive data was read, which would leave a transmit interrupt pending for
+ever). Attach clears bit 24 (an earlier instance may have left it set); close, teardown and suspend clear
+it; resume refills. Nothing reads the UART while nothing is queued. checkpatch `--strict` clean.
+
+**Transmit interrupts, cable unplugged** (`~/clarett-bench/midi_txirq_check.sh`, off-repo: vec0's
+`/proc/interrupts` count over 3 s idle, then over 3 s while 6002 bytes of SysEx go out): **222 interrupts
+while sending, 0 idle, on all four units**, and the write plus close took 1.99-2.0 s against 1.92 s of wire
+time. 2001 words / 9 per refill = 222, so one interrupt per refill exactly. The polled driver read `0x500`
+~9,600 times over the same send.
+
+**Cable loop** (`tools/bench/midi_loop.py`), all byte-exact with no counter gaps:
+
+| test | 2Pre | 4Pre | 8Pre | 8PreX |
+|---|---|---|---|---|
+| 6002 B SysEx, unpaced | 3124 B/s | 3132 B/s | 3125 B/s | 3103 B/s |
+| 6002 B SysEx, paced 1560 B/s | exact | exact | exact | exact |
+| 1500 note pairs (9000 B) | 3124 B/s | 3131 B/s | 3124 B/s | 3102 B/s |
+| 25002 B SysEx, duplex stream running | 3124 B/s | 3132 B/s | 3124 B/s | 3103 B/s |
+
+Every unit runs at its wire rate (31,250 baud = 3125 B/s; the 4Pre's UART ~0.25 % fast, the 8PreX ~0.7 %
+slow, as it measured under the polled driver, 3106 B/s). The polled driver sent ~7 % under the wire rate
+on the 4Pre. The 8PreX is the unit whose receive FIFO also returns two-byte words, so receive decoding
+holds with transmit interrupts interleaved.
+
+**Across a sleep (8PreX, s2idle, `sleep_test.sh` + `midi_loop.py --bytes 120000 --rate 1560 --dump`):
+byte-exact, all 120,002 bytes, no counter break.** Bytes stopped 18.2 s into the run and resumed 8.2 s of
+monotonic time later (suspended time does not count), the first 20 ms after it held 59 bytes (under the
+wire's 63, so the paced writer catching up, not a stale burst), and the stream ran to its F7. The writer
+was frozen during the sleep, so nothing was sent into it. Device resumed in place, Sync Locked, meter read
+OK, no driver log lines.
+
+What is lost: the old "MIDI TX FIFO stalled" warning; if the device ever stopped raising the transmit
+interrupt, output would stall silently. Not seen.
+
