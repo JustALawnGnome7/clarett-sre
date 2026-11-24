@@ -192,3 +192,29 @@ baud-divisor reading fits poorly (31,250 x 0x847 = 66.2 MHz, not a usual FPGA cl
 
 The driver needs no change: one word per ready check never overruns with the vendor's 8, and the receive
 drain's 256-byte bound covers the 159-byte maximum.
+
+## Addendum: no transmit interrupt; the `0x500` attach write is not an enable (Nov 23 2026) `[HW — Clarett 2Pre]`
+
+Question (IRQ servicing plan, open questions): can MIDI transmit run from an interrupt instead of polling
+`0x500` bit 16? Scratch module on 0.5.0 (never committed; patch `~/clarett-bench/midiirq_patch.py`, script
+`~/clarett-bench/midi_txirq.sh`, both off-repo). Each run writes 16 words (48 bytes of `0xf8`) to `0x58c`
+ignoring the ready flag, then records every vec0 sweep (`0x100` and `0x500`) for 40 ms while the FIFO
+drains; a variant polls `0x500` every ~10 us instead to timestamp the ready flag. Settings: `0x500` written
+8 (the attach value), 0, 8 plus each other low bit (9, `0xa`, `0xc`, `0x18`, `0x28`, `0x48`, `0x88`) and
+`0xff`; `0x510` at 2, 8 and 14; idle windows with nothing sent as negative controls.
+
+**MIDI cable unplugged: ZERO interrupts in all 23 runs**, at every `0x500` value and every threshold. The
+ready flag still returned on its threshold, seen only by polling: 7.4 ms after the burst at `0x510` = 8,
+1.65 ms at 2, 13.2 ms at 14. **So the device raises no interrupt when transmit space frees up, nor per
+byte sent: the transmit poll stays.**
+
+**The same run with a loop cable attached (by accident first) is a clean receive measurement:** exactly 48
+bit-28 interrupts per 48-byte burst, ~320 us apart (one byte time at 31,250 baud), from ~0.5 ms to ~15.4 ms,
+`0x500` low byte `0xa` on every one, identical at every `0x500` value and threshold. Idle: 0.
+
+**The `0x500` write of 8 at attach is not an interrupt enable:** receive interrupts arrived identically with
+0, 8 and `0xff` written. **Bit 4 is the only low bit that holds a written value** (`0x18`/`0xff` read back
+`0x10`; a write without it clears it); no effect seen. What the attach write does stays unknown.
+
+Not tried: writing `0x500` bits 16-23 (the ready flag's byte), and the bits `0x104 = 0xf000003f` leaves
+clear. Nothing points to a transmit source there; not pursued.

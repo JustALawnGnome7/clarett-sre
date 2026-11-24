@@ -276,11 +276,11 @@ Still open from step 5: the slower period events for ~10 s after a wake on the R
 
 - Whether the 42 ms block on the ASRock changes once the ack is in the ISR (operator's expectation: it
   goes). Measure with `start_stall_ab.sh` against 0.4.2 after step 1 and again after step 5.
-- MIDI TX still polls `0x500` bit16 (`read_poll_timeout`, 200 us). Whether a TX-ready interrupt exists is
-  unknown; out of scope unless E-series work finds one. Proposed test (scratch build, cable unplugged so no RX
-  interrupt confuses it): fill the TX FIFO, then log every vec0 sweep with `0x100` bit 28 and the `0x500`
-  value while it drains, at `0x510` = 2, 8 and 14, with an idle negative control. An interrupt that follows
-  the threshold would let TX run from the interrupt; none, and the poll stays.
+- ~~MIDI TX still polls `0x500` bit16 (`read_poll_timeout`, 200 us). Whether a TX-ready interrupt exists is
+  unknown.~~ **ANSWERED Nov 23 2026 (2Pre, scratch build): there is none.** With the cable unplugged, a full
+  TX FIFO draining raised zero interrupts at every `0x500` value and at `0x510` = 2, 8 and 14, while the ready
+  flag returned on its threshold (seen by polling). The poll stays. Detail: `clarett-midi-plan.md`, final
+  addendum.
 - Zero-copy playback (2Pre/4Pre/Red: fragment already a power of two) would remove the fill for those
   models entirely; not planned, revisit after step 3 measures what the incremental fill costs.
 
