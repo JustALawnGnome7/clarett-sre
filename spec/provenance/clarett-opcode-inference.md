@@ -613,3 +613,32 @@ fcp-server. Everything else the vendor sends, one of the two sends too; `0x00200
 None of the four is needed for anything the stack does. The vendor sends no INIT_1 (`0x000000`), reboot or
 flash write/erase in any capture.
 
+## 14. Addendum (Nov 24 2026): the Red 8Line's name table, and MIDI names on both families `[HW]`
+
+`0x005000 {u16 id}` read for every id 0x00-0xff on the Red 8Line (`tools/fcp_cmd`, fcp-server stopped;
+operator's run). **Ids 0x00-0x91 answer; every id from 0x92 on is refused** (error status, no data: the
+driver's `-EIO`), as the Claretts refuse from 0x47 (§12). Id 0 is the empty string.
+
+| ids | Red 8Line | Clarett (§9, §12) |
+|---|---|---|
+| 0x01-0x02 | `RedPre` | `Clarett8Pre` |
+| 0x03-0x0a | `Internal`, `Word Clock`, `S/PDIF`, `ADAT`, `ADAT1`, `ADAT2`, `Loop Sync`, `Dante` | 0x03-0x08: `Internal`, `Word Clock`, `S/PDIF`, `ADAT`, `ADAT1`, `ADAT2` |
+| 0x0b-0x0f | classes `Analog`, `S/PDIF`, `ADAT`, `LOOP`, `DANTE` | 0x09-0x0c: `Analog`, `S/PDIF`, `ADAT`, `LOOP` |
+| 0x10-0x11 | `MIDI In`, `MIDI Out` | 0x29-0x2a |
+| 0x12-0x51 | `Input 1`-`Input 64` | 0x0d-0x28: `Input 1`-`8`, `S/PDIF 1`-`2`, `ADAT 1`-`16`, `Loop 1`-`2` |
+| 0x52-0x91 | `Playback 1`-`Playback 64` | 0x2b-0x46: `Output 1`-`28` |
+
+So the table is per family, not a shifted copy: every id past 0x08 moves, and the Red adds the Loop Sync
+and Dante clock names and the DANTE class. Like the Clarett table it is a superset, sized for the line's
+largest model (64 channels each way: the 16Line; the 8Line streams 64/60), and it names channels by number
+only (no `ADAT n`/`S/PDIF n`/`Loop n`), so on a Red the per-channel port class in the channel lists
+(§12), not the name, says what a channel is. The product name is a family string on both (`RedPre` on an
+8Line, `Clarett8Pre` on every Clarett).
+
+**`MIDI In`/`MIDI Out` are in both tables, so the names cannot tell which units have MIDI**; category 8's
+port counts (§13) can. The Red keeps the UART block, category 8 and the names, and reports zero ports.
+
+Nothing in the driver depends on the layout: it names a clock source by the id `0x006000` gives, which is
+why the Red's clock names (ids 3-10) were right without this table. The full dump is not committed: the
+table above reproduces every entry.
+

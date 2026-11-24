@@ -529,6 +529,10 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   uses it (Nov 24 2026, snd-clarett `eebb365`, 0.5.2):** `clarett_read_midi_ports()` reads `0x008000` at probe and
   creates the rawmidi when either count is non-zero; the model's `has_midi` is the fallback and a cross-check.
   All five units probed right (Claretts `1/1` + MIDI, Red `0/0` + none, no warnings); a MIDI loop byte-exact.
+- **The `0x005000` name table is per family (Nov 24 2026, §14):** Claretts ids 0x00-0x46 (one shared table),
+  Red 8Line 0x00-0x91 (`RedPre`, clock names 3-10 incl. Loop Sync and Dante, a DANTE class, `MIDI In`/`Out`
+  at 0x10/0x11, `Input 1`-`64`, `Playback 1`-`64`), refused past the end. Both name MIDI, so the names cannot
+  detect it; category 8 does.
 - **Vendor opcodes we never send:** `0x006001` (rate list), `0x007000` (zeros, undecoded), and on the Red
   only `0x800007` (one 40-byte read) and `0x80000b` (~300 reads of a 7-byte record; Dante status?). None needed.
 - **Open:** ~~a 1 KB bulk `SET_DATA`~~ (that is the payload limit, Nov 20 2026: see the fw-info header
