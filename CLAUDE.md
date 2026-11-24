@@ -1444,8 +1444,8 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   2Pre aplay p32) were the recording client's own overruns (`tx_guard_lead.sh` now prints them). Servicer
   CPU on a 64ch duplex fell to 1.6-1.9 % at period 64 (step 4 3-4.6 %; partly accounting, the sweep is in
   hardirq). **What still waits on a timer or polls:** the backstop; the mailbox's short wait for a
-  response's tail to land after bit 1; the late-response retire; MIDI TX (`0x500` bit 16 every 200 us, a
-  no TX-ready interrupt exists, measured Nov 23 2026, see the MIDI flow-control entry); and the debounce work items. Not run: the
+  response's tail to land after bit 1; the late-response retire; MIDI TX (`0x500` bit 16 every 200 us; a
+  TX-ready interrupt exists, `0x500` bit 24, found Nov 24 2026 and not used yet, see the MIDI flow-control entry); and the debounce work items. Not run: the
   ASRock, `start_stall_ab.sh`. Open: the Red's ~8 % slower period events for ~10 s after a wake.
 - **`0x300` bit 30 = PERIOD OVERRUN (`CLARETT_CTR_OVERRUN`), identified Aug 19 2026.** The device sets it
   on an event raised while the *previous* period had not been acknowledged. Proof: across two cadence-1
@@ -2435,13 +2435,28 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
   `0x847`, read-only**, fits a description of the block (nibbles 7 = log2 128 receive, 4 = log2 16 transmit,
   8 = data bits); not provable, since it cannot be changed. Receive behaviour is the same at every `0x510`.
   No driver change needed.
-  **★ NO TRANSMIT INTERRUPT (Nov 23 2026, 2Pre, scratch build on 0.5.0; `spec/provenance/clarett-midi-plan.md`
-  final addendum):** with the cable unplugged, a full TX FIFO draining raised ZERO interrupts in 23 runs, at every
+  **★★ THE TRANSMIT-READY INTERRUPT IS `0x500` BIT 24 (Nov 24 2026, 2Pre, scratch build; `spec/provenance/
+  clarett-midi-plan.md` final addendum) — CORRECTING THE Nov 23 "NO TRANSMIT INTERRUPT" BELOW.** `0x504` =
+  `0x1000000` enables it, `0x508` = `0x1000000` disables it (the operator's hypothesis, exactly). Fill the FIFO,
+  ack (8 to `0x504`) while the ready flag is clear, and one MIDI interrupt (`0x100` bit 28, `0x500` low byte
+  `0x08`) comes 40-60 us after the flag returns: 7.47 / 1.72 / 13.22 ms at `0x510` = 8 / 2 / 14, following the
+  threshold. Level-like: setting the bit at idle raises one at once, and an ack while ready re-raises it, so
+  disable before the last ack. Bits 25-31 each enable something else true at idle (they fire with the FIFO
+  full); unknown. `0x500` bit 3 = MIDI interrupt pending (cleared by the ack), bit 1 = receive data. **Why
+  Nov 23 missed it:** no run set bit 24 until the `0x504` scan, and that run neither recorded the write nor
+  acked the interrupt it raised, which masked every later one. `0x104` bits 6-27 and `0x500` bits 16-23:
+  nothing. Not in the driver yet; TX still polls.
+  ~~**★ NO TRANSMIT INTERRUPT (Nov 23 2026, 2Pre, scratch build on 0.5.0; `spec/provenance/clarett-midi-plan.md`
+  final addendum):**~~ (superseded above; the measurements stand, the conclusion does not) with the cable unplugged, a full TX FIFO draining raised ZERO interrupts in 23 runs, at every
   `0x500` write value tried (8, 0, each low bit, `0xff`) and `0x510` = 2/8/14; the ready flag came back on its
   threshold (7.4 / 1.65 / 13.2 ms) seen only by polling. So TX keeps its 200 us poll. With a loop cable the
   same runs gave one receive interrupt per byte (48 per 48-byte burst, `0x500` low byte `0xa`). The attach
   write of 8 to `0x500` is NOT an interrupt enable (receive behaves the same with 0 or `0xff`); bit 4 is the
-  only low bit that stores a written value, effect unknown.
+  only low bit that stores a written value, effect unknown. **And `0x504`/`0x508` are a SET/CLEAR pair for
+  `0x500` bits 24-31 and bit 4** (both write-only; operator's hypothesis, same day): `0x504` = `0x1000000` sets
+  `0x500` bit 24, `0x508` clears it, likewise bits 25-31 and 4. ~~None of them, set alone, made the device raise
+  any interrupt (0 in 63 windows, idle and draining); what bits 24-31 do is open.~~ (Masked; see above.) No capture writes `0x508` or
+  `0x504` other than the receive ack 8.
   **★ OPEN — THE 8PRE LOSES 2 MIDI BYTES EVERY ~49.7 ms, AND IT IS NOT THE DRIVER'S DOING SO FAR.**
   Self-loop, paced at half the wire rate (FIFO never full): losses sit on a strict ~49.7 ms grid
   (phase-coherent over 2 s, skipping beats only when no byte is in flight), 2 bytes each, occasionally a

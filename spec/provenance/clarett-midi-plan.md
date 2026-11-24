@@ -195,6 +195,10 @@ drain's 256-byte bound covers the 159-byte maximum.
 
 ## Addendum: no transmit interrupt; the `0x500` attach write is not an enable (Nov 23 2026) `[HW — Clarett 2Pre]`
 
+**★ CORRECTED Nov 24 2026: there IS a transmit-ready interrupt, enabled by `0x500` bit 24** (see the final
+addendum). Every run below was blind to it: none set bit 24, and the runs that did (next subsection) left the
+interrupt that setting it raises unacknowledged, which masks later ones.
+
 Question (IRQ servicing plan, open questions): can MIDI transmit run from an interrupt instead of polling
 `0x500` bit 16? Scratch module on 0.5.0 (never committed; patch `~/clarett-bench/midiirq_patch.py`, script
 `~/clarett-bench/midi_txirq.sh`, both off-repo). Each run writes 16 words (48 bytes of `0xf8`) to `0x58c`
@@ -205,8 +209,8 @@ drains; a variant polls `0x500` every ~10 us instead to timestamp the ready flag
 
 **MIDI cable unplugged: ZERO interrupts in all 23 runs**, at every `0x500` value and every threshold. The
 ready flag still returned on its threshold, seen only by polling: 7.4 ms after the burst at `0x510` = 8,
-1.65 ms at 2, 13.2 ms at 14. **So the device raises no interrupt when transmit space frees up, nor per
-byte sent: the transmit poll stays.**
+1.65 ms at 2, 13.2 ms at 14. ~~**So the device raises no interrupt when transmit space frees up, nor per
+byte sent: the transmit poll stays.**~~ (Wrong: with bit 24 clear it raises none; see the correction above.)
 
 **The same run with a loop cable attached (by accident first) is a clean receive measurement:** exactly 48
 bit-28 interrupts per 48-byte burst, ~320 us apart (one byte time at 31,250 baud), from ~0.5 ms to ~15.4 ms,
@@ -217,4 +221,90 @@ bit-28 interrupts per 48-byte burst, ~320 us apart (one byte time at 31,250 baud
 `0x10`; a write without it clears it); no effect seen. What the attach write does stays unknown.
 
 Not tried: writing `0x500` bits 16-23 (the ready flag's byte), and the bits `0x104 = 0xf000003f` leaves
-clear. Nothing points to a transmit source there; not pursued.
+clear. Nothing points to a transmit source there; not pursued. (Both tried Nov 24: nothing; final addendum.)
+
+### `0x504`/`0x508` are a set/clear pair for `0x500` bits 24-31 and bit 4 (Nov 23 2026) `[HW — Clarett 2Pre]`
+
+**★ CORRECTED Nov 24 2026: the interrupt half of the hypothesis holds too.** Bit 24 is the transmit-ready
+enable; this run missed it because the tool did not record during the `0x504` write, and the interrupt that
+write raised was never acknowledged. Final addendum.
+
+Hypothesis tested (operator's): writing `0x1000000` to `0x504` enables a transmit-ready interrupt, and the
+same bit written to `0x508` disables it. Every capture's writes in the `0x5xx` block are only `0x500` = 8 and
+`0x510` = 8 at attach, `0x504` = 8 after each receive drain (70, all in `2pre_midi_rx.log`) and the data words
+to `0x58c`; nothing writes `0x508`, and no capture fills the transmit FIFO, so the captures could neither show
+nor exclude it. The scratch build gained a parameter writing any `0x5xx` register (script
+`~/clarett-bench/midi_txen.sh`, off-repo); cable unplugged. Sequence: `0x504` = `0x1000000`, 200 ms idle (FIFO
+empty and ready), a 16-word burst and a polled burst; `0x508` = `0x1000000`, idle, burst; then every other
+`0x504` bit alone (bit 3, the receive ack, skipped), each followed by the same bit to `0x508`, with 100 ms idle
+and a burst.
+
+**`0x504` sets and `0x508` clears bits of `0x500`:** `0x504` = `0x1000000` made `0x500` read `0x01ff0008` and
+`0x508` = `0x1000000` cleared it (`0x00ff0008`); bits 25-31 alike, and bit 4 (`0x...18`, cleared back to
+`0x...08`; the same bit that holds a value written to `0x500` directly). No other bit changes what `0x500`
+reads. `0x504` and `0x508` read 0 throughout: write-only. **But no window had an interrupt: 0 in all 63**,
+with bit 24 set, the ready flag came back during the polled burst on its own and no interrupt with it. ~~So the
+mechanism half of the hypothesis holds (an enable/disable-style pair) and the interrupt half does not.~~
+(Both halves hold; the windows were masked. Final addendum.)
+
+Loose end: `0x500`'s low byte read `0x08` from the first `0x504` write on and stayed so for the run (idle had
+read `0x00`); in the cable run the same `0x8` cleared itself ~27 us after each receive ack. So every bit was
+tested with bit 3 also set. What bits 24-31 do is open: they sit above the ready flag's byte (16-23), so
+per-port enables or masks of something else would fit. Not tried: bit combinations, bit 3 set on its own.
+The unit was power-cycled after. (The `0x08` is the pending interrupt that setting a bit raised; final
+addendum.)
+
+## Addendum: the transmit-ready interrupt is `0x500` bit 24 (Nov 24 2026) `[HW — Clarett 2Pre]`
+
+The operator's hypothesis of Nov 23 is right: **writing `0x1000000` to `0x504` enables a transmit-ready
+interrupt and the same value to `0x508` disables it.** The Nov 23 runs missed it for two reasons, both in the
+test, not the device: the scratch tool recorded interrupts only from the command after a register write, and
+the interrupt that setting the bit raises was never acknowledged (the driver writes the ack, 8 to `0x504`,
+only after draining receive bytes), so the device raised no new one while the FIFO drained.
+
+Same rig: 2Pre, scratch module on 0.5.0 (never committed; `~/clarett-bench/midiirq_patch.py`, scripts
+`midi_txen2.sh`/`midi_txen3.sh`/`midi_txen4.sh`, summariser `midi_txsum.py`, all off-repo), MIDI cable
+unplugged, unit power-cycled after each round.
+
+**Round 2 — the remaining registers: nothing.** `0x104` with all bits set, then each of bits 6-27 added to
+`0xf000003f`, while a full transmit FIFO drained for 100 ms: no interrupt, no new `0x100` bit. Writing `0x500`
+bits 16-23 (each with the usual 8): nothing stored, no interrupt. `0x504` combinations (`0xff000000`,
+`0xff000010`, bit 3 alone, `0xffffffff`) during drains: no interrupt, ready back after 7.4 ms as with nothing
+set. One stray MIDI interrupt 11 us into an idle window after `0x504` = `0xffffffff`, `0x500` = `0xffff0018`.
+
+**Round 3 — recording the write itself, acking between cases.** Every write that sets one of `0x500` bits
+24-31 raises **one MIDI interrupt** (`0x100` = `0x10000000`) 30-170 us later, all eight bits, every time, with
+`0x500` low byte `0x08`. **An ack while the bit is still set raises another** at once and `0x500` bit 3 stays
+set; after `0x508` clears the bit, the ack clears bit 3 and nothing follows. The low bits of `0x504` in groups
+(`0x7`, `0xe0`, `0xff00`, `0xff0000`) raise nothing. So bits 24-31 each enable a source whose condition is
+true at idle, and it behaves level-like: an ack re-raises it while the condition holds.
+
+**Round 4 — the source behind each bit.** Per bit: set it, write 16 words to the FIFO, ack AT ONCE (FIFO full,
+ready flag clear), then record interrupts while polling the ready flag, at `0x510` = 8, 2 and 14. Control (no
+bit set): no interrupt.
+
+| `0x510` | ready flag back | bit 24: interrupt |
+|---|---|---|
+| 8 | 7.41 ms | 7.47 ms |
+| 2 | 1.68 ms | 1.72 ms |
+| 14 | 13.18 ms | 13.22 ms |
+
+**Bit 24: one interrupt 40-60 us after the ready flag returns, its time following the threshold** — the
+transmit-ready interrupt, not transmit-empty (that would come at ~15 ms whatever `0x510` says). `0x500` read
+`0x01ff0008` in its sweep. **Bits 25-31: one interrupt ~0.14 ms after the ack with the FIFO still full**
+(`0x500` = `0x..fe0008`), so their conditions are true at idle and unrelated to transmit space; what they
+are is open (receive conditions such as "FIFO empty" would fit, untested).
+
+**What `0x500`'s low byte means, as far as measured:** a receive interrupt reads `0xa`, a transmit-ready one
+`0x08`; bit 3 is set whenever a MIDI interrupt is pending and cleared by the ack (receive: ~27 us after it),
+bit 1 marks receive data. This also explains the Nov 23 loose end: the `0x08` that appeared at the first
+`0x504` write was the unacknowledged interrupt that write raised.
+
+**A transmit path on the interrupt** (not implemented): write words until the ready flag clears, set bit 24
+(`0x504` = `0x1000000`) and ack; in the MIDI interrupt, with bit 24 set and the ready flag up, refill and
+ack; with nothing left to send, clear bit 24 (`0x508` = `0x1000000`) before the ack, since an ack while
+ready re-raises it. Receive and transmit share the one ack, so the handler drains receive, refills
+transmit, then writes 8 once. That would remove the 200 us poll from MIDI transmit.
+
+Open: what bits 25-31 and bit 4 enable; whether the vendor driver uses bit 24 (no capture fills the FIFO);
+the Red's UART block (no MIDI ports, untested).
