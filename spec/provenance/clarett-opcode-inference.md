@@ -585,8 +585,18 @@ unknown. The vendor driver never sends `0x008000`, so this is a device-reported 
 use. Not tried: `0x008001` and up (in other categories the later commands include writes: MIX/MUX write,
 flash erase, SET_CLOCK).
 
-**Use in a driver (not done):** read `0x008000` at probe, register MIDI when either count is non-zero, keep
-the per-model `has_midi` as fallback and cross-check (as STREAM_INFO did for the S/MUX widths).
+**In the driver (Nov 24 2026, snd-clarett `eebb365`, released in 0.5.2, srcversion `D30285195BA3BF87052082F`):**
+`clarett_read_midi_ports()` sends `0x008000` (`FCP_MIDI_INFO`) at probe, after the clock list and the
+loopback position, and the rawmidi is created when either count is non-zero. The per-model `has_midi`
+decides if the unit does not answer (a refusal, an error status or a reply under 4 bytes, with a warning)
+and is a cross-check otherwise (a disagreement warns and the device is believed). Laptop, one attach each:
+
+| unit | probe | MIDI device |
+|---|---|---|
+| Clarett 2Pre, 4Pre, 8Pre, 8PreX | `MIDI_INFO: 1/1 MIDI ports` | created |
+| Red 8Line | `MIDI_INFO: 0/0 MIDI ports` (a 4-byte reply of zeros, not an empty one) | none |
+
+No unit warned. A MIDI loop on one Clarett (`midi_loop.py`, 6002 B unpaced) was byte-exact at 3113 B/s.
 
 ### The opcodes the vendor sends that this project does not
 

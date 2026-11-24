@@ -525,8 +525,10 @@ models.** The 8PreX's own numbers come from `vendor-reference/Devices/Clarett 8P
   the 2Pre, 4Pre, 8Pre and 8PreX (1 MIDI in, 1 out) and zeros on the Red (no MIDI jacks), so `{u16, u16}` =
   the MIDI port counts, by correlation over all five. The only device-reported MIDI capability found:
   the UART block exists on the Red too, and the vendor driver itself (same attach on both families, same
-  `FocusritePCIe.sys`, no MIDI ports for the Red) evidently decides from MODEL_ID or `0x000`. Not yet used by
-  the driver (`has_midi` stays per model).
+  `FocusritePCIe.sys`, no MIDI ports for the Red) evidently decides from MODEL_ID or `0x000`. **The driver
+  uses it (Nov 24 2026, snd-clarett `eebb365`, 0.5.2):** `clarett_read_midi_ports()` reads `0x008000` at probe and
+  creates the rawmidi when either count is non-zero; the model's `has_midi` is the fallback and a cross-check.
+  All five units probed right (Claretts `1/1` + MIDI, Red `0/0` + none, no warnings); a MIDI loop byte-exact.
 - **Vendor opcodes we never send:** `0x006001` (rate list), `0x007000` (zeros, undecoded), and on the Red
   only `0x800007` (one 40-byte read) and `0x80000b` (~300 reads of a 7-byte record; Dante status?). None needed.
 - **Open:** ~~a 1 KB bulk `SET_DATA`~~ (that is the payload limit, Nov 20 2026: see the fw-info header
@@ -713,7 +715,11 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     RPM Fusion's build farm — pass `--define 'buildforkernels akmod'` or `--define "kernels $(uname -r)"`.
   - **License GPL-2.0-only** (`LICENSE` md5 `b234ee4d69f5fce4486a80fdaf4a4263`);
     `MODULE_LICENSE("GPL")` is correct alongside it — do not "fix" it.
-  - **Version 0.5.1 since Nov 24 2026** (snd-clarett `3241d88`, tag `v0.5.1`; the change is `b04f87b`): MIDI
+  - **Version 0.5.2 since Nov 24 2026** (snd-clarett `ff5a963`, tag `v0.5.2`; the change is `eebb365`): whether a
+    unit has DIN MIDI comes from the device's `MIDI_INFO` (`0x008000`, FCP category 8), the model's `has_midi`
+    the fallback and a cross-check. **Tested on all five models** (laptop, Nov 24): Claretts `1/1` + MIDI, Red
+    `0/0` + none, no warnings, a MIDI loop byte-exact. srcversion `D30285195BA3BF87052082F` = the tested build's.
+  - **Version 0.5.1 from Nov 24 2026** (snd-clarett `3241d88`, tag `v0.5.1`; the change is `b04f87b`): MIDI
     output sent from the transmit-ready interrupt (`0x500` bit 24) instead of polling the UART, and every MIDI
     interrupt acknowledged; the README's 8Pre MIDI known issue dropped (the receive decode, fixed Oct 14). **Tested
     on the 2Pre, 4Pre, 8Pre and 8PreX** (laptop, Nov 24): see the MIDI flow-control entry. Version commit's
@@ -767,7 +773,7 @@ sudo make -C snd-clarett wireplumber-install   # per-model names in PipeWire/GNO
     0.1.1 from the public repo's first commit through every change up to the TX guard. Bumped in
     dkms.conf and both specs, which `make rpm-*` checks agree.
   - **The specs carry a dated `%changelog` (operator's call, Oct 19 2026): release dates in the specs are
-    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026); **`v0.5.1`** (annotated, on `3241d88`, Nov 24 2026). Tag each release as `vX.Y.Z` on its version commit.
+    exempt from the no-dates rule.** Add an entry to both specs with each version bump. **First tag: `v0.2.0`** (annotated, on snd-clarett `075a53b`, Oct 19 2026); **`v0.2.1`** (annotated, on `293be10`, Oct 21 2026); **`v0.2.2`** (annotated, on `736a99d`, Oct 23 2026); **`v0.2.3`** (annotated, on `162e980`, Oct 23 2026); **`v0.3.0`** (annotated, on `96bc47f`, Nov 4 2026); **`v0.4.0`** (annotated, on `44ddc6d`, Nov 13 2026); **`v0.4.1`** (annotated, on `b1adab0`, Nov 17 2026); **`v0.4.2`** (annotated, on `6641cf6`, Nov 19 2026); **`v0.5.0`** (annotated, on `0c25efa`, Nov 23 2026); **`v0.5.1`** (annotated, on `3241d88`, Nov 24 2026); **`v0.5.2`** (annotated, on `ff5a963`, Nov 24 2026). Tag each release as `vX.Y.Z` on its version commit.
 - **★ USERSPACE INSTALL IS fcp-support's, AND END USERS NEVER TOUCH THIS REPO (Sep 25 2026, operator's
   call).** The intent is that fcp-support ships the maps. **AT THE MOMENT only our fork does**
   (github.com/JustALawnGnome7/fcp-support, `snd_clarett` branch): the maps are in its `data/`, and its
