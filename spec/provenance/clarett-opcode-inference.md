@@ -700,7 +700,9 @@ capture at each rate, and at the end: nothing in category 7 follows the current 
   192 on top of the digital loopback) matches its 28/24/23 exactly. The words group by hardware (2Pre with
   4Pre, 8Pre with 8PreX, the Red alone). **Measured on all four Claretts the same day** (below): exact at
   every rate on the 8Pre and 8PreX; on the 2Pre and 4Pre exact at 48 kHz, up to one frame more at 96 and 192. Which word is the input and which the output is unknown: a
-  loop measures only the sum.
+  loop measures only the sum. **Since Nov 25 2026 `a` is taken as playback and `b` as record**, from the
+  reply's playback-then-capture order (operator's assumption, unmeasured; §16). The Red 8Line, measured
+  §16, departs from its figures at 96 and 192 kHz.
   §10's 2Pre pairs match these; §9's differing ones were the stale-buffer era.
 - **`0x007000` answers 40 bytes of zeros on every unit**, idle and streaming, whatever it is sent (empty,
   1, 2, 4 bytes). Undecoded; nothing found makes it non-zero.
@@ -808,3 +810,66 @@ changed.
 - So category 8 mirrors category 7: counts, then one list per direction whose records name their ports in
   the `0x005000` table. The vendor never reads any of it; the driver needs only the counts.
   `0x008003` and up stay untried.
+
+## 16. Addendum (Nov 25 2026): the Red's analogue round trip, and what the vendor's Windows driver reports `[HW]`
+
+### The Red 8Line's analogue path
+
+`tools/bench/rt_latency.sh` with `DIGITAL=0` (new: the Red's analogue mode, routing Analogue Output `OUT`
+straight from playback and capture `IN` from Analogue `IN`, leaving the output level and input mode as
+set). Line In 1 in Line mode; 8 clicks per leg, two periods per rate; frames on top of the digital
+loopback, which read 32 on every leg:
+
+| path | 48 kHz | 96 kHz | 192 kHz |
+|---|---|---|---|
+| Monitor L (Analogue Output 1) -> Line In 1 | 23 | 21 | 22 |
+| Line Output 1 (Analogue Output 7) -> Line In 1 | 23 | 21 | 22 |
+| STREAM_INFO `a + b` | 23 | 23 | 21 |
+
+- Every detected click agreed within each leg and across both periods. Peak -61.8 dBFS through the
+  monitor output (its level at -40 dB) and -15 dBFS through the line output (0 dB); noise ~-105 dBFS.
+  The first leg after each rate change lost its first click to the converter mute.
+- **Exact at 48 kHz, 2 frames under at 96, 1 over at 192**, and identical on both output paths, so it is
+  not the monitor output's circuit. The Claretts were exact or up to one frame over; nothing on them
+  came in under. Open: the click is located by its largest sample, so a filter that is not
+  linear-phase moves the peak off its nominal delay (cross-correlation would test it), or the Red's
+  figures are approximate (its `a`, `b` are 9, 14 at both 48 and 96 kHz).
+
+### The Windows driver gives neither word a direction
+
+The unit hot-plugged into a Windows guest running Focusrite's Thunderbolt driver, read through its ASIO
+driver: Oblique Audio's RTL Utility (reports only the in + out total) and a PortAudio stream
+(`sounddevice` with ASIO enabled), whose stream info carries the ASIO input and output latency
+separately.
+
+- **2Pre, 48 kHz, RTL Utility, 192-sample buffer:** 665 samples measured, 660 reported, so the driver's
+  total is 5 short.
+- **2Pre, PortAudio, 192-frame blocks, the rate set in Focusrite Control:**
+
+  | | 48 kHz | 96 kHz | 192 kHz |
+  |---|---|---|---|
+  | in | 602 | 618 | 649 |
+  | out | 634 | 682 | 777 |
+  | out - in | 32 | 64 | 128 |
+
+  Out - in is 0.667 ms at every rate, a time-based output offset with no trace of `a - b` (11/9/9 against
+  14/16/14 would leave -3/-7/-5 or the reverse). Input's rise of 16 then 31 fits one model of those
+  tried: (`a + b`)/2 in each direction plus 0.333 ms of buffering (16 then 32 samples). `a`, `b`, `a + b`
+  or nothing in each direction each need an inconsistent time term. PortAudio's figures include its own
+  buffering (in + out = 1236 against RTL's 660), fixed while the buffer is.
+- **8PreX, PortAudio, the driver's own block size (Focusrite Control's buffer setting, not recorded):**
+  **44.1 kHz in = out = 1100 and 48 kHz in = out = 2124, three reads each.** The 8PreX's `a`, `b` at 48
+  kHz are 13, 15, so a per-direction split would show 2 samples. 96 and 192 kHz were unstable between
+  repeats (4185/4185 then 4233/4217 twice; 8360/8344 then 8456/8408 twice) and are not used.
+- **So the vendor's Windows driver reports the converter delay without a direction:** hosts get the
+  same figure both ways at band 0, `a + b` split evenly on the 2Pre's fit. Which word is which cannot be
+  read from it. Left untried: macOS, whose driver publishes CoreAudio latency per scope (it may split
+  evenly too), or an absolute timing reference.
+- **Working assumption (operator's call): `a` = playback (DAC), `b` = record (ADC)**, from the reply's
+  order (`u16 playback, u16 capture` before `a, b`). Unmeasured. The device's figures are to be used as
+  reported, not corrected by the Red's measurement.
+- Rig traps: the ASIO driver refused a PortAudio rate request on the 2Pre ("invalid sample rate") and
+  took one on the 8PreX; something in the guest kept returning the idle 8PreX to 44.1 kHz with the
+  Windows audio service stopped and the clock Internal (not found; the script asks for the rate
+  explicitly); PortAudio's device index changes with the hardware attached; RTL Utility's "couldn't
+  detect test signal" (-89.9 dB) was Focusrite Control's monitor output not sourced from Playback 1.

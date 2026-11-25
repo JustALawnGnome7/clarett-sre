@@ -8,8 +8,11 @@
 # click offsets per click: analogue = output -> cable -> input, digital = inside the device. legs =
 # "rate:period ..." (buffer 4 periods), default 48/96/192 kHz at a 1.33 ms and a 5.33 ms period
 # (on a Red, 192 kHz at 1.33 and 2.67 ms: its 2048-frame ring caps the buffer).
-# DIGITAL=1 (always on a Red) needs no cable: only the digital reference is set up, and rtlat's analogue
-# pair is pointed at it too. That is the device latency, the part the driver controls.
+# DIGITAL=1 (the default on a Red) needs no cable: only the digital reference is set up, and rtlat's
+# analogue pair is pointed at it too. That is the device latency, the part the driver controls.
+# On a Red, DIGITAL=0 measures the analogue path too: Analogue Output $OUT (Monitor L/R = 1/2) cabled to
+# input $IN (default $OUT), routed directly; output level, input mode and gain are left as set.
+# IN= also names a different input on the Claretts.
 # Needs rtlat built at $BENCH_LOG_DIR/rtlat (gcc -O2 -o rtlat rtlat.c -lasound -lm) and fcp-server.
 # Log: ./rt_latency.log
 set -u
@@ -19,6 +22,8 @@ DIR=${BENCH_LOG_DIR:-$PWD}
 LOG=$DIR/rt_latency.log
 RT=$DIR/rtlat
 OUT=${OUT:-1}
+IN=${IN:-$OUT}
+RED=0
 [ -x "$RT" ] || { echo "build $RT first: gcc -O2 -o $RT $(dirname "$(readlink -f "$0")")/rtlat.c -lasound -lm"; exit 1; }
 [ -e /proc/asound/card$CARD/id ] || { echo "no card $CARD (cat /proc/asound/cards)"; exit 1; }
 ID=$(cat /proc/asound/card$CARD/id)
@@ -28,14 +33,14 @@ C4Pre)   CH=20 PB=8  REF=7 DST=19 EXP=19;;
 C8Pre)   CH=20 PB=20 REF=7 DST=19 EXP=19;;
 C8PreX)  CH=28 PB=28 REF=7 DST=27 EXP=27;;
 # the Red's ring is 2048 frames, so a 4-period buffer allows periods up to 512
-R8Line|R4Pre) CH=60 PB=64 REF=31 DST=31 EXP=31 DIGITAL=1 L0="48000:64 48000:256 96000:128 96000:512 192000:256 192000:512";;
+R8Line|R4Pre) CH=60 PB=64 REF=31 DST=31 EXP=31 RED=1 L0="48000:64 48000:256 96000:128 96000:512 192000:256 192000:512";;
 *) echo "unsupported card id $ID"; exit 1;;
 esac
-DIGITAL=${DIGITAL:-0}
+DIGITAL=${DIGITAL:-$RED}
 LEGS=${LEGS:-${L0:-"48000:64 48000:256 96000:128 96000:512 192000:256 192000:1024"}}
 # digital only: rtlat's analogue pair is the reference too, captured where
 # the loopback lands (not the input of the same number)
-CIN=$OUT
+CIN=$IN
 [ "$DIGITAL" = 1 ] && OUT=$REF CIN=$EXP
 W=$(mktemp -d)
 PWCARD=$(pactl list cards short 2>/dev/null | awk -v b="pci-$(basename "$(readlink -f /sys/class/sound/card$CARD/device)" | tr ":" "_")" \
@@ -54,13 +59,17 @@ while read -r n; do
 done < "$W/enums"
 if [ "$DIGITAL" = 1 ]; then
 	save "PCM $DST Capture Enum"
+elif [ "$RED" = 1 ]; then
+	for n in "Analogue Output $OUT Playback Enum" "PCM $IN Capture Enum" "PCM $DST Capture Enum"; do save "$n"; done
+	amixer -q -c "$CARD" cset name="Analogue Output $OUT Playback Enum" "PCM $OUT"
+	amixer -q -c "$CARD" cset name="PCM $IN Capture Enum" "Analogue $IN"
 else
 	for n in "Analogue Output $OUT Playback Enum" "Line Out $OUT Volume Control Playback Enum" "Line $OUT Playback Volume" \
-		 "PCM $(printf %02d $OUT) Capture Enum" "PCM $DST Capture Enum"; do save "$n"; done
+		 "PCM $(printf %02d $IN) Capture Enum" "PCM $DST Capture Enum"; do save "$n"; done
 	amixer -q -c "$CARD" cset name="Line Out $OUT Volume Control Playback Enum" off
 	amixer -q -c "$CARD" cset name="Line $OUT Playback Volume" 127
 	amixer -q -c "$CARD" cset name="Analogue Output $OUT Playback Enum" "PCM $OUT"
-	amixer -q -c "$CARD" cset name="PCM $(printf %02d $OUT) Capture Enum" "Analogue $OUT"
+	amixer -q -c "$CARD" cset name="PCM $(printf %02d $IN) Capture Enum" "Analogue $IN"
 fi
 amixer -q -c "$CARD" cset name="PCM $DST Capture Enum" "PCM $REF"
 restore() {
@@ -74,7 +83,7 @@ say() { echo "$*" | tee -a "$LOG"; }
 if [ "$DIGITAL" = 1 ]; then
 	say "== $(date) round-trip latency card $CARD $ID, digital only (both columns): PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
 else
-	say "== $(date) round-trip latency card $CARD $ID: Analogue Out $OUT -> cable -> Analogue In $OUT (capture ch $OUT); digital reference PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
+	say "== $(date) round-trip latency card $CARD $ID: Analogue Out $OUT -> cable -> Analogue In $IN (capture ch $IN); digital reference PCM $REF -> ch $EXP (srcversion $(cat /sys/module/snd_clarett/srcversion))"
 fi
 sleep 0.5
 for l in $LEGS; do
